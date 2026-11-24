@@ -27,7 +27,7 @@ set:
       - capmox-template
       - cozystack
       - talos
-      - talos-v1.13.6
+      - talos-v1.13.12
     full: true
     network:
       bridge: vmbr0
@@ -65,7 +65,7 @@ tests:
             - capmox-template
             - cozystack
             - talos
-            - talos-v1.13.6
+            - talos-v1.13.12
 
   - it: sizes the VM from resources, the only sizing source Proxmox has
     documentSelector:
@@ -131,3 +131,35 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'substrate "vsphere" is not supported; use "kubevirt" or "proxmox"'
+
+  # A version bump changes the machineconfig and rolls the pool, while the boot
+  # disk is whatever template the tags select. Tags left on the old release
+  # would roll every worker onto the old kernel under a config naming the new.
+  - it: rejects template tags that name a different Talos release than talos.version
+    set:
+      proxmox.templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'proxmox.templateTags selects a template tagged "talos-v1.13.6", but talos.version is "v1.13.12"'
+
+  - it: accepts template tags that name the release talos.version pins
+    set:
+      talos.version: v1.13.6
+      proxmox.templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - isKind:
+          of: ProxmoxMachineTemplate
+
+  - it: leaves a tag set that names no Talos release to the operator
+    set:
+      proxmox.templateTags: [capmox-template, talos-worker]
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.templateSelector.matchTags
+          value: [capmox-template, talos-worker]

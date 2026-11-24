@@ -53,6 +53,17 @@
 {{-   if not $.Values.proxmox.templateTags }}
 {{-     fail "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on" }}
 {{-   end }}
+{{- /* The template is the boot disk, and talos.version reaches only the
+         installer in the machineconfig, so a pool whose tags still name the
+         previous release rolls its workers onto the old kernel while they
+         claim the new one. hack/proxmox-talos-template.sh tags every template
+         talos-<version>, which is the one link the chart can check; a tag set
+         that names no version is the operator's call and passes. */}}
+{{-   range $.Values.proxmox.templateTags }}
+{{-     if and (regexMatch "^talos-v[0-9]+\\.[0-9]+\\.[0-9]+" .) (ne . (printf "talos-%s" $.Values.talos.version)) }}
+{{-       fail (printf "proxmox.templateTags selects a template tagged %q, but talos.version is %q: the workers would boot the template's Talos and not the one their machineconfig names. Build a template for %s with hack/proxmox-talos-template.sh and list its tags, or set talos.version to the release the template carries." . $.Values.talos.version $.Values.talos.version) }}
+{{-     end }}
+{{-   end }}
 {{-   if not $.Values.proxmox.network.bridge }}
 {{-     fail "substrate proxmox requires proxmox.network.bridge" }}
 {{-   end }}

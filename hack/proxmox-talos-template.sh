@@ -4,9 +4,10 @@
 #
 # The chart takes no image on that substrate: capmox clones whichever template
 # carries the pool's proxmox.templateTags, and the pool's talos.* values reach
-# only the installer written into the worker machineconfig. Nothing compares the
-# two, so the template is built here from the same talos.version and
-# talos.schematicID the chart renders, read from its values.yaml.
+# only the installer written into the worker machineconfig. The chart compares
+# the two only through the talos-<version> tag this script adds, so the template
+# is built here from the same talos.version and talos.schematicID the chart
+# renders, read from its values.yaml.
 #
 # Two images that look right are not:
 # - the platform release's nocloud-amd64.raw.xz is the bare-metal node image.
