@@ -348,7 +348,7 @@
           }
         },
         "enabled": {
-          "description": "Whether to restore from a backup.",
+          "description": "Restore the backup named in `backupName` into this application. First create or update the application with `backup.enabled=true` and `bootstrap.enabled=false`, wait until the database and its backup agents are ready, then set `bootstrap.enabled=true`. Enabling backups and bootstrap in the same change is not supported.",
           "type": "boolean",
           "default": false
         },
