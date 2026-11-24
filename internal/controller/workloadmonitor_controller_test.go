@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"k8s.io/client-go/kubernetes/scheme"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2071,6 +2072,7 @@ func dataVolumeInformers(synced bool) (*informertest.FakeInformers, *controllert
 		fi.Synced()
 	}
 	return &informertest.FakeInformers{
+		Scheme:        scheme.Scheme,
 		InformersByGVK: map[schema.GroupVersionKind]toolscache.SharedIndexInformer{dataVolumeGVK: fi},
 	}, fi
 }
