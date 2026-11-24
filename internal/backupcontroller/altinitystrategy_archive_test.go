@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -562,6 +563,101 @@ func TestCleanupAltinityBackup_FailedJobBacksOff(t *testing.T) {
 				t.Errorf("retry-after = %s, want about %s from now", at, tc.wantDelay)
 			}
 		})
+	}
+}
+
+// Recording the failure updates the Backup, which starts the next reconcile
+// at once, and the Job cache can still hold the failed Job the controller has
+// just deleted. That Job is counted once: seen again, it is deleted without a
+// second Event and without doubling the wait.
+func TestCleanupAltinityBackup_CountsAFailedJobOnce(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	retryAt := time.Now().Add(altinityCleanupRetryBase).UTC().Format(time.RFC3339)
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:   "1",
+		altinityCleanupRetryAfterAnnotation: retryAt,
+		altinityCleanupFailedJobAnnotation:  "failed-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "failed-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > altinityCleanupRetryBase {
+		t.Errorf("RequeueAfter = %s, want what is left of the wait already set", res.RequeueAfter)
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if f := got.Annotations[altinityCleanupFailuresAnnotation]; f != "1" {
+		t.Errorf("failures = %q, want the one failure counted once", f)
+	}
+	if at := got.Annotations[altinityCleanupRetryAfterAnnotation]; at != retryAt {
+		t.Errorf("retry-after = %q, want the one already set, %q", at, retryAt)
+	}
+	if len(rec.Events) != 0 {
+		t.Errorf("unexpected event %q for a failure already reported", <-rec.Events)
+	}
+	if left := listJobs(t, c); len(left) != 0 {
+		t.Errorf("expected the failed Job collected, %d left", len(left))
+	}
+}
+
+// A counted Job seen again after its wait has run out still holds the Backup:
+// releasing it there would drop the finalizer with the archive undeleted.
+func TestCleanupAltinityBackup_KeepsTheBackupWhenACountedJobOutlivesItsWait(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:   "1",
+		altinityCleanupRetryAfterAnnotation: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+		altinityCleanupFailedJobAnnotation:  "failed-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "failed-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("RequeueAfter = %s: the Backup must stay until a delete succeeds", res.RequeueAfter)
+	}
+}
+
+// A new failed Job, under the same name, is counted even when an earlier one
+// was: its UID is not the one recorded.
+func TestCleanupAltinityBackup_CountsANewFailedJob(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:  "1",
+		altinityCleanupFailedJobAnnotation: "earlier-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "new-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if f, j := got.Annotations[altinityCleanupFailuresAnnotation], got.Annotations[altinityCleanupFailedJobAnnotation]; f != "2" || j != "new-job-uid" {
+		t.Errorf("failures = %q, counted Job = %q; want 2 and new-job-uid", f, j)
+	}
+	if len(rec.Events) != 1 {
+		t.Errorf("events = %d, want one for the new failure", len(rec.Events))
 	}
 }
 
@@ -1374,6 +1470,9 @@ func TestCleanupAltinityBackup_ReleasesWhenTheJobIsRefused(t *testing.T) {
 	for name, refuse := range map[string]error{
 		"invalid":   apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "ch-bk-cleanup", nil),
 		"forbidden": apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New("service account cannot create jobs")),
+		// Only a Forbidden is a quota refusal, whatever an Invalid's text says.
+		"invalid naming a quota": apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "ch-bk-cleanup",
+			field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), "ch-bk-cleanup", "exceeded quota: jobs-quota")}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			backup := altinityCleanupBackup("ch-bk")
@@ -1399,6 +1498,44 @@ func TestCleanupAltinityBackup_ReleasesWhenTheJobIsRefused(t *testing.T) {
 			}
 			if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "clickhouse-ch-test-ch-bk") {
 				t.Errorf("event %q must name the archive left behind", ev)
+			}
+		})
+	}
+}
+
+// A namespace ResourceQuota on Jobs refuses the cleanup Job with Forbidden while
+// the quota is used up, or before its usage is known. That clears once other
+// Jobs go or the quota controller has computed the usage, and releasing the
+// Backup on it would leave the archive for good, so the Backup is held and the
+// create retried. The messages are the ones the ResourceQuota admission plugin
+// of k8s.io/apiserver returns.
+func TestCleanupAltinityBackup_RetriesAJobRefusedByAQuota(t *testing.T) {
+	for name, msg := range map[string]string{
+		"quota used up":       "exceeded quota: jobs-quota, requested: count/jobs.batch=1, used: count/jobs.batch=5, limited: count/jobs.batch=5",
+		"quota usage unknown": "status unknown for quota: jobs-quota, resources: count/jobs.batch",
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			c, s := newAltinityCleanupClientWith(interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*batchv1.Job); ok {
+						return apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New(msg))
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			}, altinityCleanupFixtures(backup)...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+			if _, err := r.cleanupOnDelete(context.Background(), backup); err == nil {
+				t.Fatal("a cleanup Job refused by a quota must go back to the work queue with the Backup held, not release it")
+			}
+			// The Backup stays terminating, so the refusal is named on it
+			// rather than only in the controller log.
+			if len(rec.Events) == 0 {
+				t.Fatal("a cleanup Job refused by a quota must surface as a Warning Event")
+			}
+			if ev := <-rec.Events; !strings.Contains(ev, "Warning ArtifactCleanupFailed") || !strings.Contains(ev, "quota") || strings.Contains(ev, "ArtifactNotDeleted") {
+				t.Errorf("event %q must be an ArtifactCleanupFailed Warning naming the quota", ev)
 			}
 		})
 	}

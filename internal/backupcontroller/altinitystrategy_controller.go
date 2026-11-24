@@ -75,9 +75,11 @@ const (
 
 	// The cleanup Job that failed is deleted to make room for the next one,
 	// so the count of failed attempts and the time the next may start are
-	// kept on the Backup.
+	// kept on the Backup, with the UID of the Job last counted, so that one
+	// still served from the cache is not counted twice.
 	altinityCleanupFailuresAnnotation   = "altinity.strategy.backups.cozystack.io/cleanup-failures"
 	altinityCleanupRetryAfterAnnotation = "altinity.strategy.backups.cozystack.io/cleanup-retry-after"
+	altinityCleanupFailedJobAnnotation  = "altinity.strategy.backups.cozystack.io/cleanup-failed-job"
 
 	// altinityCleanupRetryBase is the wait after the first failed cleanup
 	// Job; it doubles with each further failure up to altinityCleanupRetryMax.
@@ -1157,8 +1159,11 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			rendered.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
-			// ResourceQuota also returns Forbidden. Once a Job slot frees up the same cleanup can run.
-			if apierrors.IsForbidden(cerr) && strings.Contains(cerr.Error(), "exceeded quota: ") {
+			if altinityQuotaRefusal(cerr) {
+				if r.Recorder != nil {
+					r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactCleanupFailed",
+						"cleanup Job %s for archive %s was refused by a ResourceQuota (%v); retrying", jobKey.Name, archive, cerr)
+				}
 				return ctrl.Result{}, cerr
 			}
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
@@ -1210,6 +1215,19 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		logger.Debug("Altinity archive deleted", "backup", backup.Name, "archive", archive)
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
+		// Recording a failure updates the Backup, which starts the next
+		// reconcile while the Job cache may still hold the Job just deleted;
+		// a failure already counted is not counted or reported again.
+		if job.UID != "" && backup.Annotations[altinityCleanupFailedJobAnnotation] == string(job.UID) {
+			if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
+				return ctrl.Result{}, derr
+			}
+			wait := altinityCleanupRetryWait(ctx, backup, time.Now())
+			if wait <= 0 {
+				wait = altinityPollInterval
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
 		failures := altinityCleanupFailures(ctx, backup) + 1
 		delay := altinityCleanupRetryDelay(failures)
 		logger.Debug("Altinity cleanup Job failed; retrying", "backup", backup.Name, "job", job.Name, "failures", failures, "delay", delay)
@@ -1220,7 +1238,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 				"cleanup Job %s did not delete archive %s (%s: %s); retrying in %s", job.Name, archive, c.Reason, c.Message, delay)
 		}
 		// Recorded before the Job goes: should the delete below fail, the next
-		// reconcile counts this failure again and waits longer, rather than
+		// reconcile finds this Job counted and keeps waiting, rather than
 		// starting the next Job at once.
 		base := backup.DeepCopy()
 		if backup.Annotations == nil {
@@ -1228,6 +1246,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		}
 		backup.Annotations[altinityCleanupFailuresAnnotation] = strconv.Itoa(failures)
 		backup.Annotations[altinityCleanupRetryAfterAnnotation] = time.Now().Add(delay).UTC().Format(time.RFC3339)
+		backup.Annotations[altinityCleanupFailedJobAnnotation] = string(job.UID)
 		if perr := r.Patch(ctx, backup, client.MergeFrom(base)); perr != nil {
 			return ctrl.Result{}, perr
 		}
@@ -1269,6 +1288,19 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return app, false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return app, v, true, nil
+}
+
+// altinityQuotaRefusal tells the Forbidden a namespace ResourceQuota returns
+// while it is used up or its usage is not yet known, by the messages of the
+// ResourceQuota admission plugin in k8s.io/apiserver. It clears once other
+// Jobs go or the quota controller has computed the usage, so the create is
+// retried instead of the Backup being released.
+func altinityQuotaRefusal(err error) bool {
+	if !apierrors.IsForbidden(err) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "exceeded quota:") || strings.Contains(msg, "status unknown for quota:")
 }
 
 // altinitySystemBucket reads the bucket the projected credentials name in the
