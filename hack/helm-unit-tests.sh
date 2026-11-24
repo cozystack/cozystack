@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
+. "$SCRIPT_DIR/helm-test-package-roots.sh"
+
 # Script to run unit tests for all Helm charts.
 # It iterates through directories in packages/apps, packages/core,
 # packages/extra, packages/system, packages/library and packages/tests and runs
@@ -123,7 +126,7 @@ check_and_run_test() {
     return 0
 }
 
-for package_dir in packages/apps packages/core packages/extra packages/system packages/library packages/tests; do
+for package_dir in $HELM_TEST_PACKAGE_ROOTS; do
     if [ ! -d "$package_dir" ]; then
         echo "Warning: Directory $package_dir does not exist, skipping..." >&2
         continue
