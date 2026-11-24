@@ -73,7 +73,7 @@ metadata:
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
   # Bounds every kubectl call as well: --request-timeout would make kubectl
-  # skip the in-cluster credentials (hack/check-hook-request-timeout.bats).
+  # skip the in-cluster credentials.
   # Well inside the HelmRelease's 10m uninstall budget, and above the 60s
   # wait plus one call per object on either side of it.
   activeDeadlineSeconds: 180
@@ -129,11 +129,11 @@ spec:
               # to keep in step. A kind whose CRD is gone just prints an error.
               owned() {
                 for k in $kinds; do
-                  kubectl get "$k.operator.victoriametrics.com" -A \
-                    -o jsonpath='{range .items[*]}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"|"}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' |
-                  while IFS='|' read -r r rns ns n; do
-                    if [ "$r" = "$rel" ] && [ "$rns" = "$relns" ]; then
-                      echo "$k.operator.victoriametrics.com $ns $n"
+                  kubectl get "$k.operator.victoriametrics.com" --all-namespaces \
+                    --output jsonpath='{range .items[*]}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"|"}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.metadata.uid}{"\n"}{end}' |
+                  while IFS='|' read -r r rns ns n uid; do
+                    if [ "$r" = "$rel" ] && [ "$rns" = "$relns" ] && [ -n "$uid" ]; then
+                      echo "$k.operator.victoriametrics.com $ns $n $uid"
                     fi
                   done
                 done
@@ -145,8 +145,8 @@ spec:
                 exit 0
               fi
 
-              echo "$objs" | while read -r k ns n; do
-                kubectl -n "$ns" delete "$k" "$n" --wait=false
+              echo "$objs" | while read -r k ns n uid; do
+                kubectl --namespace "$ns" delete "$k" "$n" --wait=false
               done
 
               deadline=$(( $(date +%s) + 60 ))
@@ -159,9 +159,38 @@ spec:
                 fi
               done
 
-              echo "finalizers still held after 60s; clearing them by hand"
-              echo "$objs" | while read -r k ns n; do
-                kubectl -n "$ns" patch "$k" "$n" --type=merge \
-                  -p '{"metadata":{"finalizers":null}}'
+              # Another controller can move our entry between the read and the
+              # patch. Retry against the same UID so a replacement is left alone.
+              vmfin=apps.victoriametrics.com/finalizer
+              clear_finalizer() {
+                kind=$1 namespace=$2 name=$3 expected_uid=$4
+                state=$(kubectl --namespace "$namespace" get "$kind" "$name" --ignore-not-found \
+                  --output jsonpath='{.metadata.uid}{"|"}{.metadata.deletionTimestamp}{"|"}{range .metadata.finalizers[*]}{@}{" "}{end}') || return 1
+                [ "${state%%|*}" = "$expected_uid" ] || return 0
+                state=${state#*|}
+                [ -n "${state%%|*}" ] || return 0
+                i=0
+                for f in ${state#*|}; do
+                  if [ "$f" = "$vmfin" ]; then
+                    kubectl --namespace "$namespace" patch "$kind" "$name" --type=json \
+                      --patch "[{\"op\":\"test\",\"path\":\"/metadata/uid\",\"value\":\"$expected_uid\"},{\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"$vmfin\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]" >/dev/null
+                    return $?
+                  fi
+                  i=$((i + 1))
+                done
+                return 0
+              }
+
+              echo "finalizers still held after 60s; clearing $vmfin by hand"
+              for attempt in 1 2 3; do
+                objs=$(printf '%s\n' "$objs" | while read -r k ns n uid; do
+                  clear_finalizer "$k" "$ns" "$n" "$uid" || printf '%s %s %s %s\n' "$k" "$ns" "$n" "$uid"
+                done)
+                [ -n "$objs" ] || break
+                if [ "$attempt" = 3 ]; then
+                  echo "could not clear $vmfin on: $objs" >&2
+                  exit 1
+                fi
+                sleep 1
               done
               exit 0
