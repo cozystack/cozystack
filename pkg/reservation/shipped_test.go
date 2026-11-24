@@ -36,6 +36,41 @@ import (
 	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 )
 
+// shippedInstancetypes decodes every VirtualMachineClusterInstancetype the
+// platform ships, so that the classification is pinned against the real
+// catalog rather than against hand-written fixtures.
+func shippedInstancetypes(t *testing.T) []map[string]any {
+	t.Helper()
+	files, err := filepath.Glob("../../packages/system/kubevirt-instancetypes/templates/*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no instance type templates found: %v", err)
+	}
+	var out []map[string]any
+	for _, f := range files {
+		fh, err := os.Open(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := utilyaml.NewYAMLOrJSONDecoder(fh, 4096)
+		for {
+			var obj map[string]any
+			if err := dec.Decode(&obj); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				t.Fatalf("%s: %v", f, err)
+			}
+			if obj["kind"] == "VirtualMachineClusterInstancetype" {
+				out = append(out, obj)
+			}
+		}
+		if err := fh.Close(); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+	}
+	return out
+}
+
 // The kinds whose consumption has to be declared: the IaaS kinds carry the
 // virtualization overhead the reservation exists to keep out of the tenant
 // contract.
