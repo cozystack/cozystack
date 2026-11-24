@@ -617,7 +617,10 @@ func TestReservation_KeepsTheLastFiguresWhenTheEnvironmentIsUnavailable(t *testi
 	published := `{"reserved":{"cpu":"4"},"budget":{"cpu":"10"}}`
 	foo := tenantWithQuotas(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
 	foo.Annotations = map[string]string{reservation.PoolAnnotation: published}
-	r, c, _ := newReservationReconciler(t, foo, vm(t, "a", "tenant-foo", "u1.large"))
+	managed := map[string]string{managedByLabel: managedByValue}
+	r, c, _ := newReservationReconciler(t, foo, vm(t, "a", "tenant-foo", "u1.large"), ns("tenant-foo"),
+		&corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: allocatedQuotaName, Namespace: "tenant-foo", Labels: managed}},
+		&corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: allocatedLimitRangeName, Namespace: "tenant-foo", Labels: managed}})
 	r.Env = unavailableEnv{}
 
 	if _, err := r.Reconcile(context.Background(), sweepKey); !errors.Is(err, reservation.ErrUnavailable) {
@@ -628,5 +631,12 @@ func TestReservation_KeepsTheLastFiguresWhenTheEnvironmentIsUnavailable(t *testi
 	}
 	if _, ok := getRelease(t, c, "tenant-foo", "vm-instance-a").Annotations[reservation.ReservedAnnotation]; ok {
 		t.Error("a figure was stored while the environment was unavailable")
+	}
+	// Retiring the legacy clamp does not wait for the figures.
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-foo", Name: allocatedQuotaName}, &corev1.ResourceQuota{}); err == nil {
+		t.Error("the legacy allocated quota survived a sweep that could not read the pools")
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-foo", Name: allocatedLimitRangeName}, &corev1.LimitRange{}); err == nil {
+		t.Error("the legacy LimitRange copy survived a sweep that could not read the pools")
 	}
 }

@@ -262,6 +262,10 @@ func (r *Reconciler) patchAnnotation(ctx context.Context, hr *helmv2.HelmRelease
 func (r *Reconciler) reconcileReservations(ctx context.Context) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Retiring the legacy clamp does not depend on what the pools reserve,
+	// so a sweep that cannot read them still finishes the switch.
+	r.collectLegacyEnforcement(ctx)
+
 	snap, err := r.snapshotReservations(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -305,13 +309,19 @@ func (r *Reconciler) reconcileReservations(ctx context.Context) (ctrl.Result, er
 		}
 	}
 
+	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+}
+
+// collectLegacyEnforcement deletes every tenant-quota-allocated ResourceQuota
+// and LimitRange copy the legacy path wrote.
+func (r *Reconciler) collectLegacyEnforcement(ctx context.Context) {
+	logger := log.FromContext(ctx)
 	if err := r.gcAllocatedQuotas(ctx, nil); err != nil {
 		logger.Error(err, "failed to garbage-collect allocated quotas")
 	}
 	if err := r.gcAllocatedLimitRanges(ctx, nil); err != nil {
 		logger.Error(err, "failed to garbage-collect allocated limit ranges")
 	}
-	return ctrl.Result{RequeueAfter: resyncInterval}, nil
 }
 
 // poolStatus computes the figures and conditions of pool p, whose root
