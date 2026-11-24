@@ -1720,6 +1720,18 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	if existingRestore == nil && apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, psmdbRestoreCondReplayed) {
 		return r.awaitMongoDBTargetReady(ctx, restoreJob, nil, targetCluster, options)
 	}
+	// Percona can fail the restore permanently if PBM has not reported its version yet.
+	toCopy := target.AppName != backup.Spec.ApplicationRef.Name
+	recoverInPlace := !toCopy && targetCluster.Status.State == psmdbtypes.StateError
+	if existingRestore == nil && (targetCluster.Status.BackupVersion == "" || (targetCluster.Status.State != psmdbtypes.StateReady && !recoverInPlace)) {
+		msg := fmt.Sprintf("target psmdb.percona.com/PerconaServerMongoDB %s/%s is not ready for restore (state=%q, backupVersion=%q); waiting for the database and its backup agents",
+			target.Namespace, targetPSMDBName, targetCluster.Status.State, targetCluster.Status.BackupVersion)
+		deadline := options.effectiveRestoreDeadline()
+		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", fmt.Sprintf("%s; not resolved within %s", msg, deadline))
+		}
+		return r.requeueMongoDBRestoreWaiting(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", msg)
+	}
 
 	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
 	// swap applies. On the legacy flow the backupSource carries the SOURCE
@@ -1768,7 +1780,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	// An in-place restore puts the cluster back as the backup has it, users
 	// included. A to-copy restore must not, see mongodbToCopySelective.
 	var selective *psmdbtypes.SelectiveRestoreOpts
-	if existingRestore == nil && target.AppName != backup.Spec.ApplicationRef.Name {
+	if existingRestore == nil && toCopy {
 		app := &mongodbapp.MongoDB{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
 			if !apierrors.IsNotFound(err) {
