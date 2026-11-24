@@ -1,4 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers test-controllers-envtest test-backport-batch preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check rd-consumption-check migrations-target-check test test-controllers test-controllers-envtest test-backport-batch preflight
 
 include hack/common-envs.mk
 
@@ -120,7 +120,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check rd-consumption-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -131,6 +131,9 @@ helm-unit-tests:
 # hack/update-crd.sh and that RD's schema drifts from values.schema.json.
 rd-presets-check:
 	hack/check-rd-presets.sh
+
+rd-consumption-check:
+	hack/check-rd-consumption.sh
 
 # Catch the off-by-one where migrations/<N> is added but
 # migrations.targetVersion in packages/core/platform/values.yaml is not
@@ -292,7 +295,7 @@ bats-posix-compat-tests:
 # Every prerequisite of unit-tests is listed so it is guarded when run on its
 # own too; hack/unit-lane-no-cluster.bats fails when one is missing.
 NO_CLUSTER_TARGETS := unit-tests test-controllers helm-unit-tests bats-unit-tests \
-	bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check \
+	bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check rd-consumption-check \
 	test-check-readiness test-backport-batch migrations-target-check
 $(NO_CLUSTER_TARGETS): export KUBECONFIG := /dev/null
 $(NO_CLUSTER_TARGETS): export KUBERNETES_SERVICE_HOST :=
