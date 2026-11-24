@@ -5,7 +5,7 @@
        maps to the nearest thing and says so in NOTES.txt, never silently. */}}
 {{- /* subnets is the deprecated spelling of networks, as on kubevirt. */}}
 {{- $networks := concat (.Values.networks | default list) (.Values.subnets | default list) }}
-{{- if not $networks }}
+{{- if and (not $networks) (not .Values.proxmox.noNetwork) }}
 {{- /* A kubevirt machine without networks sits in the pod network; the
        platform names the tenant network that stands in for it. */}}
 {{-   if not $catalog.defaultNetwork }}
@@ -158,8 +158,9 @@ spec:
           name: {{ .volume }}
       {{- end }}
     {{- end }}
+    {{- with $ports }}
     network:
-      {{- range $ports }}
+      {{- range . }}
       - model: virtio
         bridge: {{ .bridge | quote }}
         {{- if .vlan }}
@@ -168,6 +169,7 @@ spec:
         ipAddressClaimRef:
           name: {{ .claim }}
       {{- end }}
+    {{- end }}
     {{- with $gpus }}
     # PCI passthrough by cluster mapping (hostpciN: mapping=<name>); the
     # mapping itself, and the token's Mapping.Use on it, are the platform's.

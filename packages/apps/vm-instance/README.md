@@ -76,6 +76,7 @@ virtctl ssh <user>@<vm>
 | -------------- | ------------------------------------------------------------------------------------------------------------------ | -------- | ----- |
 | `proxmox`      | Proxmox substrate settings.                                                                                        | `object` | `{}`  |
 | `proxmox.node` | Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be. | `string` | `""`  |
+| `proxmox.noNetwork` | Create the machine without a network card when `networks` is empty, instead of falling back to the catalog's default network. For bulk or compute-only machines; the guest agent still reports the OS, but no address. | `bool` | `false` |
 
 
 ## U Series

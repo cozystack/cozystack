@@ -322,6 +322,21 @@ tests:
         equal:
           path: spec.vmSpec.network[0].bridge
           value: vmbr0
+  - it: renders no network card and no address claim with proxmox.noNetwork
+    template: templates/proxmox-vm.yaml
+    set:
+      networks: []
+      proxmox:
+        noNetwork: true
+    asserts:
+      # Secret + VirtualMachine: no IPAddressClaim
+      - hasDocuments:
+          count: 2
+      - documentSelector:
+          path: kind
+          value: VirtualMachine
+        notExists:
+          path: spec.vmSpec.network
   - it: takes the deprecated subnets as networks
     template: templates/proxmox-vm.yaml
     set:
