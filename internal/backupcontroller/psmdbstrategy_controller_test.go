@@ -1055,7 +1055,7 @@ func newMongoDBStrategyTestClient(t *testing.T, objs ...client.Object) client.Cl
 	return clientfake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}, &batchv1.Job{}).
 		Build()
 }
 
@@ -1171,8 +1171,11 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	// exact state the chart leaves on the useSystemBucket flow.
 	cluster := &psmdbtypes.PerconaServerMongoDB{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
-		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true}},
-		Status:     psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
+		Spec: psmdbtypes.PerconaServerMongoDBSpec{
+			Backup:  psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true},
+			Secrets: &psmdbtypes.PerconaServerMongoDBSecrets{SSL: "mongodb-app1-ssl"},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
 	}
 
 	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
@@ -1203,6 +1206,9 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	got := &psmdbtypes.PerconaServerMongoDB{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
 		t.Fatalf("get cluster: %v", err)
+	}
+	if got.Spec.Secrets == nil || got.Spec.Secrets.SSL != "mongodb-app1-ssl" {
+		t.Fatal("storage injection must preserve the target's TLS Secret")
 	}
 	entry, ok := got.Spec.Backup.Storages["s3-storage"]
 	if !ok {
@@ -2916,20 +2922,27 @@ func TestReconcileMongoDBRestore_ToCopyRestoresDeclaredDatabasesWithoutUsers(t *
 // included, and does not depend on what the application declares.
 func TestReconcileMongoDBRestore_InPlaceStaysFullRestore(t *testing.T) {
 	apps := mongodbapp.GroupName
-	for name, targetRef := range map[string]*corev1.TypedLocalObjectReference{
-		"no targetApplicationRef":               nil,
-		"targetApplicationRef names the source": {Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+	sameSource := &corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps}
+	for _, tc := range []struct {
+		name      string
+		state     string
+		targetRef *corev1.TypedLocalObjectReference
+	}{
+		{"no targetApplicationRef", psmdbtypes.StateReady, nil},
+		{"targetApplicationRef names the source", psmdbtypes.StateReady, sameSource},
+		{"recover the original database", psmdbtypes.StateError, nil},
+		{"explicitly recover the original database", psmdbtypes.StateError, sameSource},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			backup, rj, _ := mongodbToCopyFixture(t, "")
-			rj.Spec.TargetApplicationRef = targetRef
+			rj.Spec.TargetApplicationRef = tc.targetRef
 			cluster := &psmdbtypes.PerconaServerMongoDB{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-src")},
 				Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
 					Enabled:  true,
 					Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-src-s3-creds"}}`)}},
 				}},
-				Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
+				Status: psmdbtypes.PerconaServerMongoDBStatus{State: tc.state, BackupVersion: "2.11.0"},
 			}
 			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-src-s3-creds"}}
 			// No application object at all, so a read of it would fail the job.
@@ -3067,8 +3080,11 @@ type mongodbGateHarness struct {
 func newMongoDBGateHarness(t *testing.T, clusterState, clusterMessage string, selective *psmdbtypes.SelectiveRestoreOpts) *mongodbGateHarness {
 	t.Helper()
 	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	rj.UID = "current-restore"
 	for _, o := range objs {
 		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
+			cluster.Spec.Image = "percona/percona-server-mongodb:8.0.12-4"
+			cluster.Spec.Secrets = &psmdbtypes.PerconaServerMongoDBSecrets{SSL: cluster.Name + "-ssl"}
 			cluster.Status.State = clusterState
 			cluster.Status.Message = clusterMessage
 			cluster.Status.BackupVersion = "" // Only the hand-over waits for PBM's version.
@@ -3127,11 +3143,146 @@ func (h *mongodbGateHarness) age(t *testing.T, sinceReplay, sinceStart time.Dura
 	}
 }
 
-// The operator calls a restore done once pbm has replayed it, and says the same
-// after a replay that replaced the target's system users and locked the
-// operator out. The RestoreJob succeeds only once the target cluster itself
-// reports ready, read at least psmdbRestoreTargetSettle after the replay,
-// because the operator writes cluster status only when a reconcile changes it.
+func (h *mongodbGateHarness) completeHealthCheck(t *testing.T) {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := h.c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "mongodb-health-current-restore"}, job); err != nil {
+		t.Fatal(err)
+	}
+	cluster := mongodbNameForApp("mongodb-target")
+	checkMongoDBHealthJob(t, job, cluster, cluster+"-rs0.tenant")
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := h.c.Status().Update(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkMongoDBHealthJob asserts that the check logs in as the cluster admin
+// over verified TLS, with the users and TLS Secrets of that cluster, against
+// the internal service its certificate covers.
+func checkMongoDBHealthJob(t *testing.T, job *batchv1.Job, cluster, endpoint string) {
+	t.Helper()
+	pod := job.Spec.Template.Spec
+	if len(pod.Containers) != 1 {
+		t.Fatalf("expected one health-check container, got %d", len(pod.Containers))
+	}
+	c := pod.Containers[0]
+	script := strings.Join(append(append([]string{}, c.Command...), c.Args...), " ")
+	for _, want := range []string{
+		`mongodb://${MONGODB_HOST}/admin?`,
+		"--tls --tlsCAFile /tls/ca.crt --tlsCertificateKeyFile /tmp/client.pem",
+		`--username "$MONGODB_CLUSTER_ADMIN_USER" --password "$MONGODB_CLUSTER_ADMIN_PASSWORD"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("health check script lacks %q:\n%s", want, script)
+		}
+	}
+	for _, insecure := range []string{"tlsAllowInvalid", "tlsInsecure", "tlsDisabledProtocols"} {
+		if strings.Contains(script, insecure) {
+			t.Errorf("health check must verify TLS, found %q", insecure)
+		}
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		env[e.Name] = e
+	}
+	if got := env["MONGODB_HOST"].Value; got != endpoint {
+		t.Errorf("MONGODB_HOST = %q, want %q", got, endpoint)
+	}
+	for _, key := range []string{"MONGODB_CLUSTER_ADMIN_USER", "MONGODB_CLUSTER_ADMIN_PASSWORD"} {
+		from := env[key].ValueFrom
+		if from == nil || from.SecretKeyRef == nil || from.SecretKeyRef.Name != "internal-"+cluster+"-users" || from.SecretKeyRef.Key != key {
+			t.Errorf("%s must come from Secret internal-%s-users key %s, got %+v", key, cluster, key, from)
+		}
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].Name != "tls" || c.VolumeMounts[0].MountPath != "/tls" || !c.VolumeMounts[0].ReadOnly {
+		t.Errorf("expected the TLS Secret mounted read-only at /tls, got %+v", c.VolumeMounts)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].Secret == nil || pod.Volumes[0].Secret.SecretName != cluster+"-ssl" {
+		t.Fatalf("expected the cluster's TLS Secret %s-ssl as the only volume, got %+v", cluster, pod.Volumes)
+	}
+	items := map[string]bool{}
+	for _, i := range pod.Volumes[0].Secret.Items {
+		items[i.Key] = i.Key == i.Path
+	}
+	for _, key := range []string{"ca.crt", "tls.crt", "tls.key"} {
+		if !items[key] {
+			t.Errorf("TLS volume must project %s under its own name, got %+v", key, pod.Volumes[0].Secret.Items)
+		}
+	}
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Error("the health check must not mount a service account token")
+	}
+}
+
+func TestMongoDBHealthCheckJob(t *testing.T) {
+	ctx := context.Background()
+	load := func(t *testing.T, h *mongodbGateHarness) *psmdbtypes.PerconaServerMongoDB {
+		cluster := &psmdbtypes.PerconaServerMongoDB{}
+		if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+			t.Fatal(err)
+		}
+		return cluster
+	}
+	t.Run("sharded cluster is checked through mongos", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+		cluster := load(t, h)
+		cluster.Spec.Sharding = &psmdbtypes.PerconaServerMongoDBSharding{Enabled: true}
+		job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkMongoDBHealthJob(t, job, cluster.Name, cluster.Name+"-mongos.tenant")
+	})
+	for _, tc := range []struct {
+		name   string
+		mutate func(*psmdbtypes.PerconaServerMongoDB)
+	}{
+		{"cluster in another namespace", func(c *psmdbtypes.PerconaServerMongoDB) { c.Namespace = "other" }},
+		{"no Secrets section", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets = nil }},
+		{"no TLS Secret", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets.SSL = "" }},
+	} {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+			cluster := load(t, h)
+			tc.mutate(cluster)
+			if _, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute); err == nil {
+				t.Fatal("expected the health check to be refused")
+			}
+			jobs := &batchv1.JobList{}
+			if err := h.c.List(ctx, jobs, client.InNamespace("tenant")); err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range jobs.Items {
+				if strings.HasPrefix(j.Name, "mongodb-health-") {
+					t.Fatalf("a refused check created Job %s", j.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestMongoDBHealthCheckSubsecondDeadline(t *testing.T) {
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	ctx := context.Background()
+	if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seconds := job.Spec.Template.Spec.ActiveDeadlineSeconds
+	if seconds == nil {
+		t.Fatal("health-check deadline is missing")
+	}
+	if *seconds != 1 {
+		t.Errorf("expected a one-second health-check deadline, got %d", *seconds)
+	}
+}
+
+// PSMDB's ready status can survive a replay that replaced its system users.
 func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testing.T) {
 	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
 
@@ -3153,19 +3304,19 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 		}
 	})
 
-	t.Run("a ready read inside the settle window is not believed", func(t *testing.T) {
+	t.Run("stale ready never replaces an authenticated check", func(t *testing.T) {
 		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
 		h.reconcile(t)
-		h.age(t, psmdbRestoreTargetSettle/6, 0)
+		h.age(t, 10*time.Minute, 0)
 		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
-			t.Fatalf("a ready state read %s after the replay can predate the operator noticing the target is gone", psmdbRestoreTargetSettle/6)
+			t.Fatal("stale ready must not complete a restore whose health check has not succeeded")
 		}
 	})
 
-	t.Run("ready after the settle window succeeds", func(t *testing.T) {
+	t.Run("ready with a successful authenticated check succeeds", func(t *testing.T) {
 		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
 		h.reconcile(t)
-		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		h.completeHealthCheck(t)
 		_, got := h.reconcile(t)
 		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded || got.Status.CompletedAt == nil {
 			t.Fatalf("expected Succeeded with CompletedAt, got phase=%q completedAt=%v", got.Status.Phase, got.Status.CompletedAt)
@@ -3177,10 +3328,28 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 		}
 	})
 
+	t.Run("a failed check cannot be hidden by stale ready", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		job := &batchv1.Job{}
+		key := client.ObjectKey{Namespace: "tenant", Name: "mongodb-health-current-restore"}
+		if err := h.c.Get(context.Background(), key, job); err != nil {
+			t.Fatal(err)
+		}
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
+		if err := h.c.Status().Update(context.Background(), job); err != nil {
+			t.Fatal(err)
+		}
+		_, got := h.reconcile(t)
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("failed health check must fail the restore, got %s", got.Status.Phase)
+		}
+	})
+
 	t.Run("not ready before the deadline keeps waiting", func(t *testing.T) {
 		h := newMongoDBGateHarness(t, "error", "Error: dial: auth error", selective)
 		h.reconcile(t)
-		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		h.age(t, 2*psmdbRestoreTargetGrace, 0)
 		res, got := h.reconcile(t)
 		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed || got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
 			t.Fatalf("must keep waiting until the deadline, got phase=%q", got.Status.Phase)
@@ -3203,7 +3372,7 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 		t.Run("never ready by the deadline fails, "+name, func(t *testing.T) {
 			h := newMongoDBGateHarness(t, "error", "Error: dial: (AuthenticationFailed) SCRAM authentication failed, storedKey mismatch", tc.selective)
 			h.reconcile(t)
-			h.age(t, 2*psmdbRestoreTargetSettle, 2*psmdbDefaultRestoreDeadline)
+			h.age(t, 2*psmdbRestoreTargetGrace, 2*psmdbDefaultRestoreDeadline)
 			_, got := h.reconcile(t)
 			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 				t.Fatalf("expected Failed past the deadline, got phase=%q", got.Status.Phase)
@@ -3212,7 +3381,7 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 			if cond == nil || cond.Reason != psmdbReasonTargetNotReady {
 				t.Fatalf("expected Ready=False %s, got %+v", psmdbReasonTargetNotReady, cond)
 			}
-			for _, want := range []string{"did not report ready again", "storedKey mismatch", "state error", tc.cause} {
+			for _, want := range []string{"did not pass the post-restore readiness check", "storedKey mismatch", "state error", tc.cause} {
 				if !strings.Contains(cond.Message, want) {
 					t.Errorf("message must contain %q, got %q", want, cond.Message)
 				}
@@ -3220,12 +3389,12 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 		})
 	}
 
-	t.Run("a replay that ends past the deadline still gets the settle window", func(t *testing.T) {
+	t.Run("a replay that ends past the deadline still gets time for its check", func(t *testing.T) {
 		h := newMongoDBGateHarness(t, "error", "", selective)
 		h.reconcile(t)
 		h.age(t, time.Second, 2*psmdbDefaultRestoreDeadline)
 		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
-			t.Fatalf("a target must get the settle window to come back before the deadline can fail it: %+v", got.Status.Conditions)
+			t.Fatalf("a target must get time for its health check: %+v", got.Status.Conditions)
 		}
 	})
 
@@ -3242,7 +3411,7 @@ func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testin
 		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
 			t.Fatalf("a missing CR after the replay must not fail the job: %+v", got.Status.Conditions)
 		}
-		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		h.completeHealthCheck(t)
 		_, got := h.reconcile(t)
 		if n := len(mongodbRestoresIn(t, h.c)); n != 0 {
 			t.Fatalf("the restore was handed to the operator again, %d operator restores exist", n)
@@ -4574,5 +4743,37 @@ func TestReconcileMongoDBRestore_ToCopyFollowsTheRestoreItFound(t *testing.T) {
 	}
 	if created != 0 {
 		t.Fatalf("a pass that found an operator restore must not create another one, created %d", created)
+	}
+}
+
+// The replay latch is what keeps a deleted operator restore from being
+// created again, and its transition time anchors the grace window. A pass
+// that latches it and then fails must still leave it saved.
+func TestReconcileMongoDBRestore_ReplayLatchIsSavedBeforeTheHealthCheck(t *testing.T) {
+	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec.Image = "" // the health check cannot be set up
+	if err := h.c.Update(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup); err == nil {
+		t.Fatal("expected the health check setup to fail")
+	}
+	first := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if first == nil || first.Status != metav1.ConditionTrue {
+		t.Fatalf("the replay must be latched on the stored job before the health check, got %+v", first)
+	}
+	h.age(t, 5*time.Minute, 5*time.Minute)
+	aged := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed).LastTransitionTime
+
+	_, _ = h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup)
+	again := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if again == nil || !again.LastTransitionTime.Equal(&aged) {
+		t.Fatalf("a retry must keep the latched transition time %v, got %+v", aged, again)
 	}
 }
