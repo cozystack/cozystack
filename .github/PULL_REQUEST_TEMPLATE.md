@@ -7,13 +7,21 @@
     - Development and maintenance: api, hack, tests, ci, docs, maintenance
   - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer
 - If it's a work in progress, consider creating this PR as a draft.
-- Don't hesistate to ask for opinion and review in the community chats, even if it's still a draft.
+- Don't hesitate to ask for opinion and review in the community chats, even if it's still a draft.
 - Fixes merged to `main` reach the release lines the backport batch runs for automatically, so do not open backport PRs by hand: https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md
 -->
 
 ## What this PR does
 
 <!-- Link the issues this PR addresses. For a complete fix targeting the default branch, use Closes #N (Closes owner/repository#N for another repository). Otherwise use a non-closing reference; release-branch PRs need manual issue linking and closure when appropriate. -->
+
+### New checks
+
+<!-- Fill in when this PR adds or tightens anything that can fail somebody else's change: a test that reads files outside its own package or chart, a lint, a validator, a schema restriction, a CI gate. One entry per check; write "None" below this comment otherwise. A section left empty counts as not filled in.
+
+- Protects: the requirement of the system the check guards, with a link (a spec clause, a runtime contract, a documented decision, an issue). "This is how the tree looks today" is not a requirement.
+- Consumer: the code that reads the artifact being checked. If nothing reads it yet, say so.
+-->
 
 ### Screenshots
 

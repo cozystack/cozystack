@@ -57,3 +57,13 @@ When raising issues, please specify the following:
 - A scenario where the issue occurred (with details on how to reproduce it)
 - Errors and log messages that are displayed by the involved software
 - Any other detail that might be useful
+
+## Tests and checks in a pull request
+
+Two things reviewers will ask about, so it saves a round to answer them up front.
+
+**Show that a new test can fail.** Before you commit a new or changed test, run it without the change it covers: revert the fix or break the line the test is about. Write what you did and the failure message as one line in the commit message. Please do not add a separate failing commit for this. Pull requests are merged with a merge commit, not squashed, so every commit lands on `main` and has to pass on its own.
+
+**Say what a new check protects.** A test that reads files outside its own package or chart, a lint, a validator, a schema restriction or a CI gate can fail somebody else's change, so it becomes a rule for the whole repository once it merges. In the "New checks" section of the pull request template, name the requirement it protects, with a link to where it is stated, and the code that reads the artifact it checks. If the only source is how the tree looks today, or nothing reads that artifact yet, open it as a discussion with the owners of those files first.
+
+The full conventions, written for AI agents and equally valid for people, are in [`docs/agents/contributing.md`](docs/agents/contributing.md#new-tests-and-checks).
