@@ -65,6 +65,7 @@ shards: 1
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="t1.small" - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "t1.small"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
@@ -171,6 +172,7 @@ backup:
 ## @field {bool} [enabled] - Deploy ClickHouse Keeper for cluster coordination.
 ## @field {quantity} [size] - Persistent Volume Claim size available for application data.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset.
+## @x-cozystack-options {source: resourcepreset}
 ## @field {int} [replicas] - Number of Keeper replicas.
 
 ## @param {ClickHouseKeeper} clickhouseKeeper - ClickHouse Keeper configuration.

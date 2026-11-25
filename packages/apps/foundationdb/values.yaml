@@ -106,6 +106,7 @@ storage:
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="c1.small" - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "c1.small"
 
 ## @typedef {struct} BackupS3Credentials - DEPRECATED S3 credentials.

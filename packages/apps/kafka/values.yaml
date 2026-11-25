@@ -119,6 +119,7 @@ topics: []
 ## @field {int} replicas - Number of Kafka replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 ## @field {quantity} size - Persistent Volume size for Kafka.
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
 ## @immutable

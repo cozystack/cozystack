@@ -62,6 +62,7 @@ replicas: 2
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="t1.micro" - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "t1.micro"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.

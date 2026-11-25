@@ -206,7 +206,10 @@
         "large",
         "xlarge",
         "2xlarge"
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "resourcepreset"
+      }
     },
     "backup": {
       "description": "DEPRECATED Backup configuration (use the Cozystack backups framework: BackupClass + FoundationDB strategy).",
