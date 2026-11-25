@@ -1,0 +1,71 @@
+#!/bin/sh
+# Migration 64 --> 65
+# Label each existing tenant worker VM with its cluster's HelmRelease.
+#
+# CAPK creates a worker VM without an ownerReference. The lineage webhook
+# resolves such an object through its helm.toolkit.fluxcd.io/name label, and
+# the kubernetes-nodes chart now puts that label on the VM template. CAPK
+# copies template labels onto a VM only when it creates the VM
+# (newVirtualMachineFromKubevirtMachine, v0.1.10), so a VM that predates the
+# label never gets it, and every virt-launcher pod created for it afterwards
+# (a live migration, a VMI restart) would be admitted without lineage labels
+# and fall out of its SecurityGroups until the pool roll replaces the VM.
+#
+# The value is the VM's cluster.x-k8s.io/cluster-name label. CAPK sets it to
+# the CAPI Cluster's name, which is the MachineDeployment's spec.clusterName,
+# which the chart renders from the same kubernetes-nodes.clusterName the
+# template label uses; reading it keeps this from drifting from the chart's
+# naming, ComputePlane override included. Only a VM whose KubevirtMachine is in
+# its own namespace is labelled: a KubevirtMachine elsewhere belongs to an
+# external infrastructure cluster, not to a release here. A VM that already
+# carries the label is left alone, so a second run changes nothing.
+#
+# Ordering: this runs as the platform chart's pre-upgrade hook, before the
+# upgrade re-points cozystack-packages, from which the lineage webhook renders,
+# so on a variant that runs migrations the webhook that depends on the label
+# does not start before this has run. A VM created from an old template after
+# this ran and before its pool re-renders comes up without the label and is
+# replaced by that pool's roll.
+#
+# Fail-closed like migration 59: migrations never re-run, so a swallowed error
+# would stamp the version past a VM still missing the label.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+LABEL="helm.toolkit.fluxcd.io/name"
+
+# --ignore-not-found separates a cluster without KubeVirt (no output, rc 0)
+# from an API error, which aborts under set -e.
+crd=$(kubectl get crd virtualmachines.kubevirt.io --ignore-not-found --output name)
+if [ -z "$crd" ]; then
+  echo "KubeVirt is not installed; no VM to label"
+  stamp_cozystack_version 65
+  exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+kubectl get virtualmachines.kubevirt.io --all-namespaces --output json > "$work/vms.json"
+
+jq --raw-output --arg label "$LABEL" '
+  .items[]
+  | .metadata.namespace as $ns
+  | (.metadata.labels // {}) as $l
+  | select(($l["cluster.x-k8s.io/cluster-name"] // "") != "")
+  | select($l["capk.cluster.x-k8s.io/kubevirt-machine-namespace"] == $ns)
+  | select($l[$label] == null)
+  | "\($ns) \(.metadata.name) \($l["cluster.x-k8s.io/cluster-name"])"
+' "$work/vms.json" > "$work/unlabelled"
+
+while read -r ns name release; do
+  echo "VM $ns/$name: labelling $LABEL=$release"
+  # Without --overwrite a label set since the read fails the call instead of
+  # being replaced.
+  kubectl label --namespace "$ns" virtualmachines.kubevirt.io "$name" "$LABEL=$release"
+done < "$work/unlabelled"
+
+stamp_cozystack_version 65

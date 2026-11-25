@@ -1,0 +1,79 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-64-vm-release-label.bats. It serves only the
+# calls migration 64 and lib/cozystack-version.sh make, and logs each one to
+# $FAKE_CMDLOG.
+#
+# The VMs live in $FAKE_STATE/vms.json and a label call is applied to that
+# file, so a second run of the migration reads what the first one wrote.
+#
+#   FAKE_CMDLOG      file to append a one-line record of each call to
+#   FAKE_STATE       directory holding vms.json
+#   FAKE_NO_KUBEVIRT non-empty => the VirtualMachine CRD is absent
+#   FAKE_CRD_FAIL    non-empty => reading the VirtualMachine CRD exits 1
+#   FAKE_LIST_FAIL   non-empty => listing VMs exits 1 with this stderr
+#   FAKE_LABEL_FAIL  non-empty => every label call exits 1 with this stderr
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+case "$args" in
+  *"apply --filename -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        exit 0
+        ;;
+    esac
+    log "APPLY-UNKNOWN"
+    printf 'fake kubectl: unmodelled apply\n' >&2
+    exit 1
+    ;;
+
+  *"get crd virtualmachines.kubevirt.io"*)
+    if [ -n "${FAKE_CRD_FAIL:-}" ]; then printf '%s\n' "$FAKE_CRD_FAIL" >&2; exit 1; fi
+    [ -n "${FAKE_NO_KUBEVIRT:-}" ] || echo "customresourcedefinition.apiextensions.k8s.io/virtualmachines.kubevirt.io"
+    exit 0
+    ;;
+
+  *"get virtualmachines.kubevirt.io"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then printf '%s\n' "$FAKE_LIST_FAIL" >&2; exit 1; fi
+    cat "$FAKE_STATE/vms.json" || exit 1
+    exit 0
+    ;;
+
+  *"label "*"virtualmachines.kubevirt.io"*)
+    if [ -n "${FAKE_LABEL_FAIL:-}" ]; then printf '%s\n' "$FAKE_LABEL_FAIL" >&2; exit 1; fi
+    case "$args" in *--overwrite*) printf 'fake kubectl: --overwrite is not expected\n' >&2; exit 1 ;; esac
+    ns=$(arg_after --namespace "$@")
+    name=$(arg_after virtualmachines.kubevirt.io "$@")
+    kv=$(arg_after "$name" "$@")
+    key=${kv%%=*}
+    value=${kv#*=}
+    # Refuse to change an existing value the way kubectl does without --overwrite.
+    have=$(jq -r --arg ns "$ns" --arg n "$name" --arg k "$key" \
+      '.items[] | select(.metadata.namespace == $ns and .metadata.name == $n) | .metadata.labels[$k] // ""' \
+      "$FAKE_STATE/vms.json")
+    if [ -n "$have" ]; then
+      printf "error: '%s' already has a value (%s), and --overwrite is false\n" "$key" "$have" >&2
+      exit 1
+    fi
+    jq --arg ns "$ns" --arg n "$name" --arg k "$key" --arg v "$value" '
+      .items |= map(
+        if .metadata.namespace == $ns and .metadata.name == $n then
+          .metadata.labels[$k] = $v
+        else . end)' "$FAKE_STATE/vms.json" > "$FAKE_STATE/vms.json.new"
+    mv "$FAKE_STATE/vms.json.new" "$FAKE_STATE/vms.json"
+    log "LABEL-VM $ns/$name $key=$value"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1
