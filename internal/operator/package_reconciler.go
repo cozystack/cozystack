@@ -950,7 +950,8 @@ func (r *PackageReconciler) deleteManagedSystemDefaultsLimitRanges(ctx context.C
 // Defaulting a limit across system namespaces takes those components out of the candidate
 // set. Tenant namespaces are skipped because the tenant chart owns LimitRange policy
 // there: packages/apps/tenant ships tenant-range-limits, which defaults container memory
-// to 128Mi in every tenant namespace that declares resourceQuotas. Handing a second,
+// to 128Mi in every tenant namespace whose resourceQuotas bound memory (and cpu or
+// ephemeral-storage likewise, each only when the quota bounds it). Handing a second,
 // system-owned LimitRange to those namespaces would layer a competing default on top of
 // the chart's own, so the operator stays out.
 //
