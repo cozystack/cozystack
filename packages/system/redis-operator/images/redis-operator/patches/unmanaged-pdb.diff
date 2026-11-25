@@ -1,0 +1,148 @@
+# Downstream carry: the operator deletes the Sentinel or Redis PDB it created
+# once disablePodDisruptionBudget is set for that component. v3.3.5 only stops
+# ensuring the PDB, and its owner reference removes it only together with the
+# RedisFailover, so an instance scaled down to one Sentinel keeps a
+# minAvailable: 1 PDB that blocks every drain. A PDB this RedisFailover does
+# not control is left alone, and no delete is sent when there is no PDB.
+#
+# Its context includes the tlsHash parameter tls.diff adds, so it applies
+# after that patch. Retire it when a release carrying the upstream pull
+# request lands.
+#
+# Upstream: https://github.com/freshworks-oss/redis-operator/pull/93
+diff --git a/operator/redisfailover/service/client.go b/operator/redisfailover/service/client.go
+index b83ba64e1151..7c4b9bf14da3 100644
+--- a/operator/redisfailover/service/client.go
++++ b/operator/redisfailover/service/client.go
+@@ -116,10 +116,12 @@ func (r *RedisFailoverKubeClient) EnsureSentinelConfigMap(rf *redisfailoverv1.Re
+ // EnsureSentinelDeployment makes sure the sentinel deployment exists in the desired state.
+ // tlsHash is stamped on the pod template so a renewed TLS Secret rolls the pods.
+ func (r *RedisFailoverKubeClient) EnsureSentinelDeployment(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference, tlsHash string) error {
+-	if !rf.Spec.Sentinel.DisablePodDisruptionBudget {
+-		if err := r.ensurePodDisruptionBudget(rf, sentinelName, sentinelRoleName, labels, ownerRefs); err != nil {
++	if rf.Spec.Sentinel.DisablePodDisruptionBudget {
++		if err := r.ensureNotPresentPodDisruptionBudget(rf, sentinelName); err != nil {
+ 			return err
+ 		}
++	} else if err := r.ensurePodDisruptionBudget(rf, sentinelName, sentinelRoleName, labels, ownerRefs); err != nil {
++		return err
+ 	}
+ 	d := generateSentinelDeployment(rf, labels, ownerRefs, tlsHash)
+ 	err := r.K8SService.CreateOrUpdateDeployment(rf.Namespace, d)
+@@ -131,10 +133,12 @@ func (r *RedisFailoverKubeClient) EnsureSentinelDeployment(rf *redisfailoverv1.R
+ // EnsureRedisStatefulset makes sure the redis statefulset exists in the desired state.
+ // tlsHash is stamped on the pod template so a renewed TLS Secret rolls the pods.
+ func (r *RedisFailoverKubeClient) EnsureRedisStatefulset(rf *redisfailoverv1.RedisFailover, labels map[string]string, ownerRefs []metav1.OwnerReference, tlsHash string) error {
+-	if !rf.Spec.Redis.DisablePodDisruptionBudget {
+-		if err := r.ensurePodDisruptionBudget(rf, redisName, redisRoleName, labels, ownerRefs); err != nil {
++	if rf.Spec.Redis.DisablePodDisruptionBudget {
++		if err := r.ensureNotPresentPodDisruptionBudget(rf, redisName); err != nil {
+ 			return err
+ 		}
++	} else if err := r.ensurePodDisruptionBudget(rf, redisName, redisRoleName, labels, ownerRefs); err != nil {
++		return err
+ 	}
+ 
+ 	// Check and validate StatefulSet before creation/update
+@@ -412,6 +416,29 @@ func (r *RedisFailoverKubeClient) ensurePodDisruptionBudget(rf *redisfailoverv1.
+ 	return err
+ }
+ 
++// ensureNotPresentPodDisruptionBudget deletes the PDB a previous reconcile
++// created: its owner reference removes it only with the RedisFailover, so
++// disabling the PDB would otherwise leave the last one in force. A PDB this
++// RedisFailover does not control was not created by the operator and stays.
++func (r *RedisFailoverKubeClient) ensureNotPresentPodDisruptionBudget(rf *redisfailoverv1.RedisFailover, name string) error {
++	name = generateName(name, rf.Name)
++	pdb, err := r.K8SService.GetPodDisruptionBudget(rf.Namespace, name)
++	if apierrors.IsNotFound(err) {
++		return nil
++	}
++	if err != nil {
++		return err
++	}
++	if !metav1.IsControlledBy(pdb, rf) {
++		return nil
++	}
++	err = r.K8SService.DeletePodDisruptionBudget(rf.Namespace, name)
++	if apierrors.IsNotFound(err) {
++		return nil
++	}
++	return err
++}
++
+ func (r *RedisFailoverKubeClient) setEnsureOperationMetrics(objectNamespace string, objectName string, objectKind string, ownerName string, err error) {
+ 	if nil != err {
+ 		r.metricsClient.RecordEnsureOperation(objectNamespace, objectName, objectKind, ownerName, metrics.FAIL)
+diff --git a/operator/redisfailover/service/generator_test.go b/operator/redisfailover/service/generator_test.go
+index 39bbcfdd6f02..ee72b2348061 100644
+--- a/operator/redisfailover/service/generator_test.go
++++ b/operator/redisfailover/service/generator_test.go
+@@ -8,10 +8,12 @@ import (
+ 	"github.com/stretchr/testify/mock"
+ 	appsv1 "k8s.io/api/apps/v1"
+ 	corev1 "k8s.io/api/core/v1"
++	policyv1 "k8s.io/api/policy/v1"
+ 	"k8s.io/apimachinery/pkg/api/errors"
+ 	"k8s.io/apimachinery/pkg/api/resource"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/runtime/schema"
++	"k8s.io/apimachinery/pkg/types"
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+ 
+ 	redisfailoverv1 "github.com/freshworks/redis-operator/api/redisfailover/v1"
+@@ -2926,3 +2928,54 @@ func TestDisableMyMaster(t *testing.T) {
+ 		assert.Equal(test.expectedRedisShutdownSHScriptConfigMap.Data, generatedRedisConfigMap.Data)
+ 	}
+ }
++
++func TestDisabledPodDisruptionBudgetIsDeleted(t *testing.T) {
++	notFound := errors.NewNotFound(schema.GroupResource{}, "")
++	isController := true
++	pdbOwnedBy := func(uid string) *policyv1.PodDisruptionBudget {
++		return &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
++			OwnerReferences: []metav1.OwnerReference{{UID: types.UID(uid), Controller: &isController}},
++		}}
++	}
++	tests := []struct {
++		name       string
++		stored     *policyv1.PodDisruptionBudget
++		getErr     error
++		wantDelete bool
++		deleteErr  error
++	}{
++		{name: "owned PDB is deleted", stored: pdbOwnedBy("rf-uid"), wantDelete: true},
++		{name: "PDB without an owner is kept", stored: &policyv1.PodDisruptionBudget{}},
++		{name: "PDB with a foreign owner is kept", stored: pdbOwnedBy("other-uid")},
++		{name: "absent PDB is not deleted", getErr: notFound},
++		{name: "PDB gone before the delete is not an error", stored: pdbOwnedBy("rf-uid"), wantDelete: true, deleteErr: notFound},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			rf := generateRF()
++			rf.UID = "rf-uid"
++			rf.Spec.Sentinel.DisablePodDisruptionBudget = true
++			rf.Spec.Redis.DisablePodDisruptionBudget = true
++
++			ms := &mK8SService.Services{}
++			for _, pdbName := range []string{sentinelName, redisName} {
++				ms.On("GetPodDisruptionBudget", namespace, pdbName).Once().Return(test.stored, test.getErr)
++				if test.wantDelete {
++					ms.On("DeletePodDisruptionBudget", namespace, pdbName).Once().Return(test.deleteErr)
++				}
++			}
++			ms.On("GetStatefulSet", namespace, mock.Anything).Once().Return(nil, notFound)
++			ms.On("CreateOrUpdateDeployment", namespace, mock.Anything).Once().Return(nil)
++			ms.On("CreateOrUpdateStatefulSet", namespace, mock.Anything).Once().Return(nil)
++
++			client := rfservice.NewRedisFailoverKubeClient(ms, log.Dummy, metrics.Dummy, "cluster.local")
++			assert.NoError(t, client.EnsureSentinelDeployment(rf, nil, []metav1.OwnerReference{}, ""))
++			assert.NoError(t, client.EnsureRedisStatefulset(rf, nil, []metav1.OwnerReference{}, ""))
++			ms.AssertExpectations(t)
++			if !test.wantDelete {
++				ms.AssertNotCalled(t, "DeletePodDisruptionBudget", mock.Anything, mock.Anything)
++			}
++		})
++	}
++}
