@@ -5,6 +5,7 @@ package securitygroup
 
 import (
 	"net/netip"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,21 @@ import (
 // validProtocols is the set of L4 protocols a SecurityGroup port rule may name.
 // An empty protocol defaults to ANY and is allowed.
 var validProtocols = map[string]struct{}{"TCP": {}, "UDP": {}, "SCTP": {}, "ANY": {}}
+
+// The FQDN rules of the cilium.io/v2 CiliumNetworkPolicy CRD
+// (spec.egress[].toFQDNs[]). The API server enforces them on the backing
+// write, so a value they reject must be caught here to fail on the
+// SecurityGroup path rather than with a CiliumNetworkPolicy schema error.
+var (
+	fqdnMatchNameRE    = regexp.MustCompile(`^([-a-zA-Z0-9_]+[.]?)+$`)
+	fqdnMatchPatternRE = regexp.MustCompile(`^([-a-zA-Z0-9_*]+[.]?)+$`)
+)
+
+const fqdnMaxLength = 255
+
+// portRangeRE matches a "first-last" port range, which PortProtocol cannot
+// express: it carries a single port, and Cilium's endPort is not exposed.
+var portRangeRE = regexp.MustCompile(`^[0-9]+-[0-9]+$`)
 
 // reservedEntities are Cilium's built-in entity names. They stay
 // platform-managed and are deliberately not tenant-expressible — a SecurityGroup
@@ -158,11 +174,31 @@ func validateCIDRs(path *field.Path, cidrs []string) field.ErrorList {
 func validateFQDNs(path *field.Path, fqdns []sdnv1alpha1.FQDNSelector) field.ErrorList {
 	var errs field.ErrorList
 	for i := range fqdns {
-		if fqdns[i].MatchName == "" && fqdns[i].MatchPattern == "" {
+		name, pattern := fqdns[i].MatchName, fqdns[i].MatchPattern
+		switch {
+		case name == "" && pattern == "":
 			errs = append(errs, field.Required(path.Index(i), "must set matchName or matchPattern"))
+		case name != "" && pattern != "":
+			errs = append(errs, field.Forbidden(path.Index(i), "must set only one of matchName or matchPattern"))
+		case name != "":
+			errs = append(errs, validateFQDNValue(path.Index(i).Child("matchName"), name, fqdnMatchNameRE,
+				"must be a DNS name made of letters, digits, '-', '_' and single '.' separators")...)
+		default:
+			errs = append(errs, validateFQDNValue(path.Index(i).Child("matchPattern"), pattern, fqdnMatchPatternRE,
+				"must be a DNS name made of letters, digits, '-', '_', '*' and single '.' separators")...)
 		}
 	}
 	return errs
+}
+
+func validateFQDNValue(path *field.Path, value string, re *regexp.Regexp, msg string) field.ErrorList {
+	if len(value) > fqdnMaxLength {
+		return field.ErrorList{field.TooLong(path, value, fqdnMaxLength)}
+	}
+	if !re.MatchString(value) {
+		return field.ErrorList{field.Invalid(path, value, msg)}
+	}
+	return nil
 }
 
 func validatePortRules(path *field.Path, rules []sdnv1alpha1.PortRule) field.ErrorList {
@@ -177,6 +213,8 @@ func validatePortRules(path *field.Path, rules []sdnv1alpha1.PortRule) field.Err
 					if n < 1 || n > 65535 {
 						errs = append(errs, field.Invalid(pPath.Child("port"), pp.Port, "port number must be between 1 and 65535"))
 					}
+				} else if portRangeRE.MatchString(pp.Port) {
+					errs = append(errs, field.Invalid(pPath.Child("port"), pp.Port, "port ranges are not supported; list each port as its own entry"))
 				} else {
 					for _, msg := range validation.IsValidPortName(pp.Port) {
 						errs = append(errs, field.Invalid(pPath.Child("port"), pp.Port, msg))
