@@ -19,11 +19,13 @@
   in sync with Tenant/root spec.monitoring; flipping monitoring.rootEnabled is
   what refreshes these redirects.
 
-  `default dict` guards a null/absent _cluster (missing Secret / dry-run); the
-  "true" default preserves the historical always-create behaviour for
-  cozystack-values Secrets written before this key existed.
+  `default dict` guards a null/absent _cluster (missing Secret / dry-run), and
+  a missing key keeps the historical always-create behaviour for
+  cozystack-values Secrets written before this key existed. The key is
+  checked before `toString`, so a bool false is not taken for a missing one.
 */ -}}
-{{- if eq (toString (index (.Values._cluster | default dict) "monitoring-enabled" | default "true")) "true" }}
+{{- $monitoring := index (.Values._cluster | default dict) "monitoring-enabled" }}
+{{- if or (kindIs "invalid" $monitoring) (eq (toString $monitoring) "true") }}
 ---
 apiVersion: v1
 kind: Service
