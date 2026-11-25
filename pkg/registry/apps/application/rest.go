@@ -213,6 +213,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
+	if err := r.validateWorkloadMemory(app, nil); err != nil {
+		return nil, err
+	}
+
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
@@ -537,6 +541,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
+	previousValues := oldObj.(*appsv1alpha1.Application).Spec.DeepCopy()
 	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
 
 	// Update the Application object
@@ -558,6 +563,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
 	// updates to pre-existing resources whose names don't conform to the new rules.
+
+	if err := r.validateWorkloadMemory(app, previousValues); err != nil {
+		return nil, false, err
+	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
@@ -614,6 +623,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
+	// The memory check above compared against the read at the start of Update.
+	// Compare again against the live release, so a stale value below 1Mi cannot
+	// overwrite memory that another writer has fixed since.
+	if err := r.validateWorkloadMemory(app, cur.Spec.Values); err != nil {
+		return nil, false, err
+	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
 	// Suspension is not part of the Application, so the rebuilt object always
@@ -653,6 +668,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			cur := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
+			}
+			if memErr := r.validateWorkloadMemory(app, cur.Spec.Values); memErr != nil {
+				return memErr
 			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
