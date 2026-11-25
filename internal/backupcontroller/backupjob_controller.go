@@ -39,6 +39,9 @@ type BackupJobReconciler struct {
 	// re-reads the BackupJob before dispatching to a driver. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// now is a test seam for the clock that paces Velero deletion retries.
+	now func() time.Time
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -56,12 +59,17 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Skip terminal BackupJobs: a Succeeded/Failed run must not keep
-	// projecting Secrets or re-running dispatch on every requeue, which
-	// would otherwise materialise cozy-backups-creds in tenant namespaces
-	// long after the BackupJob is done and pin needless work on the
-	// apiserver.
-	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+	// A terminal BackupJob never reaches credentials projection or strategy
+	// dispatch: a finished run must not keep projecting Secrets or
+	// re-running dispatch on every requeue, which would otherwise
+	// materialise cozy-backups-creds in tenant namespaces long after the
+	// BackupJob is done and pin needless work on the apiserver. A Failed
+	// one only has the failed Velero backups it left behind deleted.
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob already terminal, cleaning up its Velero Backups", "phase", j.Status.Phase)
+		return r.deleteFailedJobVeleroBackups(ctx, j)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded {
 		logger.V(1).Info("BackupJob already terminal, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
