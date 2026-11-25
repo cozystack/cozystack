@@ -40,10 +40,16 @@
 # regenerates. An entry here is a deliberate statement that some package's
 # `image:` target sed's a ref into a file it vendors from upstream.
 #
-# system/multus is the only one today: its templates/ is the upstream
-# multus-daemonset-thick.yml fetched by `make update`, and multus's Makefile
-# `image:` target sed's the built ref into every `multus-cni` `image:` line
-# inside it.
+# system/multus is the only such vendored file today: its templates/ is the
+# upstream multus-daemonset-thick.yml fetched by `make update`, and multus's
+# Makefile `image:` target sed's the built ref into every `multus-cni` `image:`
+# line inside it.
+#
+# library/cozy-lib/templates/_etcd.tpl is listed for a different reason: it is
+# first-party source pinning a third-party ref, the etcd-defrag image of every
+# etcd maintenance CronJob. The retag and the mirror keep only refs under their
+# own registry and drop it; what listing it buys is verify-multiarch.sh
+# checking that the pinned digest serves both architectures.
 #
 # KNOWN GAP, deliberately not listed: system/capi-providers-cpprovider stamps
 # its kamaji ref into files/control-plane-components.yaml AND into the
@@ -64,7 +70,7 @@
 # variable able to silently NARROW it is a hazard with no matching use case.
 # Word splitting is intended (the list is whitespace-separated), which also
 # means a path containing whitespace cannot be represented here.
-IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml"
+IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml library/cozy-lib/templates/_etcd.tpl"
 
 # Emit every ref-bearing file under <root>, one per line.
 #

@@ -328,8 +328,8 @@ func buildJobStrategyBatchJob(namespace, name string, labels map[string]string, 
 // reference and the BackupClassStrategy parameters in effect at backup time.
 // Parameters round-trip via DriverMetadata under jobStrategyParamPrefix so a
 // later RestoreJob can re-render the strategy template against the same values.
-// Mirrors createAltinityBackupArtifact - see that function for why Status is
-// populated on the struct but not promoted from this driver.
+// Status set on the struct is dropped server-side, because Backup has the
+// status subresource.
 func (r *BackupJobReconciler) createJobBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,

@@ -134,10 +134,11 @@ tests:
       # failure it is written to prevent would take the assertion with it.
       # Matching the entire rule pins the verb set in both directions and names
       # the resource when it fails; lengthEqual is what closes the remaining
-      # hole, a tenth rule appended past everything asserted here.
+      # hole, a thirteenth rule appended past everything asserted here. This
+      # render owns its etcd, so Steps 4a and 8 add three rules of their own.
       - lengthEqual:
           path: rules
-          count: 9
+          count: 12
       - contains:
           path: rules
           content:
@@ -185,7 +186,7 @@ tests:
           pattern: 'delete secrets \\\n\s+test-k8s-talos-ca test-k8s-talos-tls-cert(?:[^\n]*\\\n)*[^\n]*--wait=false'
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'delete secrets \\\n\s+test-k8s-talos-ca[\s\S]*delete certificates\.cert-manager\.io'
+          pattern: 'delete secrets \\\n\s+test-k8s-talos-ca[\s\S]*delete certificates\.cert-manager\.io \\\n\s+test-k8s-talos-ca'
 
   - it: deletes the orphaned OIDC bootstrap Job
     documentSelector:

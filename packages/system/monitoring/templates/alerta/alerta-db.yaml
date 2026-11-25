@@ -6,8 +6,8 @@ metadata:
 spec:
   instances: 2
   {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "alerta-db" }}
-  {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
-  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
+  {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.12-standard-trixie" $existingCluster }}
+  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.12-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
   {{- if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}

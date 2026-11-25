@@ -89,7 +89,7 @@
       }
     },
     "networks": {
-      "description": "Networks to attach the VM to.",
+      "description": "Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).",
       "type": "array",
       "default": [],
       "items": {
@@ -121,6 +121,13 @@
           }
         }
       }
+    },
+    "routeTable": {
+      "description": "Name of a cozyplane RouteTable in the VM's namespace that routes the VM's traffic. Empty uses the VPC's default table. Requires the cozyplane networking variant and a VPC in `networks`.",
+      "type": "string",
+      "default": "",
+      "maxLength": 253,
+      "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
     },
     "gpus": {
       "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",

@@ -62,24 +62,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # The addon HelmRelease itself gates on _namespace.etcd (the etcd-less
-  # render collapses to the awaiting-etcd beacon), so the Service must too —
-  # otherwise an etcd-less tenant with the addon pinned on (ComputePlane)
-  # gets the selector-less Service by another route.
-  - it: renders nothing on an etcd-less tenant even with the addon enabled
-    set:
-      _namespace:
-        ingress: tenant-root
-        etcd: ""
-      addons:
-        ingressNginx:
-          enabled: true
-          exposeMethod: Proxied
-          hosts: []
-    asserts:
-      - hasDocuments:
-          count: 0
-
   # An empty _namespace.ingress means no ingress-nginx serves this tenant, and
   # the API rejects the ingressClassName "" the Ingress would carry.
   - it: renders the Service but no Ingress when the tenant has no ingress

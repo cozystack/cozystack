@@ -44,7 +44,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'image: factory\.talos\.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1\.13\.6'
+          pattern: 'image: factory\.talos\.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1\.13\.12'
         documentSelector: {path: kind, value: Job}
 
   - it: install.image pins a builtin pool's schematicID/version

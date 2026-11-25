@@ -42,5 +42,5 @@ This scenario assumes the admin steps (`01-...`, `02-...`) have already run.
 | Resource | Where | Purpose |
 |---|---|---|
 | `BackupJob/<bj-name>` | tenant namespace | Records the run; `status.phase=Succeeded`, `status.backupRef` points at the Backup |
-| `Backup/<bj-name>` | tenant namespace | The restorable artifact reference (the actual data lives in S3 under the upstream tool's retention) |
+| `Backup/<bj-name>` | tenant namespace | The restorable artifact reference; the data lives in S3 as the archive the Backup records. Nothing expires it: on `backup.useSystemBucket: true` deleting the `Backup` deletes the archive, and on the tenant's own bucket the archive stays until the tenant removes it, through the sidecar's `POST /backup/delete/remote/<name>` or the bucket's lifecycle rules |
 | `batch/v1.Job/<bj-name>-backup` | tenant namespace | The completed strategy Pod |

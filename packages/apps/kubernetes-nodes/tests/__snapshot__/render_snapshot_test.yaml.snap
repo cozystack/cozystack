@@ -3,7 +3,7 @@ matches the golden render of a GPU pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-8ed0ab
+      name: kubernetes-myk8s-md0-fd6695
       namespace: tenant-test
     spec:
       template:
@@ -19,11 +19,14 @@ matches the golden render of a GPU pool:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
                       http:
-                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.12/openstack-amd64.raw.xz
                     storage:
                       resources:
                         requests:
@@ -109,13 +112,13 @@ matches the golden render of a GPU pool:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0-940c60
+              name: kubernetes-myk8s-md0-eec4f5
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-8ed0ab
+            name: kubernetes-myk8s-md0-fd6695
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -149,7 +152,6 @@ matches the golden render of a GPU pool:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker
@@ -159,7 +161,7 @@ matches the golden render of a kubelet-override pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-2d362e
+      name: kubernetes-myk8s-md0-9375f9
       namespace: tenant-test
     spec:
       template:
@@ -175,11 +177,14 @@ matches the golden render of a kubelet-override pool:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
                       http:
-                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.12/openstack-amd64.raw.xz
                     storage:
                       resources:
                         requests:
@@ -262,13 +267,13 @@ matches the golden render of a kubelet-override pool:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0-db97de
+              name: kubernetes-myk8s-md0-1ca9b7
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-2d362e
+            name: kubernetes-myk8s-md0-9375f9
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -302,7 +307,6 @@ matches the golden render of a kubelet-override pool:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker
@@ -312,7 +316,7 @@ matches the golden render of the pool objects:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-a6ac3e
+      name: kubernetes-myk8s-md0-0a98fc
       namespace: tenant-test
     spec:
       template:
@@ -329,11 +333,14 @@ matches the golden render of the pool objects:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
                       http:
-                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.12/openstack-amd64.raw.xz
                     storage:
                       resources:
                         requests:
@@ -418,13 +425,13 @@ matches the golden render of the pool objects:
             configRef:
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
-              name: kubernetes-myk8s-md0-ffdbe1
+              name: kubernetes-myk8s-md0-a9467e
               namespace: tenant-test
           clusterName: kubernetes-myk8s
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-a6ac3e
+            name: kubernetes-myk8s-md0-0a98fc
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -458,7 +465,6 @@ matches the golden render of the pool objects:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker

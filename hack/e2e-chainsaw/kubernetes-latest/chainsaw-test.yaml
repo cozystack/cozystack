@@ -14,6 +14,12 @@ metadata:
 spec:
   catch:
   - events: {}
+  - podLogs:
+      namespace: tenant-test
+      selector: app.kubernetes.io/name=etcd-client-probe
+  - podLogs:
+      namespace: tenant-root
+      selector: app.kubernetes.io/name=etcd-client-probe
   steps:
   - name: tenant-kubernetes-latest-version
     try:
@@ -80,7 +86,7 @@ spec:
         # wait, all on the passing path. Raising the ceiling to cover them is not
         # available -- the guard in hack/run-kubernetes-serial-console_test.bats
         # holds COZY_OP_CEILING equal to BOTH suites' `timeout:`, and two suites
-        # at 79m plus their 22m teardowns take 202m, which with the install and
+        # at 79m plus their 25m teardowns take 208m, which with the install and
         # the rest of a full run does not fit the job's own 265-minute cap.
         # What is available is a measurement: on the green run of this branch
         # (33724179053) the whole Test took 569.72s against this 4020s op, with
@@ -103,7 +109,68 @@ spec:
           run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          kubectl --namespace tenant-test delete job guest-etcd-defrag-e2e --ignore-not-found --timeout=30s
+          kubectl --namespace tenant-test create job guest-etcd-defrag-e2e --from=cronjob/kubernetes-test-latest-version-etcd-defrag
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            namespace: tenant-test
+            name: guest-etcd-defrag-e2e
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+    # Who reaches the guest etcd's client port: a labelled Pod in tenant-test
+    # does, an unlabelled one and a Pod in tenant-root do not. Each Pod checks
+    # its own verdict and ends Succeeded only when it matches, see
+    # etcd-client-probes.yaml. 3m covers a cold pull of the probe image plus
+    # the control's 60s poll.
+    - apply:
+        file: etcd-client-probes.yaml
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-test
+            name: etcd-probe-allowed
+          status:
+            phase: Succeeded
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-test
+            name: etcd-probe-unlabelled
+          status:
+            phase: Succeeded
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-root
+            name: etcd-probe-other-tenant
+          status:
+            phase: Succeeded
     finally:
+    - description: reclaim the guest etcd maintenance job
+      script:
+        timeout: 1m
+        content: |
+          kubectl --namespace tenant-test delete job guest-etcd-defrag-e2e --ignore-not-found --timeout=30s
     # Always runs after try/catch — i.e. after the crust-gather snapshots on a
     # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
     # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
@@ -111,11 +178,12 @@ spec:
     # and failure, followed by the compute/storage reclamation barriers.
     - description: tear down the tenant Kubernetes cluster
       script:
-        # 30s diagnostic Certificate + 5m child + 5m parent + 5m compute/PVC
-        # drain + 5m LINSTOR reclamation = 20m30s of inner bounds. Keep the op
-        # above that sum so an inner timeout reports its stage instead of a
-        # Chainsaw SIGKILL hiding it; normal cleanup returns immediately.
-        timeout: 22m
+        # 30s diagnostic Certificate + 5m child + 5m parent + 3m etcd
+        # reclamation + 5m compute/PVC drain + 5m LINSTOR reclamation = 23m30s
+        # of inner bounds. Keep the op above that sum so an inner timeout
+        # reports its stage instead of a Chainsaw SIGKILL hiding it; normal
+        # cleanup returns immediately.
+        timeout: 25m
         content: |
           set -eu
           cd ../../..

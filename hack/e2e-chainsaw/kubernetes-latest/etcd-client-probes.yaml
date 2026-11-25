@@ -1,0 +1,144 @@
+# Who the guest etcd's CiliumNetworkPolicy lets through to the client port.
+# The three Pods run the same script; only EXPECT, the namespace and the
+# labels differ. A Pod that cannot run the probe at all (no image, no nc, a
+# client name that does not resolve) never reaches Succeeded, so it fails the
+# assert instead of passing as refused. The labelled Pod in tenant-test is
+# the control: it proves this image, name and command do reach etcd, so
+# "closed" from the other two is the policy and not a broken probe. The Pod in
+# tenant-root carries the allow label too, because any tenant can set it on
+# its own Pods; only the namespace may keep it out.
+#
+# The control polls for up to 60s because a new Pod's identity can reach the
+# etcd member's node after its first packet, and until then the policy denies
+# it as `world`. That delay can only refuse, never admit, so the refusal
+# probes take a single attempt.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: etcd-probe-allowed
+  namespace: tenant-test
+  labels:
+    app.kubernetes.io/name: etcd-client-probe
+    policy.cozystack.io/allow-to-etcd-cluster: kubernetes-test-latest-version-etcd
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: probe
+    image: curlimages/curl:8.10.1
+    command:
+    - sh
+    - -c
+    - |
+      set -eu
+      command -v nc >/dev/null
+      getent hosts "$ETCD_CLIENT" >/dev/null
+      if [ "$EXPECT" = open ]; then
+        deadline=$(( $(date +%s) + 60 ))
+        until nc -z -w 5 "$ETCD_CLIENT" 2379 || [ "$(date +%s)" -ge "$deadline" ]; do sleep 2; done
+      fi
+      got=closed
+      if nc -z -w 5 "$ETCD_CLIENT" 2379; then got=open; fi
+      echo "$ETCD_CLIENT:2379 is $got, expected $EXPECT"
+      [ "$got" = "$EXPECT" ]
+    env:
+    - name: ETCD_CLIENT
+      value: kubernetes-test-latest-version-etcd-client.tenant-test.svc
+    - name: EXPECT
+      value: open
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: etcd-probe-unlabelled
+  namespace: tenant-test
+  labels:
+    app.kubernetes.io/name: etcd-client-probe
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: probe
+    image: curlimages/curl:8.10.1
+    command:
+    - sh
+    - -c
+    - |
+      set -eu
+      command -v nc >/dev/null
+      getent hosts "$ETCD_CLIENT" >/dev/null
+      if [ "$EXPECT" = open ]; then
+        deadline=$(( $(date +%s) + 60 ))
+        until nc -z -w 5 "$ETCD_CLIENT" 2379 || [ "$(date +%s)" -ge "$deadline" ]; do sleep 2; done
+      fi
+      got=closed
+      if nc -z -w 5 "$ETCD_CLIENT" 2379; then got=open; fi
+      echo "$ETCD_CLIENT:2379 is $got, expected $EXPECT"
+      [ "$got" = "$EXPECT" ]
+    env:
+    - name: ETCD_CLIENT
+      value: kubernetes-test-latest-version-etcd-client.tenant-test.svc
+    - name: EXPECT
+      value: closed
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: etcd-probe-other-tenant
+  namespace: tenant-root
+  labels:
+    app.kubernetes.io/name: etcd-client-probe
+    policy.cozystack.io/allow-to-etcd-cluster: kubernetes-test-latest-version-etcd
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: probe
+    image: curlimages/curl:8.10.1
+    command:
+    - sh
+    - -c
+    - |
+      set -eu
+      command -v nc >/dev/null
+      getent hosts "$ETCD_CLIENT" >/dev/null
+      if [ "$EXPECT" = open ]; then
+        deadline=$(( $(date +%s) + 60 ))
+        until nc -z -w 5 "$ETCD_CLIENT" 2379 || [ "$(date +%s)" -ge "$deadline" ]; do sleep 2; done
+      fi
+      got=closed
+      if nc -z -w 5 "$ETCD_CLIENT" 2379; then got=open; fi
+      echo "$ETCD_CLIENT:2379 is $got, expected $EXPECT"
+      [ "$got" = "$EXPECT" ]
+    env:
+    - name: ETCD_CLIENT
+      value: kubernetes-test-latest-version-etcd-client.tenant-test.svc
+    - name: EXPECT
+      value: closed
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]

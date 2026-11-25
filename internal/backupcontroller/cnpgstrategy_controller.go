@@ -2932,15 +2932,16 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 // cannot get right on its own.
 //
 // Resources: the plugin injects the sidecar with no resources. This ObjectStore
-// lands in the application's namespace, and a tenant with resourceQuotas set
-// carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults
-// every container to 128Mi; the sidecar is OOMKilled mid-backup under it,
-// leaving the ObjectStore healthy and the backup failed. Measured cgroup
+// lands in the application's namespace, and a tenant whose resourceQuotas bound
+// memory carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that
+// defaults every container to 128Mi; the sidecar is OOMKilled mid-backup under
+// it, leaving the ObjectStore healthy and the backup failed. Measured cgroup
 // high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
-// tenant that leaves resourceQuotas empty has no LimitRange, and there the
-// sidecar had no requests and no limit at all. 256Mi holds the measured working
-// set and 1Gi is four times the measurement. The CPU limit is explicit for the
-// same reason: left unset, that LimitRange gives the sidecar its 250m default,
+// tenant whose resourceQuotas bound none of cpu, memory or ephemeral-storage has
+// no LimitRange, and there the sidecar had no requests and no limit at all.
+// 256Mi holds the measured working set and 1Gi is four times the measurement.
+// The CPU limit is explicit for the same reason: left unset, a LimitRange under
+// a cpu quota gives the sidecar its 250m default,
 // so gzip compression of full backups and WAL segments runs on a quarter of a
 // core (a 1.6 GB database took 30 minutes to back up). One core keeps the
 // sidecar from starving the instance while removing that ceiling; it counts

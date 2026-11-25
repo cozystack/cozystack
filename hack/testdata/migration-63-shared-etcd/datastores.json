@@ -1,0 +1,8 @@
+{"items": [
+  {"metadata": {"name": "tenant-root", "annotations": {"meta.helm.sh/release-name": "etcd", "meta.helm.sh/release-namespace": "tenant-root"}},
+   "spec": {"endpoints": ["etcd.tenant-root.svc:2379"]}},
+  {"metadata": {"name": "tenant-b", "annotations": {"meta.helm.sh/release-name": "etcd", "meta.helm.sh/release-namespace": "tenant-b"}},
+   "spec": {"endpoints": ["etcd.tenant-b.svc:2379"]}},
+  {"metadata": {"name": "tenant-a.kubernetes-own", "annotations": {"meta.helm.sh/release-name": "kubernetes-own", "meta.helm.sh/release-namespace": "tenant-a"}},
+   "spec": {"endpoints": ["kubernetes-own-etcd.tenant-a.svc:2379"]}}
+]}

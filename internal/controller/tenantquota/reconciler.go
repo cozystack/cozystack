@@ -354,10 +354,11 @@ func ownedNamespace(hrNamespace, appName string) string {
 
 // boundsComputeLimits reports whether a quota bounds limits.cpu or
 // limits.memory, the only case in which admission rejects a container that
-// omits a limit. The chart renders its LimitRange under any non-empty
-// resourceQuotas, so the root may carry one under a quota that bounds no
-// compute at all; copying it then would impose default limits the quota
-// never asked for.
+// omits a limit. The chart's LimitRange defaults only the resources the root's
+// quota bounds, but a root created by an older chart may still carry one
+// rendered under any non-empty resourceQuotas, compute or not; copying it to a
+// member whose quota bounds no compute limit would impose default limits the
+// quota never asked for.
 func boundsComputeLimits(hard corev1.ResourceList) bool {
 	_, cpu := hard[corev1.ResourceLimitsCPU]
 	_, memory := hard[corev1.ResourceLimitsMemory]
