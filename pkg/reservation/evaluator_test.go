@@ -18,22 +18,19 @@ package reservation
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"sigs.k8s.io/yaml"
 
 	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 )
 
 // The declarations below are test fixtures in the shape a kind would carry
-// on its ApplicationDefinition. They are evaluated against the kinds' real
-// shipped schemas so that defaulting is exercised with the defaults tenants
-// actually get.
+// on its ApplicationDefinition, evaluated against schemas cut down from the
+// kinds' to the keys the declarations and the type checks read.
 
 var postgresDecl = &Declaration{
 	Let: []Binding{{
@@ -76,23 +73,34 @@ var kubernetesNodesDecl = &Declaration{
 	},
 }
 
-func shippedSchema(t *testing.T, kind string) *structuralschema.Structural {
+const quantitySchema = `{"anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}`
+
+var fixtureSchemas = map[string]string{
+	"postgres": `{"type":"object","properties":{
+		"replicas":{"type":"integer","default":2},
+		"resources":{"type":"object","default":{},"properties":{"cpu":` + quantitySchema + `,"memory":` + quantitySchema + `}},
+		"resourcesPreset":{"type":"string","default":"t1.micro"},
+		"size":{"anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true,"default":"10Gi"},
+		"external":{"type":"boolean","default":false},
+		"postgresql":{"type":"object","default":{},"properties":{"sharedPreloadLibraries":{"type":"array","items":{"type":"string"}}}},
+		"autoscaling":{"type":"object","default":{},"properties":{
+			"enabled":{"type":"boolean","default":false},
+			"maxReplicas":{"type":"integer","default":6}}},
+		"users":{"type":"object","default":{},"additionalProperties":{"type":"object","properties":{"replication":{"type":"boolean"}}}}}}`,
+	"vm-instance": `{"type":"object","properties":{
+		"external":{"type":"boolean","default":false},
+		"instanceType":{"type":"string","default":"u1.medium"},
+		"resources":{"type":"object","default":{},"properties":{"cpu":` + quantitySchema + `,"memory":` + quantitySchema + `,"sockets":` + quantitySchema + `}}}}`,
+	"kubernetes-nodes": `{"type":"object","properties":{
+		"minReplicas":{"type":"integer","default":0},
+		"maxReplicas":{"type":"integer","default":10},
+		"instanceType":{"type":"string","default":"u1.medium"},
+		"roles":{"type":"array","default":[],"items":{"type":"string"}}}}`,
+}
+
+func fixtureSchema(t *testing.T, kind string) *structuralschema.Structural {
 	t.Helper()
-	raw, err := os.ReadFile("../../packages/system/" + kind + "-rd/cozyrds/" + kind + ".yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var def struct {
-		Spec struct {
-			Application struct {
-				OpenAPISchema string `json:"openAPISchema"`
-			} `json:"application"`
-		} `json:"spec"`
-	}
-	if err := yaml.Unmarshal(raw, &def); err != nil {
-		t.Fatal(err)
-	}
-	s, err := defaulting.BuildSchema(def.Spec.Application.OpenAPISchema)
+	s, err := defaulting.BuildSchema(fixtureSchemas[kind])
 	if err != nil || s == nil {
 		t.Fatalf("%s schema: %v", kind, err)
 	}
@@ -101,7 +109,7 @@ func shippedSchema(t *testing.T, kind string) *structuralschema.Structural {
 
 func testEnvironment(t *testing.T) Environment {
 	t.Helper()
-	env, err := NewStaticEnvironment(shippedInstancetypes(t), map[string]ResourceList{
+	env, err := NewStaticEnvironment(fixtureInstancetypes, map[string]ResourceList{
 		"t1.nano":  {"cpu": resource.MustParse("250m"), "memory": resource.MustParse("128Mi"), "ephemeral-storage": resource.MustParse("2Gi")},
 		"t1.micro": {"cpu": resource.MustParse("500m"), "memory": resource.MustParse("256Mi"), "ephemeral-storage": resource.MustParse("2Gi")},
 	})
@@ -113,7 +121,7 @@ func testEnvironment(t *testing.T) Environment {
 
 func mustCompile(t *testing.T, decl *Declaration, kind string) *Evaluator {
 	t.Helper()
-	ev, err := Compile(decl, shippedSchema(t, kind))
+	ev, err := Compile(decl, fixtureSchema(t, kind))
 	if err != nil {
 		t.Fatalf("compile %s: %v", kind, err)
 	}
@@ -253,7 +261,7 @@ func TestEvaluateFailsClosed(t *testing.T) {
 		t.Error("no environment: expected an error")
 	}
 
-	unguarded, err := Compile(&Declaration{Resources: map[string]string{"cpu": `quantity(values.notInTheSchema)`}}, shippedSchema(t, "postgres"))
+	unguarded, err := Compile(&Declaration{Resources: map[string]string{"cpu": `quantity(values.notInTheSchema)`}}, fixtureSchema(t, "postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +317,7 @@ func TestEvaluateRejectsValuesOfTheWrongType(t *testing.T) {
 	// reserve its fallback.
 	ev, err := Compile(&Declaration{Resources: map[string]string{
 		"cpu": `has(values.resources.cpu) ? values.resources.cpu : 1`,
-	}}, shippedSchema(t, "postgres"))
+	}}, fixtureSchema(t, "postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +357,7 @@ func TestEvaluateAcceptsIntegralSpellings(t *testing.T) {
 	env := testEnvironment(t)
 	// The Kubernetes schema validator accepts an integral number however it
 	// is spelled, so the evaluator must too.
-	ev, err := Compile(&Declaration{Resources: map[string]string{"cpu": `values.replicas`}}, shippedSchema(t, "postgres"))
+	ev, err := Compile(&Declaration{Resources: map[string]string{"cpu": `values.replicas`}}, fixtureSchema(t, "postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,6 +488,7 @@ func TestEvaluateMulKeepsExactProducts(t *testing.T) {
 		"fractional Gi": {`quantity('20.5Gi').mul(3)`, "62976Mi"},
 		"fractional Ti": {`quantity('1.5Ti').mul(3)`, "4608Gi"},
 		"after a sum":   {`quantity('8.5Gi').add(quantity('1Gi')).mul(2)`, "19Gi"},
+		"past int64":    {`quantity('4294967295').mul(4294967295)`, "18446744065119617025"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -568,7 +577,7 @@ func TestEvaluateNullOverridesDefault(t *testing.T) {
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")
-	catalog := shippedInstancetypes(t)
+	catalog := fixtureInstancetypes
 	var wg sync.WaitGroup
 	for _, it := range []string{"u1.small", "cx1.2xlarge", "o1.large", "u1.medium"} {
 		want, err := ClassifyInstancetype(findInstancetype(t, catalog, it))
@@ -598,7 +607,7 @@ func findInstancetype(t *testing.T, catalog []map[string]any, name string) map[s
 			return obj
 		}
 	}
-	t.Fatalf("%s is not shipped", name)
+	t.Fatalf("%s is not a fixture instance type", name)
 	return nil
 }
 

@@ -15,7 +15,7 @@ tests:
         documentIndex: 0
       - equal:
           path: metadata.name
-          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.12
         documentIndex: 0
       - equal:
           path: metadata.namespace
@@ -23,7 +23,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.source.http.url
-          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.12/openstack-amd64.raw.xz
         documentIndex: 0
       - equal:
           path: spec.contentType

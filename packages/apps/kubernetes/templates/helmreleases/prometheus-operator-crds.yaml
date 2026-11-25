@@ -1,4 +1,3 @@
-{{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -27,4 +26,3 @@ spec:
   upgrade:
     remediation:
       retries: -1
-{{- end }}

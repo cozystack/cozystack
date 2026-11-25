@@ -67,7 +67,7 @@ fluent-bit:
           Add cluster {{ .Release.Name }}
 {{ end }}
 
-{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
+{{- if .Values.addons.monitoringAgents.enabled }}
 {{- $values := deepCopy .Values.addons.monitoringAgents.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultMonitoringAgentsValues" .)) }}
 {{- /*
   The monitoring-agents chart refuses the same combination by rendering

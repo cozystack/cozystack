@@ -41,12 +41,17 @@ type ConfigSpec struct {
 	// List of disks to attach.
 	// +kubebuilder:default:={}
 	Disks []Disk `json:"disks,omitempty"`
-	// Networks to attach the VM to.
+	// Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).
 	// +kubebuilder:default:={}
 	Networks []Network `json:"networks,omitempty"`
 	// Deprecated: use networks instead.
 	// +kubebuilder:default:={}
 	Subnets []Network `json:"subnets,omitempty"`
+	// Name of a cozyplane RouteTable in the VM's namespace that routes the VM's traffic. Empty uses the VPC's default table. Requires the cozyplane networking variant and a VPC in `networks`.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
+	RouteTable string `json:"routeTable"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`

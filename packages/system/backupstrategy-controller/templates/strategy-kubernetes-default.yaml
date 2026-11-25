@@ -19,6 +19,13 @@ metadata:
     backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
+    metadata:
+      labels:
+        {{- /*
+        The cluster's own etcd admits only Pods carrying this label, so the
+        dump reaches its DataStore. Inert for a cluster on a shared etcd.
+        */}}
+        policy.cozystack.io/allow-to-etcd-cluster: {{ printf "{{ .Release.Prefix }}{{ .Release.Name }}-etcd" | quote }}
     spec:
       restartPolicy: Never
       activeDeadlineSeconds: {{ int .Values.backupStrategyController.kubernetesBackupActiveDeadlineSeconds }}

@@ -76,6 +76,36 @@
 {{-   end }}
 {{- end }}
 
+{{- /* -lock-noretention is not a reserved suffix: releases with pools named
+       that way predate the class, and refusing the name would block their
+       upgrade. Only an actual clash between rendered class names fails,
+       across both pool paths and against the base classes. */ -}}
+{{- if gt (len $allPools) 0 }}
+{{-   $classOwners := dict }}
+{{-   range $suffix := list "" "-lock" "-lock-noretention" }}
+{{-     $_ := set $classOwners (printf "BucketClass %s%s" $.Release.Namespace $suffix) "the base classes" }}
+{{-   end }}
+{{-   range $suffix := list "" "-readonly" "-public" }}
+{{-     $_ := set $classOwners (printf "BucketAccessClass %s%s" $.Release.Namespace $suffix) "the base classes" }}
+{{-   end }}
+{{-   range $poolName, $_ := $allPools }}
+{{-     $owner := printf "storage pool '%s'" $poolName }}
+{{-     $names := list }}
+{{-     range $suffix := list "" "-lock" "-lock-noretention" }}
+{{-       $names = append $names (printf "BucketClass %s-%s%s" $.Release.Namespace $poolName $suffix) }}
+{{-     end }}
+{{-     range $suffix := list "" "-readonly" "-public" }}
+{{-       $names = append $names (printf "BucketAccessClass %s-%s%s" $.Release.Namespace $poolName $suffix) }}
+{{-     end }}
+{{-     range $name := $names }}
+{{-       if hasKey $classOwners $name }}
+{{-         fail (printf "%s renders %s, also rendered by %s; rename the pool." $owner $name (get $classOwners $name)) }}
+{{-       end }}
+{{-       $_ := set $classOwners $name $owner }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
 {{- $detectedTopology := "Unknown" }}
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
 {{- if $configMap }}
