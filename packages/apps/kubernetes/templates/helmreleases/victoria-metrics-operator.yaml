@@ -1,8 +1,30 @@
-{{- if .Values.addons.monitoringAgents.enabled }}
+{{- /*
+  Flux uninstalls HelmReleases in parallel and ignores dependsOn on deletion,
+  so turning the addon off would remove the operator while it still has to
+  finalize the VMAgent of monitoring-agents: that uninstall then times out and
+  leaves the VMAgent, its pod and its cluster RBAC behind in the tenant cluster.
+  While the monitoring-agents HelmRelease exists, keep this one and make it a
+  dependent of it: garbage collection deletes it only after monitoring-agents
+  has finished uninstalling. This relies on the Helm in helm-controller
+  deleting removed objects with background propagation; under foreground
+  propagation the dependent would be deleted first, and the operator with it.
+  The lookup copies only the owner's UID, which an owner reference cannot do
+  without; a stale one does no harm, because the object carrying it is
+  collected together with that owner.
+*/}}
+{{- $agents := lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace (printf "%s-monitoring-agents" .Release.Name) }}
+{{- if or .Values.addons.monitoringAgents.enabled $agents }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-cozy-victoria-metrics-operator
+  {{- if not .Values.addons.monitoringAgents.enabled }}
+  ownerReferences:
+  - apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    name: {{ $agents.metadata.name }}
+    uid: {{ $agents.metadata.uid }}
+  {{- end }}
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}

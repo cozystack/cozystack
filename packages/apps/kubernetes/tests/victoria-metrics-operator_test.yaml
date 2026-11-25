@@ -1,10 +1,19 @@
-suite: victoria-metrics-operator.yaml cert-manager-crds dependency gating
+suite: victoria-metrics-operator.yaml rendering and removal order
 
 templates:
   - templates/helmreleases/victoria-metrics-operator.yaml
 
 values:
   - values/common.yaml
+
+kubernetesProvider:
+  scheme: &scheme
+    "helm.toolkit.fluxcd.io/v2/HelmRelease":
+      gvr:
+        group: "helm.toolkit.fluxcd.io"
+        version: "v2"
+        resource: "helmreleases"
+      namespaced: true
 
 # The vmop HelmRelease is gated on monitoringAgents.enabled, but the
 # cert-manager-crds HelmRelease it can depend on is only created when
@@ -75,3 +84,58 @@ tests:
       - lengthEqual:
           path: spec.dependsOn
           count: 2
+
+  - it: keeps the vmop HelmRelease while the monitoring-agents HelmRelease exists, owned by it
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: false
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-test-monitoring-agents
+            namespace: tenant-test
+            uid: 0b1f7c2e-5d1a-4f3e-9a6b-2c8d4e6f8a10
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.ownerReferences
+          value:
+            - apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              name: kubernetes-test-monitoring-agents
+              uid: 0b1f7c2e-5d1a-4f3e-9a6b-2c8d4e6f8a10
+
+  - it: drops the vmop HelmRelease once the monitoring-agents HelmRelease is gone
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: has no owner while monitoringAgents is enabled
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: true
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-test-monitoring-agents
+            namespace: tenant-test
+            uid: 0b1f7c2e-5d1a-4f3e-9a6b-2c8d4e6f8a10
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
