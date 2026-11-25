@@ -26,7 +26,7 @@
 # into the image (see image-migrations in the platform Makefile), already
 # carrying the release's ownership metadata. Every HelmRelease waits for this
 # hook, so the linstor release, which renders its group snapshot gate and
-# VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
+# VolumeGroupSnapshotClass only when the v1 API is served, renders against
 # it even when it upgrades before snapshot-controller. When a CRD was kept, none
 # is created here, the release creates the missing ones, and linstor renders
 # the gate off. Recovery is by hand, since nothing renders either release again
