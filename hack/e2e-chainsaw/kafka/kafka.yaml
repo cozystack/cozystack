@@ -11,6 +11,8 @@ spec:
     storageClass: ""
     resources: {}
     resourcesPreset: "c1.small"
+  users:
+    e2e: {}
   topics:
     - name: testResults
       partitions: 1
