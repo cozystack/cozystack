@@ -32,11 +32,12 @@ The backup controller performs the following steps automatically:
    Velero restores them.
 5. **Creates Velero Restore** — restores resources from the backup with:
    - `existingResourcePolicy: update` to overwrite existing objects.
-   - Resource modifier rules that add `cdi.kubevirt.io/allowClaimAdoption=true` to restored PVCs. CDI does not read that annotation on a PVC: what lets it adopt the restored PVC is the same annotation, which the vm-disk chart sets on the DataVolume Flux recreates once the HelmRelease resumes.
    - OVN IP/MAC annotations to preserve the VM's network identity.
 
 After the Velero Restore completes, the HelmReleases resume and the VM boots
 with the restored disk data while retaining its original IP and MAC addresses.
+
+CDI adopts the restored PVC because the vm-disk chart sets `cdi.kubevirt.io/allowClaimAdoption=true` on the DataVolume that Flux recreates once the HelmRelease resumes.
 
 ### Reclaiming the kept disks
 
