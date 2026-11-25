@@ -61,6 +61,14 @@ tests:
         documentSelector:
           path: kind
           value: KubevirtMachineTemplate
+      # The worker VM names the same release, so the lineage walk resolves
+      # it to the wrapper's cluster and not to a derived name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.metadata.labels["helm.toolkit.fluxcd.io/name"]
+          value: computeplane-cluster
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
       # MachineHealthCheck object name
       - equal:
           path: metadata.name

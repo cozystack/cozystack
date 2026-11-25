@@ -3,7 +3,7 @@ matches the golden render of a GPU pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-fd6695
+      name: kubernetes-myk8s-md0-55f8a5
       namespace: tenant-test
     spec:
       template:
@@ -12,7 +12,8 @@ matches the golden render of a GPU pool:
             checkStrategy: none
           virtualMachineTemplate:
             metadata:
-              labels: null
+              labels:
+                helm.toolkit.fluxcd.io/name: kubernetes-myk8s
               namespace: tenant-test
             spec:
               dataVolumeTemplates:
@@ -118,7 +119,7 @@ matches the golden render of a GPU pool:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-fd6695
+            name: kubernetes-myk8s-md0-55f8a5
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -161,7 +162,7 @@ matches the golden render of a kubelet-override pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-9375f9
+      name: kubernetes-myk8s-md0-4ad218
       namespace: tenant-test
     spec:
       template:
@@ -170,7 +171,8 @@ matches the golden render of a kubelet-override pool:
             checkStrategy: none
           virtualMachineTemplate:
             metadata:
-              labels: null
+              labels:
+                helm.toolkit.fluxcd.io/name: kubernetes-myk8s
               namespace: tenant-test
             spec:
               dataVolumeTemplates:
@@ -273,7 +275,7 @@ matches the golden render of a kubelet-override pool:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-9375f9
+            name: kubernetes-myk8s-md0-4ad218
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -316,7 +318,7 @@ matches the golden render of the pool objects:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-0a98fc
+      name: kubernetes-myk8s-md0-ce56e8
       namespace: tenant-test
     spec:
       template:
@@ -326,6 +328,7 @@ matches the golden render of the pool objects:
           virtualMachineTemplate:
             metadata:
               labels:
+                helm.toolkit.fluxcd.io/name: kubernetes-myk8s
                 node-role.kubernetes.io/ingress-nginx: ""
               namespace: tenant-test
             spec:
@@ -431,7 +434,7 @@ matches the golden render of the pool objects:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-0a98fc
+            name: kubernetes-myk8s-md0-ce56e8
             namespace: tenant-test
           version: v1.35.6
   3: |

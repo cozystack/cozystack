@@ -215,6 +215,11 @@ spec:
     metadata:
       namespace: {{ $.Release.Namespace }}
       labels:
+        {{- /* CAPK gives the VM no ownerReference. The lineage webhook
+               follows this label to the parent cluster's release, so the
+               VM's pods resolve to the Kubernetes application and are
+               marked managed. */}}
+        helm.toolkit.fluxcd.io/name: {{ .clusterName }}
         {{- range .group.roles }}
         node-role.kubernetes.io/{{ . }}: ""
         {{- end }}
