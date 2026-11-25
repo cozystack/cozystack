@@ -14,12 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package presets exposes the legacy-to-instance-type mapping used when
+// Package presets exposes chart sizing and the legacy-to-instance-type mapping used when
 // migrating resourcesPreset values from the flat naming scheme
 // (nano/micro/small/.../2xlarge) to the new <series>.<size> form
 // (t1/c1/s1/u1/m1 × 8 sizes).
 //
-// The same table is mirrored in three other places — keep them in sync:
+// The sizing table in table.go is checked against the Helm table by tests.
+// The legacy mapping also appears in these places — keep them in sync:
 //   - packages/library/cozy-lib/templates/_resourcepresets.tpl (legacy block)
 //   - packages/core/platform/images/migrations/migrations/39
 //   - https://cozystack.io/docs/v1/guides/resource-management/
