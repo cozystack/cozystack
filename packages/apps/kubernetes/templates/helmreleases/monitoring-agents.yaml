@@ -70,18 +70,12 @@ fluent-bit:
 {{- if .Values.addons.monitoringAgents.enabled }}
 {{- $values := deepCopy .Values.addons.monitoringAgents.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultMonitoringAgentsValues" .)) }}
 {{- /*
-  The monitoring-agents chart refuses the same combination by rendering
-  outputs, but only once the HelmRelease reconciles inside the tenant
-  cluster. That render needs the subchart's context, which this chart does
-  not have, so the check here is textual: a with on extraOutputs whose
-  closing braces keep the newline, followed by {{ . }} on a line of its own.
-  A hook that is only mentioned, commented out or compacted fails here and
-  is reported on the application itself; anything subtler still fails in
-  the tenant cluster.
+  Coarse on purpose: monitoring-agents renders outputs and checks it exactly,
+  but executing a tenant template here would run it in the management cluster.
 */}}
 {{- $fluentBitConfig := (index $values "fluent-bit").config | default dict }}
-{{- if and $fluentBitConfig.extraOutputs (not (regexMatch "\\{\\{-?\\s*with\\s+\\.Values\\.config\\.extraOutputs\\s*\\}\\}[ \\t]*\\n[ \\t]*\\{\\{\\s*\\.\\s*-?\\}\\}" ($fluentBitConfig.outputs | default ""))) }}
-{{- fail "addons.monitoringAgents.valuesOverride sets fluent-bit.config.extraOutputs but overrides fluent-bit.config.outputs without a hook that emits it on a line of its own, so the extra destinations would be dropped. Keep the hook from the default outputs at the end of yours, each part on a line of its own: {{- with .Values.config.extraOutputs }}, then {{ . }}, then {{- end }}. Or move the destinations into outputs and unset extraOutputs." }}
+{{- if and $fluentBitConfig.extraOutputs (not (contains ".Values.config.extraOutputs" ($fluentBitConfig.outputs | default ""))) }}
+{{- fail "addons.monitoringAgents.valuesOverride sets fluent-bit.config.extraOutputs but overrides fluent-bit.config.outputs without a hook that emits it, so the extra destinations would be dropped. Keep the hook from the default outputs at the end of yours, each part on a line of its own: {{- with .Values.config.extraOutputs }}, then {{ . }}, then {{- end }}. Or move the destinations into outputs and unset extraOutputs." }}
 {{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
