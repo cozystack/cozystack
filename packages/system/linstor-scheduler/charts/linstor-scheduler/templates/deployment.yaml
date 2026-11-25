@@ -3,6 +3,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "linstor-scheduler.fullname" . }}
+  {{- with include "linstor-scheduler.linstorClientSecretName" . }}
+  annotations:
+    secret.reloader.stakater.com/reload: {{ . | quote }}
+  {{- end }}
   labels:
     {{- include "linstor-scheduler.labels" . | nindent 4 }}
 spec:
