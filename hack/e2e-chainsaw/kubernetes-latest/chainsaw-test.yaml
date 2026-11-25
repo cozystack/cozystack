@@ -106,7 +106,8 @@ spec:
           # 4th arg folds the ouroboros hairpin-NAT assertions onto this cluster;
           # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
           # ready workers. Neither feature needs another tenant-cluster bringup.
-          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
+          # The 6th turns Monitoring Agents on and off again on the same cluster.
+          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true' 'true'
         check:
           ($error == null): true
     - script:

@@ -331,6 +331,57 @@ cozy_switch_and_assert_oidc_custom_config() {
   fi
 }
 
+# Turning Monitoring Agents off removes the VictoriaMetrics operator and
+# monitoring-agents in one parent upgrade. The operator has to outlive
+# monitoring-agents, or nothing finalizes the VMAgent: the uninstall then
+# fails on its 10m timeout and the VMAgent, its pod and its cluster RBAC stay
+# in the tenant cluster.
+cozy_assert_monitoring_agents_removal() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local kc="tenantkubeconfig-${test_name}"
+  local agents="${release}-monitoring-agents"
+  local operator="${release}-cozy-victoria-metrics-operator"
+  # Named by the operator after the VMAgent and deleted only by its finalizer.
+  local rbac="monitoring:cozy-monitoring:vmagent-vmagent"
+  local previous_generation vmagents rbac_left
+
+  previous_generation=$(kubectl -n tenant-test get helmrelease "${release}" \
+    -o jsonpath='{.metadata.generation}')
+  kubectl -n tenant-test patch kuberneteses.apps.cozystack.io "${test_name}" \
+    --type=merge --patch '{"spec":{"addons":{"monitoringAgents":{"enabled":true}}}}'
+  cozy_wait_helmrelease_upgrade tenant-test "${release}" "${previous_generation}" 600
+  # Both releases carry a 10m install timeout and install one after the other.
+  kubectl -n tenant-test wait hr "${operator}" --for=condition=ready --timeout=11m
+  kubectl -n tenant-test wait hr "${agents}" --for=condition=ready --timeout=11m
+  # The removal checks below pass vacuously unless the operator has finished
+  # reconciling the VMAgent and its cluster RBAC exists.
+  kubectl --kubeconfig "${kc}" wait --for=create --timeout=2m \
+    "clusterrole/${rbac}" "clusterrolebinding/${rbac}"
+
+  previous_generation=$(kubectl -n tenant-test get helmrelease "${release}" \
+    -o jsonpath='{.metadata.generation}')
+  kubectl -n tenant-test patch kuberneteses.apps.cozystack.io "${test_name}" \
+    --type=merge --patch '{"spec":{"addons":{"monitoringAgents":{"enabled":false}}}}'
+  cozy_wait_helmrelease_upgrade tenant-test "${release}" "${previous_generation}" 600
+  # Under the 10m uninstall timeout on purpose: with the operator gone first
+  # the uninstall runs into it, and helm-controller deletes the HelmRelease
+  # anyway once it has.
+  kubectl -n tenant-test wait hr "${agents}" --for=delete --timeout=5m
+  kubectl -n tenant-test wait hr "${operator}" --for=delete --timeout=5m
+
+  # The VictoriaMetrics CRDs are kept on uninstall, so the list reads them.
+  vmagents=$(kubectl --kubeconfig "${kc}" get vmagents.operator.victoriametrics.com \
+    --all-namespaces -o name)
+  rbac_left=$(kubectl --kubeconfig "${kc}" get "clusterrole/${rbac}" \
+    "clusterrolebinding/${rbac}" --ignore-not-found -o name)
+  if [ -n "${vmagents}${rbac_left}" ]; then
+    printf 'turning Monitoring Agents off left objects in the tenant cluster:\n%s\n%s\n' \
+      "${vmagents}" "${rbac_left}" >&2
+    return 1
+  fi
+}
+
 # Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
 # Each argument is one resource-probe capture: the stdout of a
 # `kubectl get -o name` (empty once the resource is gone) or the literal "err"
@@ -5681,6 +5732,8 @@ run_kubernetes_test() {
     # The previous-version suite leaves it empty because OIDC is feature
     # coverage, not a compatibility matrix that justifies another upgrade.
     local enable_oidc="${5:-}"
+  # Optional: turn Monitoring Agents on and off again on the running cluster.
+  local toggle_monitoring_agents="${6:-}"
     # The previous suite's baseline must not survive into this suite's cleanup
     # when this run fails before recording its own.
     rm -f -- "$(_cozy_linstor_pool_baseline_file)" || return 1
@@ -6723,6 +6776,11 @@ EOF
     cozy_assert_oidc_system "${test_name}"
     echo "Switching the running tenant cluster to OIDC CustomConfig mode..."
     cozy_switch_and_assert_oidc_custom_config "${test_name}"
+  fi
+
+  if [ "${toggle_monitoring_agents}" = "true" ]; then
+    echo "Turning Monitoring Agents on and off on the running tenant cluster..."
+    cozy_assert_monitoring_agents_removal "${test_name}"
   fi
 
   # Guard: neither the parent HelmRelease nor the addon releases it installs that
