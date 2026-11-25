@@ -1,0 +1,190 @@
+suite: audit toggle
+
+# audit.enabled is a one-switch bundle for PostgreSQL access auditing. It loads
+# the pgaudit extension through the sharedPreloadLibraries allowlist and turns on
+# connection logging, so "who connected" (log_connections/log_disconnections) and
+# "what they ran" (pgaudit.log classes) land in the instance log, which the
+# platform log stack already collects. The pgaudit classes default to
+# "write, ddl, role" and are overridable through audit.log; a pgaudit.log set
+# directly in postgresql.parameters still wins, since audit only seeds a default.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  - it: "off by default: no pgaudit preload and no audit parameters"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.postgresql.shared_preload_libraries
+      - notExists:
+          path: spec.postgresql.parameters["pgaudit.log"]
+      - notExists:
+          path: spec.postgresql.parameters.log_connections
+
+  - it: "enabling it preloads pgaudit and seeds the audit parameters"
+    set:
+      audit:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.shared_preload_libraries
+          value:
+            - pgaudit
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: "write, ddl, role"
+      - equal:
+          path: spec.postgresql.parameters.log_connections
+          value: "on"
+      - equal:
+          path: spec.postgresql.parameters.log_disconnections
+          value: "on"
+
+  - it: "audit.log overrides the default pgaudit class set"
+    set:
+      audit:
+        enabled: true
+        log: "all"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: "all"
+
+  - it: "pgaudit already in the preload list is not duplicated"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        sharedPreloadLibraries:
+          - pg_stat_statements
+          - pgaudit
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.shared_preload_libraries
+          value:
+            - pg_stat_statements
+            - pgaudit
+
+  - it: "an explicit pgaudit.log in parameters wins over the audit default"
+    set:
+      audit:
+        enabled: true
+        log: "write, ddl, role"
+      postgresql:
+        parameters:
+          pgaudit.log: "ddl"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: "ddl"
+
+  - it: "an explicit falsy connection-logging value wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          log_connections: 0
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.log_connections
+          value: "0"
+      - equal:
+          path: spec.postgresql.parameters.log_disconnections
+          value: "on"
+
+  - it: "an explicit falsy log_disconnections wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          log_disconnections: 0
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.log_disconnections
+          value: "0"
+
+  - it: "an explicit empty pgaudit.log in parameters wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          pgaudit.log: ""
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: ""
+
+  - it: "an empty audit.log falls back to the default classes"
+    set:
+      audit:
+        enabled: true
+        log: ""
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: "write, ddl, role"
+
+  - it: "a case-variant parameter key suppresses the lowercase audit seed"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          pgaudit.LoG: "all"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.LoG"]
+          value: "all"
+      - notExists:
+          path: spec.postgresql.parameters["pgaudit.log"]
+
+  - it: "a mistyped audit class is rejected by the schema"
+    set:
+      audit:
+        enabled: true
+        log: "write, ddl, rol"
+    asserts:
+      - failedTemplate:
+          errorPattern: "audit/log"
