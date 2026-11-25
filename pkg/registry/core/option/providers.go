@@ -70,7 +70,7 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 	return map[string]providerFunc{
 		"gpu":             gpuProvider(dyn),
 		"resourcepreset":  resourcePresetProvider,
-		"instancetype":    nameListProvider(dyn, gvrInstancetype),
+		"instancetype":    instancetypeProvider(dyn),
 		"instanceprofile": nameListProvider(dyn, gvrPreference),
 		"network":         nameListNamespacedProvider(dyn, gvrNADs),
 		"image":           imageProvider(dyn),
@@ -484,4 +484,26 @@ func resourcePresetProvider(_ context.Context, _ string) ([]corev1alpha1.OptionI
 		})
 	}
 	return items, nil
+}
+
+func instancetypeProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrInstancetype).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		for i := range list.Items {
+			obj := &list.Items[i]
+			item := corev1alpha1.OptionItem{Value: obj.GetName()}
+			cpu, hasCPU, _ := unstructured.NestedInt64(obj.Object, "spec", "cpu", "guest")
+			memory, hasMemory, _ := unstructured.NestedString(obj.Object, "spec", "memory", "guest")
+			if hasCPU && hasMemory && memory != "" {
+				item.Label = fmt.Sprintf("%s (%d CPU, %s)", item.Value, cpu, memory)
+			}
+			items = append(items, item)
+		}
+		sortItems(items)
+		return items, nil
+	}
 }

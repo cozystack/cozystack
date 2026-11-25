@@ -513,3 +513,45 @@ func TestResourcePresetOptions(t *testing.T) {
 		t.Fatal("List and Get disagree on preset order")
 	}
 }
+
+func TestInstancetypeLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cpu, memory any
+		want        string
+	}{
+		{name: "missing"},
+		{name: "missing-memory", cpu: int64(2)},
+		{name: "missing-cpu", memory: "8Gi"},
+		{name: "wrong-cpu-type", cpu: "2", memory: "8Gi"},
+		{name: "wrong-memory-type", cpu: int64(2), memory: int64(8)},
+		{name: "empty-memory", cpu: int64(2), memory: ""},
+		{name: "u1.medium", cpu: int64(2), memory: "8Gi", want: "u1.medium (2 CPU, 8Gi)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+				newObj(gvrInstancetype.GroupVersion().WithKind("VirtualMachineClusterInstancetype"), "", tc.name,
+					map[string]any{"cpu": map[string]any{"guest": tc.cpu}, "memory": map[string]any{"guest": tc.memory}}),
+			)
+			items, err := DefaultProviders(dyn)["instancetype"](context.Background(), "tenant-example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != 1 || items[0].Value != tc.name || items[0].Label != tc.want {
+				t.Fatalf("items = %v, want name %q and label %q", items, tc.name, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstancetypeListFailure(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds())
+	want := errors.New("list unavailable")
+	dyn.PrependReactor("list", gvrInstancetype.Resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, want
+	})
+	_, err := DefaultProviders(dyn)["instancetype"](context.Background(), "")
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
