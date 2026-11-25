@@ -120,9 +120,37 @@ spec:
           whitelist-source-range: "{{ join "," . }}"
           {{- end }}
           {{- if .Values.cloudflareProxy }}
-          proxy-real-ip-cidr: "{{ include "ingress.cloudflare-ips" . }}"
+          {{- /* ssl-passthrough forwards HTTPS from loopback with the edge address
+               in PROXY protocol. Trust loopback only together with the rewrite-phase
+               guard below, or a direct client could choose CF-Connecting-IP. Port 80
+               has no PROXY protocol peer, so use its original socket address: realip
+               has already replaced remote_addr with the visitor address when the map
+               is evaluated. This values override also has to carry the system chart's
+               keepalive_time, because it replaces that chart's http-snippet value as
+               a whole. */}}
+          proxy-real-ip-cidr: "{{ include "ingress.cloudflare-ips" . }},127.0.0.1/32,::1/128"
           use-forwarded-headers: "true"
-          server-snippet: "real_ip_header CF-Connecting-IP;"
+          http-snippet: |
+            keepalive_time 12h;
+            map $proxy_protocol_addr $cozy_cf_source {
+                ""      $realip_remote_addr;
+                default $proxy_protocol_addr;
+            }
+            geo $cozy_cf_source $cozy_cf_trusted {
+                default 0;
+            {{ range $cidr := splitList "," (include "ingress.cloudflare-ips" .) }}
+                {{ $cidr }} 1;
+            {{ end }}
+            }
+            map "$cozy_cf_trusted:$http_cf_connecting_ip" $cozy_cf_reject {
+                default 0;
+                "~^0:.+$" 1;
+            }
+          server-snippet: |
+            real_ip_header CF-Connecting-IP;
+            if ($cozy_cf_reject = 1) {
+                return 403;
+            }
           {{- end }}
           {{- if $proxyProtocol }}
           {{- /* real-ip-header + enable-real-ip make the PROXY-protocol frame the
