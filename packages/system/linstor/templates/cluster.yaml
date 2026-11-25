@@ -89,12 +89,10 @@ spec:
         containers:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
-        {{- /* piraeus-operator probes groupsnapshot.storage.k8s.io/v1beta2
+        {{- /* piraeus-operator probes groupsnapshot.storage.k8s.io/v1
                once, when it starts, and only for VolumeGroupSnapshot. Its
-               answer goes stale when the CRDs change after it started, and it
-               turns the gate on when that one kind is served without the
-               content or class kind. The gate is therefore always decided
-               here, from all three kinds. */}}
+               answer goes stale when the CRDs change after it started, so the
+               gate is always decided here, from all three kinds. */}}
         - name: csi-snapshotter
           env:
           - name: FEATURE_GATE_CSI_VOLUME_GROUP_SNAPSHOT
