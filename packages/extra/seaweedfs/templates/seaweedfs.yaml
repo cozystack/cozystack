@@ -214,10 +214,21 @@ spec:
     namespace: cozy-system
   interval: 30s
   timeout: 10m
+  {{- /* Flux remediates a failed install by uninstalling and a failed upgrade
+         by rolling back, and with retries: -1 it does so on every attempt. A
+         release waiting on tenant quota for the admin volume would then roll
+         the s3 pods back and forth with the [grpc.s3] restart annotation.
+         RetryOnFailure keeps what was applied and retries it. */}}
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   valuesFrom:
@@ -249,7 +260,7 @@ spec:
           type: "persistentVolumeClaim"
           size: "{{ .Values.volume.size }}"
           {{- with .Values.volume.storageClass }}
-          storageClass: {{ . }}
+          storageClass: {{ . | quote }}
           {{- end }}
           maxVolumes: 0
         {{- if .Values.volume.diskType }}
@@ -268,7 +279,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $.Values.volume.size }}"
             {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           extraArgs:
@@ -284,7 +295,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $zone.size | default $.Values.volume.size }}"
             {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
@@ -309,7 +320,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
             {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
@@ -371,6 +382,16 @@ spec:
               secretName: {{ .Release.Name }}-s3-ingress-tls
               {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | nindent 10 }}
+      admin:
+        enabled: {{ .Values.lifecycle.enabled }}
+        secret:
+          existingSecret: {{ .Release.Name }}-admin-credentials
+        {{- with .Values.lifecycle.storageClass }}
+        data:
+          storageClass: {{ . | quote }}
+        {{- end }}
+      worker:
+        enabled: {{ .Values.lifecycle.enabled }}
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
@@ -503,4 +524,22 @@ spec:
     app.kubernetes.io/component: s3
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- if .Values.lifecycle.enabled }}
+{{- range $component := list "admin" "worker" }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: seaweedfs
+  type: {{ $component }}
+  selector:
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- end }}
 {{- end }}
