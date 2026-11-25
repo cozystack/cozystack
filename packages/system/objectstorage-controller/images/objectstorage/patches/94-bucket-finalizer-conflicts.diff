@@ -1,16 +1,18 @@
 diff --git a/sidecar/pkg/bucket/bucket_controller.go b/sidecar/pkg/bucket/bucket_controller.go
-index 4f11e3d..ff9b48b 100644
+index 4f11e3d..61a78de 100644
 --- a/sidecar/pkg/bucket/bucket_controller.go
 +++ b/sidecar/pkg/bucket/bucket_controller.go
-@@ -17,6 +17,7 @@ package bucket
+@@ -17,7 +17,9 @@ package bucket
  
  import (
  	"context"
 +	"errors"
  	"fmt"
++	"slices"
  	"strings"
  
-@@ -28,6 +29,7 @@ import (
+ 	"google.golang.org/grpc/codes"
+@@ -28,6 +30,7 @@ import (
  	"k8s.io/apimachinery/pkg/runtime"
  	kube "k8s.io/client-go/kubernetes"
  	"k8s.io/client-go/tools/record"
@@ -18,7 +20,7 @@ index 4f11e3d..ff9b48b 100644
  	"k8s.io/klog/v2"
  	"sigs.k8s.io/container-object-storage-interface/client/apis/objectstorage/consts"
  	"sigs.k8s.io/container-object-storage-interface/client/apis/objectstorage/v1alpha1"
-@@ -123,6 +125,21 @@ func (b *BucketListener) Add(ctx context.Context, inputBucket *v1alpha1.Bucket)
+@@ -123,6 +126,21 @@ func (b *BucketListener) Add(ctx context.Context, inputBucket *v1alpha1.Bucket)
  			}
  		}
  	} else {
@@ -40,7 +42,7 @@ index 4f11e3d..ff9b48b 100644
  		req := &cosi.DriverCreateBucketRequest{
  			Parameters: bucket.Spec.Parameters,
  			Name:       bucket.ObjectMeta.Name,
-@@ -174,21 +191,43 @@ func (b *BucketListener) Add(ctx context.Context, inputBucket *v1alpha1.Bucket)
+@@ -174,21 +192,43 @@ func (b *BucketListener) Add(ctx context.Context, inputBucket *v1alpha1.Bucket)
  		}
  	}
  
@@ -92,7 +94,37 @@ index 4f11e3d..ff9b48b 100644
  		klog.V(3).ErrorS(err, "Failed to update bucket status",
  			"bucket", bucket.ObjectMeta.Name)
  		return b.recordError(bucket, v1.EventTypeWarning, v1alpha1.FailedCreateBucket,
-@@ -336,7 +375,12 @@ func (b *BucketListener) deleteBucketOp(ctx context.Context, bucket *v1alpha1.Bu
+@@ -264,7 +304,28 @@ func (b *BucketListener) handleDeletion(ctx context.Context, bucket *v1alpha1.Bu
+ 		controllerutil.RemoveFinalizer(bucket, consts.BucketFinalizer)
+ 	}
+ 
+-	if _, err = b.buckets().Update(ctx, bucket, metav1.UpdateOptions{}); err != nil {
++	// By now the BucketClaim may be gone, so a write lost to a conflict must
++	// be retried here: on a later pass deleteBucketOp would no longer find
++	// the claim.
++	kept := bucket.GetFinalizers()
++	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
++		_, updateErr := b.buckets().Update(ctx, bucket, metav1.UpdateOptions{})
++		if !kubeerrors.IsConflict(updateErr) {
++			return updateErr
++		}
++		latest, getErr := b.buckets().Get(ctx, bucket.Name, metav1.GetOptions{})
++		if getErr != nil {
++			return getErr
++		}
++		for _, finalizer := range []string{consts.BABucketFinalizer, consts.BucketFinalizer} {
++			if !slices.Contains(kept, finalizer) {
++				controllerutil.RemoveFinalizer(latest, finalizer)
++			}
++		}
++		bucket = latest
++		return updateErr
++	})
++	if err != nil && !kubeerrors.IsNotFound(err) {
+ 		klog.V(3).ErrorS(err, "Error updating bucket after removing finalizers",
+ 			"bucket", bucket.ObjectMeta.Name)
+ 		return err
+@@ -336,7 +397,12 @@ func (b *BucketListener) deleteBucketOp(ctx context.Context, bucket *v1alpha1.Bu
  
  	// We ask the driver to clean up the bucket from the storage provider
  	// only when the retain policy is set to Delete
@@ -106,7 +138,18 @@ index 4f11e3d..ff9b48b 100644
  		req := &cosi.DriverDeleteBucketRequest{
  			BucketId:      bucket.Status.BucketID,
  			DeleteContext: bucket.Spec.Parameters,
-@@ -376,6 +420,35 @@ func (b *BucketListener) deleteBucketOp(ctx context.Context, bucket *v1alpha1.Bu
+@@ -354,6 +420,10 @@ func (b *BucketListener) deleteBucketOp(ctx context.Context, bucket *v1alpha1.Bu
+ 	if bucket.Spec.BucketClaim != nil {
+ 		ref := bucket.Spec.BucketClaim
+ 		bucketClaim, err := b.bucketClaims(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
++		if kubeerrors.IsNotFound(err) {
++			// A BucketClaim already released and removed by an earlier pass.
++			return nil
++		}
+ 		if err != nil {
+ 			klog.V(3).ErrorS(err, "Error fetching bucketClaim",
+ 				"bucketClaim", ref.Name,
+@@ -376,6 +446,35 @@ func (b *BucketListener) deleteBucketOp(ctx context.Context, bucket *v1alpha1.Bu
  	return nil
  }
  
@@ -143,7 +186,7 @@ index 4f11e3d..ff9b48b 100644
  	if b.bucketClient != nil {
  		return b.bucketClient.ObjectstorageV1alpha1().Buckets()
 diff --git a/sidecar/pkg/bucket/bucket_controller_test.go b/sidecar/pkg/bucket/bucket_controller_test.go
-index 7531732..9350530 100644
+index 7531732..cb66fb7 100644
 --- a/sidecar/pkg/bucket/bucket_controller_test.go
 +++ b/sidecar/pkg/bucket/bucket_controller_test.go
 @@ -30,12 +30,14 @@ import (
@@ -178,7 +221,7 @@ index 7531732..9350530 100644
  
  				if err := bl.Update(context.TODO(), bucket, bucket); status.Code(errors.Unwrap(err)) != codes.Internal {
  					t.Errorf("expected Internal got %v", err)
-@@ -350,3 +353,139 @@ func TestAddDeletedBucket(t *testing.T) {
+@@ -350,3 +353,181 @@ func TestAddDeletedBucket(t *testing.T) {
  		t.Fatalf("Add returned error for deleted bucket: %v", err)
  	}
  }
@@ -316,5 +359,47 @@ index 7531732..9350530 100644
 +	live, err := client.ObjectstorageV1alpha1().Buckets().Get(context.TODO(), bucket.Name, metav1.GetOptions{})
 +	if err == nil && controllerutil.ContainsFinalizer(live, consts.BucketFinalizer) {
 +		t.Fatalf("finalizer still present: %v", live.Finalizers)
++	}
++}
++
++// TestDeleteFinishesAfterClaimIsGone checks that a Bucket whose final update
++// lost a conflict, after its BucketClaim was already released and removed,
++// still loses its finalizers instead of failing on the missing claim forever.
++func TestDeleteFinishesAfterClaimIsGone(t *testing.T) {
++	deletes := 0
++	driver := struct{ fakespec.FakeProvisionerClient }{}
++	driver.FakeDriverDeleteBucket = func(context.Context, *cosi.DriverDeleteBucketRequest, ...grpc.CallOption) (*cosi.DriverDeleteBucketResponse, error) {
++		deletes++
++		return &cosi.DriverDeleteBucketResponse{}, nil
++	}
++
++	bucket := newTestBucket()
++	now := metav1.Now()
++	bucket.DeletionTimestamp = &now
++	bucket.Finalizers = []string{consts.BucketFinalizer}
++	bucket.Status.BucketID = "id-3"
++	bucket.Spec.BucketClaim = &v1.ObjectReference{Namespace: "ns", Name: "gone"}
++
++	listener, client := newTestListener(t, &driver, bucket)
++
++	conflicted := false
++	client.PrependReactor("update", "buckets", func(action k8stesting.Action) (bool, runtime.Object, error) {
++		if !conflicted && action.GetSubresource() == "" {
++			conflicted = true
++			return true, nil, kubeerrors.NewConflict(v1alpha1.Resource("buckets"), bucket.Name, errors.New("modified"))
++		}
++		return false, nil, nil
++	})
++
++	if err := listener.Update(context.TODO(), bucket, bucket); err != nil {
++		t.Fatalf("Update: %v", err)
++	}
++
++	live, err := client.ObjectstorageV1alpha1().Buckets().Get(context.TODO(), bucket.Name, metav1.GetOptions{})
++	if err == nil && controllerutil.ContainsFinalizer(live, consts.BucketFinalizer) {
++		t.Fatalf("finalizer still present: %v", live.Finalizers)
++	}
++	if deletes != 1 {
++		t.Fatalf("DriverDeleteBucket called %d times, want 1", deletes)
 +	}
 +}
