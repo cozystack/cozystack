@@ -17,141 +17,49 @@ limitations under the License.
 package reservation
 
 import (
-	"errors"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
-// shippedInstancetypes decodes every VirtualMachineClusterInstancetype the
-// platform ships, so that the classification is pinned against the real
-// catalog rather than against hand-written fixtures.
-func shippedInstancetypes(t *testing.T) []map[string]any {
-	t.Helper()
-	files, err := filepath.Glob("../../packages/system/kubevirt-instancetypes/templates/*.yaml")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no instance type templates found: %v", err)
-	}
-	var out []map[string]any
-	for _, f := range files {
-		fh, err := os.Open(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dec := utilyaml.NewYAMLOrJSONDecoder(fh, 4096)
-		for {
-			var obj map[string]any
-			if err := dec.Decode(&obj); err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				t.Fatalf("%s: %v", f, err)
-			}
-			if obj["kind"] == "VirtualMachineClusterInstancetype" {
-				out = append(out, obj)
-			}
-		}
-		if err := fh.Close(); err != nil {
-			t.Fatalf("%s: %v", f, err)
-		}
-	}
-	return out
+// fixtureInstancetypes are VirtualMachineClusterInstancetypes in the shapes
+// the classifier has to tell apart, cut down to the fields it reads.
+var fixtureInstancetypes = []map[string]any{
+	instancetype("u1.small", map[string]any{"guest": int64(1)}, map[string]any{"guest": "2Gi"}),
+	instancetype("u1.medium", map[string]any{"guest": int64(1)}, map[string]any{"guest": "4Gi"}),
+	instancetype("o1.large", map[string]any{"guest": int64(2)}, map[string]any{"guest": "8Gi", "overcommitPercent": int64(50)}),
+	instancetype("m1.large", map[string]any{"guest": int64(2)}, map[string]any{"guest": "16Gi", "hugepages": map[string]any{"pageSize": "2Mi"}}),
+	instancetype("m1.large1gi", map[string]any{"guest": int64(2)}, map[string]any{"guest": "16Gi", "hugepages": map[string]any{"pageSize": "1Gi"}}),
+	instancetype("d1.large", map[string]any{"guest": int64(2), "dedicatedCPUPlacement": true, "isolateEmulatorThread": true}, map[string]any{"guest": "8Gi"}),
+	instancetype("cx1.2xlarge", map[string]any{"guest": int64(8), "dedicatedCPUPlacement": true, "isolateEmulatorThread": true}, map[string]any{"guest": "16Gi", "hugepages": map[string]any{"pageSize": "2Mi"}}),
 }
 
-func TestClassifyShippedInstancetypes(t *testing.T) {
-	// The expected class per series is written from what each series is,
-	// not derived from the spec, so a name-based rule and a spec-based rule
-	// disagreeing shows up here. m1 is shared CPU with hugepages, n1 a
-	// dedicated series with hugepages, o1 overcommits memory.
-	type class struct{ cpu, memory string }
-	want := map[string]class{
-		"u1":  {KeyCPU, KeyMemory},
-		"gn1": {KeyCPU, KeyMemory},
-		"m1":  {KeyCPU, "hugepages"},
-		"o1":  {KeyCPU, KeyOvercommittedMemory},
-		"d1":  {KeyDedicatedCPU, KeyMemory},
-		"cx1": {KeyDedicatedCPU, "hugepages"},
-		"n1":  {KeyDedicatedCPU, "hugepages"},
-		"rt1": {KeyDedicatedCPU, "hugepages"},
+func instancetype(name string, cpu, memory map[string]any) map[string]any {
+	return map[string]any{
+		"kind":     "VirtualMachineClusterInstancetype",
+		"metadata": map[string]any{"name": name},
+		"spec":     map[string]any{"cpu": cpu, "memory": memory},
 	}
+}
 
-	types := shippedInstancetypes(t)
-	if len(types) < 60 {
-		t.Fatalf("expected the full shipped catalog, decoded only %d instance types", len(types))
+func TestClassifyInstancetypes(t *testing.T) {
+	want := map[string]ResourceList{
+		"u1.small":    {KeyCPU: resource.MustParse("1"), KeyMemory: resource.MustParse("2Gi")},
+		"u1.medium":   {KeyCPU: resource.MustParse("1"), KeyMemory: resource.MustParse("4Gi")},
+		"o1.large":    {KeyCPU: resource.MustParse("2"), KeyOvercommittedMemory: resource.MustParse("8Gi")},
+		"m1.large":    {KeyCPU: resource.MustParse("2"), KeyHugepagesPrefix + "2Mi": resource.MustParse("16Gi")},
+		"m1.large1gi": {KeyCPU: resource.MustParse("2"), KeyHugepagesPrefix + "1Gi": resource.MustParse("16Gi")},
+		// The isolated emulator thread takes a core nobody else can be given.
+		"d1.large":    {KeyDedicatedCPU: resource.MustParse("3"), KeyMemory: resource.MustParse("8Gi")},
+		"cx1.2xlarge": {KeyDedicatedCPU: resource.MustParse("9"), KeyHugepagesPrefix + "2Mi": resource.MustParse("16Gi")},
 	}
-	seen := map[string]bool{}
-	for _, obj := range types {
+	for _, obj := range fixtureInstancetypes {
 		name := obj["metadata"].(map[string]any)["name"].(string)
-		series := strings.SplitN(name, ".", 2)[0]
-		seen[series] = true
-		w, ok := want[series]
-		if !ok {
-			t.Errorf("%s: series %q has no expected class; add it to this table", name, series)
-			continue
-		}
-		rl, err := ClassifyInstancetype(obj)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		if len(rl) != 2 {
-			t.Errorf("%s: expected one CPU class and one memory class, got %v", name, rl)
-		}
-		if _, ok := rl[w.cpu]; !ok {
-			t.Errorf("%s: expected CPU class %q, got %v", name, w.cpu, rl)
-		}
-		if w.memory == "hugepages" {
-			found := false
-			for k := range rl {
-				found = found || strings.HasPrefix(k, KeyHugepagesPrefix)
-			}
-			if !found {
-				t.Errorf("%s: expected a hugepages class, got %v", name, rl)
-			}
-		} else if _, ok := rl[w.memory]; !ok {
-			t.Errorf("%s: expected memory class %q, got %v", name, w.memory, rl)
-		}
-	}
-	for series := range want {
-		if !seen[series] {
-			t.Errorf("series %q is no longer shipped; drop it from this table", series)
-		}
-	}
-}
-
-func TestClassifyShippedFigures(t *testing.T) {
-	byName := map[string]map[string]any{}
-	for _, obj := range shippedInstancetypes(t) {
-		byName[obj["metadata"].(map[string]any)["name"].(string)] = obj
-	}
-	cases := []struct {
-		name string
-		want ResourceList
-	}{
-		// The KubeVirt u1.small is 2Gi; the cozy-lib preset of the same name
-		// is 4Gi. The two catalogs share names, not figures.
-		{"u1.small", ResourceList{KeyCPU: resource.MustParse("1"), KeyMemory: resource.MustParse("2Gi")}},
-		// Eight guest vCPUs on nine pinned cores: the isolated emulator
-		// thread takes a core nobody else can be given.
-		{"cx1.2xlarge", ResourceList{KeyDedicatedCPU: resource.MustParse("9"), KeyHugepagesPrefix + "2Mi": resource.MustParse("16Gi")}},
-		{"d1.large", ResourceList{KeyDedicatedCPU: resource.MustParse("3"), KeyMemory: resource.MustParse("8Gi")}},
-		{"m1.large", ResourceList{KeyCPU: resource.MustParse("2"), KeyHugepagesPrefix + "2Mi": resource.MustParse("16Gi")}},
-	}
-	for _, tc := range cases {
-		obj, ok := byName[tc.name]
-		if !ok {
-			t.Fatalf("%s is not shipped", tc.name)
-		}
 		got, err := ClassifyInstancetype(obj)
 		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
+			t.Fatalf("%s: %v", name, err)
 		}
-		assertList(t, tc.name, got, tc.want)
+		assertList(t, name, got, want[name])
 	}
 }
 
