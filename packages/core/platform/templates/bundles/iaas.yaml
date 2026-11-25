@@ -29,6 +29,9 @@
 {{- with (.Values.kubevirt).migrations -}}
 {{- $_ := set $kubevirtValues "migrations" . -}}
 {{- end -}}
+{{- with (.Values.kubevirt).vmStateStorageClass -}}
+{{- $_ := set $kubevirtValues "vmStateStorageClass" . -}}
+{{- end -}}
 {{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
   into the KubeVirt CR: the HostDevices feature gate, without which the

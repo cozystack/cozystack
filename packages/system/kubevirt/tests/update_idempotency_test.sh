@@ -62,6 +62,7 @@ PHD='{{- with .Values.permittedHostDevices }}'
 MDC='{{- with .Values.mediatedDevicesConfiguration }}'
 DFG='{{- range .Values.disabledFeatureGates }}'
 MIG='{{- with .Values.migrations }}'
+VSC='{{- with .Values.vmStateStorageClass }}'
 
 # The disabledFeatureGates block, comment lines included, ending on the
 # featureGates: line that follows it. Cases below either delete this range or
@@ -271,6 +272,31 @@ if run_update_logged "$anchorless_migrations" "$anchorless_migrations_log"; then
 fi
 if ! grep -qF "directive '$MIG' not inserted" "$anchorless_migrations_log"; then
 	fail "make update did not name the missing migrations directive: $(cat "$anchorless_migrations_log")"
+fi
+
+# vmStateStorageClass self-heals on its own, independently of migrations.
+missing_vsc="$tmpdir/missing-vsc.yaml"
+sed '/{{- with .Values.vmStateStorageClass }}/,/{{- end }}/d' "$src" >"$missing_vsc"
+assert_absent "$VSC" "$missing_vsc"
+assert_present "$MIG" "$missing_vsc"
+if ! run_update "$missing_vsc"; then
+	fail "make update exited non-zero on a template missing only vmStateStorageClass"
+fi
+if ! diff -u "$src" "$missing_vsc" >/dev/null; then
+	fail "make update rebuilt vmStateStorageClass differently from the committed template"
+fi
+run_update "$missing_vsc"
+assert_count 1 "$VSC" "$missing_vsc"
+
+anchorless_vsc="$tmpdir/anchorless-vsc.yaml"
+sed -e '/{{- with .Values.vmStateStorageClass }}/,/{{- end }}/d' \
+	-e '/^    vmRolloutStrategy:/d' "$src" >"$anchorless_vsc"
+anchorless_vsc_log="$tmpdir/anchorless-vsc.log"
+if run_update_logged "$anchorless_vsc" "$anchorless_vsc_log"; then
+	fail "make update exited zero without the vmStateStorageClass block or its vmRolloutStrategy anchor"
+fi
+if ! grep -qF "directive '$VSC' not inserted" "$anchorless_vsc_log"; then
+	fail "make update did not name the missing vmStateStorageClass directive: $(cat "$anchorless_vsc_log")"
 fi
 
 # A retained opening directive must not hide a missing body or terminator.

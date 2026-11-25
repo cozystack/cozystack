@@ -54,6 +54,7 @@ update:
 	grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.permittedHostDevices }}\n    permittedHostDevices:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.mediatedDevicesConfiguration }}\n    mediatedDevicesConfiguration:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	grep -q '{{- with .Values.migrations }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.migrations }}\n    migrations:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
+	grep -q '{{- with .Values.vmStateStorageClass }}' $(CR_FILE) || sed -i '/^    vmRolloutStrategy:/a\    {{- with .Values.vmStateStorageClass }}\n    vmStateStorageClass: {{ . | quote }}\n    {{- end }}' $(CR_FILE)
 	@# Sanity-check: every cozystack patch MUST end up in the file. If the
 	@# hand-merge step moved or renamed an anchor (developerConfiguration:,
 	@# - VMExport, featureGates:, evictionStrategy:) the sed silently no-ops and the chart
@@ -101,3 +102,9 @@ update:
 		$$0 == "    {{- with .Values.migrations }}" { blocks++; step=1; next } \
 		step { expected = step == 1 ? "    migrations:" : step == 2 ? "      {{- toYaml . | nindent 6 }}" : "    {{- end }}"; if ($$0 != expected) bad=1; step=(step+1)%4 } \
 		END { exit !(blocks == 1 && keys == 1 && step == 0 && !bad) }' $(CR_FILE) || { echo "ERROR: migrations block is partial or duplicated — restore the complete block or delete all its remaining lines from $(CR_FILE) and re-run" >&2; exit 1; }
+	@grep -q '{{- with .Values.vmStateStorageClass }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.vmStateStorageClass }}' not inserted — restore the 'vmRolloutStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@awk '\
+		$$0 == "    vmStateStorageClass: {{ . | quote }}" { keys++ } \
+		$$0 == "    {{- with .Values.vmStateStorageClass }}" { blocks++; step=1; next } \
+		step { expected = step == 1 ? "    vmStateStorageClass: {{ . | quote }}" : "    {{- end }}"; if ($$0 != expected) bad=1; step=(step+1)%3 } \
+		END { exit !(blocks == 1 && keys == 1 && step == 0 && !bad) }' $(CR_FILE) || { echo "ERROR: vmStateStorageClass block is partial or duplicated — restore the complete block or delete all its remaining lines from $(CR_FILE) and re-run" >&2; exit 1; }

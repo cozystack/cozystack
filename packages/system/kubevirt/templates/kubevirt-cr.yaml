@@ -130,6 +130,9 @@ spec:
     virtualMachineOptions:
       disableSerialConsoleLog: {}
     vmRolloutStrategy: LiveUpdate
+    {{- with .Values.vmStateStorageClass }}
+    vmStateStorageClass: {{ . | quote }}
+    {{- end }}
   workloadUpdateStrategy:
     # Evict shuts down VMs that cannot migrate on a KubeVirt upgrade; a VMI still
     # carrying LiveMigrate from before evictionStrategy changed refuses the
