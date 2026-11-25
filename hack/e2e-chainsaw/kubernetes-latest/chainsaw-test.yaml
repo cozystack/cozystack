@@ -109,6 +109,35 @@ spec:
           run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
+    # A worker VM has no ownerReference; the lineage webhook attributes it, and
+    # through it its virt-launcher Pod, to the release the chart names in the
+    # VM's helm.toolkit.fluxcd.io/name label. Without these labels the Pod
+    # falls out of the tenant's SecurityGroups. The workers have joined by
+    # now, so the objects exist and these only read admission-time labels.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            namespace: tenant-test
+            labels:
+              cluster.x-k8s.io/cluster-name: kubernetes-test-latest-version
+              helm.toolkit.fluxcd.io/name: kubernetes-test-latest-version
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-test
+            labels:
+              kubevirt.io: virt-launcher
+              cluster.x-k8s.io/cluster-name: kubernetes-test-latest-version
+              internal.cozystack.io/managed-by-cozystack: "true"
+              apps.cozystack.io/application.group: apps.cozystack.io
+              apps.cozystack.io/application.kind: Kubernetes
+              apps.cozystack.io/application.name: test-latest-version
     - script:
         timeout: 1m
         content: |
