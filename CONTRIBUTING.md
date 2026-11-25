@@ -36,6 +36,10 @@ We welcome many types of contributions including:
 The best way to reach us with a question when contributing is to drop a line in
 our [Telegram channel](https://t.me/cozystack), or start a new GitHub discussion.
 
+## Patches to other projects' code
+
+A downstream patch is a change Cozystack carries on top of someone else's code: a source patch under `packages/*/*/images/*/patches/`, a patch to a vendored chart under `packages/*/*/patches/`, a fork pin, a carried backport. A pull request that adds or changes one links the same change offered upstream: the upstream pull request or patch submission, or at least the upstream issue or thread where it was raised and what came of it. A patch file also names that link in its header, next to the condition for dropping the patch. A patch with no upstream counterpart says in the pull request why, for example that the change is specific to Cozystack and upstream would not take it.
+
 ## Where do I file?
 
 Cozystack work is split across two repositories. Use this table to land in the right place:
