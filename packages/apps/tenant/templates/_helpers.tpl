@@ -15,6 +15,28 @@
 {{- end }}
 
 {{/*
+  tenant.ancestorNamespaces encodes the strict ancestor chain as a JSON array
+  for callers using fromJsonArray. Like tenant.ancestorTenantLabels, it takes
+  the tenant's own namespace name: tenant-root is implicit, while the other
+  ancestors are dash-prefixes. The tenant itself is excluded, so tenant-root
+  has no ancestors. Service ownership does not restrict this chain: even a
+  tenant with its own ingress needs ancestor ingress for hairpin traffic.
+*/}}
+{{- define "tenant.ancestorNamespaces" -}}
+{{- $ancestors := list -}}
+{{- if ne . "tenant-root" -}}
+{{- $ancestors = append $ancestors "tenant-root" -}}
+{{- $parts := splitList "-" . -}}
+{{- range $i, $v := $parts -}}
+{{- if and (ne $i 0) (lt $i (sub (len $parts) 1)) -}}
+{{- $ancestors = append $ancestors (join "-" (slice $parts 0 (add $i 1))) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $ancestors | toJson -}}
+{{- end -}}
+
+{{/*
   tenant.gatewayEffective resolves whether THIS tenant should own a
   dedicated Gateway resource. Returns the literal string "true" or
   "false" (callers must compare with `eq ... "true"`, bool coercion
