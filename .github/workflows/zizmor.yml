@@ -32,6 +32,7 @@ concurrency:
 
 jobs:
   zizmor:
+    if: (github.event_name == 'pull_request' || github.repository == 'cozystack/cozystack')
     name: Audit workflows
     runs-on: ubuntu-latest
     permissions:
