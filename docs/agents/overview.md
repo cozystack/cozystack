@@ -146,6 +146,8 @@ A `lookup` is fine when a repeated render gives the same output and carries noth
 
 To use a fact about the cluster instead, read it from values: `_cluster` and `_namespace` in the `cozystack-values` Secret, or `valuesFrom` on a specific Secret, whose content change is a values change and so upgrades the release. Ask whether an API is served with `.Capabilities.APIVersions.Has`, since a `lookup` on an unserved group aborts the whole render. Otherwise check at run time in a hook or Job, or let a controller own the object.
 
+**Lineage for objects an operator creates.** The lineage webhook (`pkg/lineage`, `internal/lineagecontrollerwebhook`) labels an object with the application it belongs to by following ownerReferences up to a HelmRelease. An object without an ownerReference is attributed through its `helm.toolkit.fluxcd.io/name` label to the HelmRelease of that name in the object's own namespace. When a chart's operator creates objects without an ownerReference, and their Pods need lineage (the SecurityGroup controller selects Pods by `internal.cozystack.io/managed-by-cozystack`), put that label with the application's release name on the template the operator copies onto the object; `kubernetes-nodes` does this for CAPK worker VMs. This is the supported mechanism: do not add an operator-specific branch to the walker.
+
 ### Container images
 
 For a new container image built from source maintained in this repository, name the build definition `Containerfile` and pass it to `docker buildx build` with `--file` in the package `Makefile`. Keep existing `Dockerfile`s and vendored build definitions unchanged.
