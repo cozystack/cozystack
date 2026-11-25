@@ -26,6 +26,20 @@
 {{- include "kubernetes.assertDnsServersAreAddresses" . }}
 {{- end }}
 {{- include "kubernetes.assertSubstrateUnchanged" . }}
+{{- $exposeMethod := .Values.controlPlane.exposeMethod | default "Proxied" }}
+{{- if not (has $exposeMethod (list "Proxied" "LoadBalancer" "None")) }}
+{{- fail (printf "controlPlane.exposeMethod %q is not supported; use \"Proxied\", \"LoadBalancer\" or \"None\"" $exposeMethod) }}
+{{- end }}
+{{- /* Proxmox workers are VMs outside this cluster and bootstrap against the
+       published Service, which rules out None. Dropping the ingress also moves
+       the control plane endpoint from the ingress hostname to the Service
+       address, and the control-plane provider refuses that on a ProxmoxCluster
+       whose endpoint is already set ("provisioned with a mismatching host"),
+       leaving the KamajiControlPlane unreconciled. */}}
+{{- if and $isProxmox (ne $exposeMethod "Proxied") }}
+{{- fail (printf "controlPlane.exposeMethod %q is not supported on substrate proxmox, which accepts only \"Proxied\"" $exposeMethod) }}
+{{- end }}
+{{- $proxied := eq $exposeMethod "Proxied" }}
 {{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /* Worker node pools (KubevirtMachineTemplate, MachineDeployment,
        MachineHealthCheck, worker WorkloadMonitor) and the Talos
@@ -709,12 +723,17 @@ spec:
           a silence that looks like a broken bootstrap rather than an
           unreachable address. Publishing the Service moves the endpoint onto
           a network the workers share. */}}
-    serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
+    serviceType: {{ ternary "LoadBalancer" "ClusterIP" (or $isProxmox (eq $exposeMethod "LoadBalancer")) }}
+    {{- with .Values.controlPlane.serviceAnnotations }}
+    serviceAnnotations: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- if $proxied }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
       hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .)) }}:443
       className: "{{ $ingress }}"
+    {{- end }}
     additionalServicePorts:
       - name: talos-trustd
         port: 50001
@@ -733,6 +752,11 @@ spec:
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
+      {{- /* Kamaji adds an ingress hostname to the certificate by itself;
+             without an ingress nothing else puts host there. */}}
+      {{- if and (not $proxied) .Values.host }}
+      - {{ .Values.host | quote }}
+      {{- end }}
   deployment:
     podAdditionalMetadata:
       labels:
