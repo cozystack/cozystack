@@ -29,7 +29,7 @@ func (m namedAppMapper) Map(hr *helmv2.HelmRelease) (string, string, string, err
 // the HelmRelease its label names; one that resolves ends the walk there.
 func TestWalkHelmReleaseFallsBackToItsLabel(t *testing.T) {
 	parent := map[string]string{HRLabel: "kubernetes-b"}
-	unconvertible := capkObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil)
+	unconvertible := testObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil)
 	unconvertible.Object["spec"] = "not an object"
 	for _, tc := range []struct {
 		name   string
@@ -37,17 +37,17 @@ func TestWalkHelmReleaseFallsBackToItsLabel(t *testing.T) {
 		mapped namedAppMapper
 		want   []string
 	}{
-		{name: "mapped", hr: capkObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-a": "a", "kubernetes-b": "b"}, want: []string{"a"}},
-		{name: "unmappable", hr: capkObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-b": "b"}, want: []string{"b"}},
-		{name: "application missing", hr: capkObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-a": "absent", "kubernetes-b": "b"}, want: []string{"b"}},
+		{name: "mapped", hr: testObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-a": "a", "kubernetes-b": "b"}, want: []string{"a"}},
+		{name: "unmappable", hr: testObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-b": "b"}, want: []string{"b"}},
+		{name: "application missing", hr: testObject(HRAPIVersion, HRKind, "kubernetes-a", parent, nil), mapped: namedAppMapper{"kubernetes-a": "absent", "kubernetes-b": "b"}, want: []string{"b"}},
 		{name: "unconvertible", hr: unconvertible, mapped: namedAppMapper{"kubernetes-a": "a", "kubernetes-b": "b"}, want: []string{"b"}},
-		{name: "unmappable without a label", hr: capkObject(HRAPIVersion, HRKind, "kubernetes-a", nil, nil), mapped: namedAppMapper{"kubernetes-b": "b"}, want: nil},
+		{name: "unmappable without a label", hr: testObject(HRAPIVersion, HRKind, "kubernetes-a", nil, nil), mapped: namedAppMapper{"kubernetes-b": "b"}, want: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := []runtime.Object{
-				capkObject("apps.cozystack.io/v1alpha1", "Kubernetes", "a", nil, nil),
-				capkObject("apps.cozystack.io/v1alpha1", "Kubernetes", "b", nil, nil),
-				capkObject(HRAPIVersion, HRKind, "kubernetes-b", nil, nil),
+				testObject("apps.cozystack.io/v1alpha1", "Kubernetes", "a", nil, nil),
+				testObject("apps.cozystack.io/v1alpha1", "Kubernetes", "b", nil, nil),
+				testObject(HRAPIVersion, HRKind, "kubernetes-b", nil, nil),
 			}
 			mapper := meta.NewDefaultRESTMapper(nil)
 			for _, o := range objs {
