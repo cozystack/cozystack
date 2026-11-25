@@ -155,8 +155,8 @@ github.com/kubernetes-csi/csi-lib-utils v0.25.0 h1:uPfcPBYpJ8NyGAzQLo+JWvTHAy3OM
 github.com/kubernetes-csi/csi-lib-utils v0.25.0/go.mod h1:Ks9h3Iy9opBbBZyMbS85MOBxGYXbjPKYbeI2/flMhL8=
 github.com/kubernetes-csi/external-snapshotter/client/v6 v6.3.0 h1:qS4r4ljINLWKJ9m9Ge3Q3sGZ/eIoDVDT2RhAdQFHb1k=
 github.com/kubernetes-csi/external-snapshotter/client/v6 v6.3.0/go.mod h1:oGXx2XTEzs9ikW2V6IC1dD8trgjRsS/Mvc2JRiC618Y=
-github.com/kubevirt/csi-driver v0.0.0-20261009123611-f10ae947eac2 h1:cC7cq61xzOBCOGLVEe/QM/ZvwqiRuNRdAKhl2KawuKw=
-github.com/kubevirt/csi-driver v0.0.0-20261009123611-f10ae947eac2/go.mod h1:IzN5Rpdz9MhnLXkDEWrCHR9t5gCtVK8ljY4IvCSZDO0=
+github.com/kubevirt/csi-driver v0.0.0-20261125220946-404b8ccb50e5 h1:nCTXKkRXn0kU3FaiT4+95gUErgRjDpSKpVZaH85l0JM=
+github.com/kubevirt/csi-driver v0.0.0-20261125220946-404b8ccb50e5/go.mod h1:IzN5Rpdz9MhnLXkDEWrCHR9t5gCtVK8ljY4IvCSZDO0=
 github.com/mailru/easyjson v0.0.0-20190614124828-94de47d64c63/go.mod h1:C1wdFJiN94OJF2b5HbByQZoLdCWB1Yqtg26g4irojpc=
 github.com/mailru/easyjson v0.0.0-20190626092158-b2ccc519800e/go.mod h1:C1wdFJiN94OJF2b5HbByQZoLdCWB1Yqtg26g4irojpc=
 github.com/mailru/easyjson v0.7.6/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
