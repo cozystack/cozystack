@@ -28,16 +28,15 @@
   publishing layer unless it explicitly asks for its own.
 
   Rules:
-    1. tenant.spec.gateway set explicitly (true|false) → use it.
-       Explicit choice always wins. A tenant that asks for its own
-       Gateway gets its own Service / LB IP / Certificate.
-    2. Otherwise → "false". The tenant inherits the parent's Gateway
-       through _namespace.gateway. Derived-apex children (`host`
-       empty) flow naturally: their predefined hostnames
-       `*.<name>.<parent-apex>` are routed by the ancestor's
-       controller which extends listener / SAN coverage as children
-       attach. If no ancestor owns a Gateway, _namespace.gateway
-       stays empty and apps fall back to Ingress (legacy path).
+    1. gateway: true → "true". The tenant gets its own Service / LB IP /
+       Certificate.
+    2. gateway: false (the default) → "false". The tenant inherits the
+       parent's Gateway through _namespace.gateway. Derived-apex children
+       (`host` empty) flow naturally: their predefined hostnames
+       *.<name>.<parent-apex> are routed by the ancestor's controller
+       which extends listener / SAN coverage as children attach. If no
+       ancestor owns a Gateway, _namespace.gateway stays empty and apps
+       fall back to Ingress (legacy path).
 
   Custom-apex tenants (operator sets tenant.spec.host to something
   not derived from the parent apex, e.g. `customer1.io`) must opt in
@@ -46,13 +45,11 @@
   wildcards are single-level, so silent inheritance would either
   leak through the wrong cert or fail to terminate TLS. Forcing the
   explicit flag keeps "I want my apex routable" a deliberate choice.
-
-  Implementation note: values.yaml leaves `gateway` absent (no key)
-  so Helm reads it as missing → `kindIs "invalid"`. cozyvalues-gen's
-  `[gateway]` (optional) marker syntax does not allow nullable schema
-  typing, so the "key absent" form is what distinguishes "unset"
-  from explicit `false`.
 */}}
+{{- define "tenant.gatewayEffective" -}}
+{{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
 {{/*
   tenant.ancestorTenantLabels emits the full set of
   `tenant.cozystack.io/<ancestor>: ""` namespace labels for the tenant whose
@@ -83,14 +80,6 @@ tenant.cozystack.io/tenant-root: ""
 {{ printf "tenant.cozystack.io/%s: \"\"" (join "-" (slice $parts 0 (add $i 1))) }}
 {{- end }}
 {{- end }}
-{{- end -}}
-
-{{- define "tenant.gatewayEffective" -}}
-{{- if kindIs "invalid" .Values.gateway -}}
-false
-{{- else -}}
-{{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
-{{- end -}}
 {{- end -}}
 
 {{- /* The shared-central tracing hops out of a tenant: an opted-in tenant with
