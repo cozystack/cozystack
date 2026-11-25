@@ -1335,9 +1335,9 @@ func TestCreateResourceModifiersConfigMap_InPlace_WithOVN(t *testing.T) {
 		t.Fatal("ConfigMap missing resource-modifier-rules.yaml key")
 	}
 
-	// Should contain PVC adoption annotation
-	if !containsString(rulesYAML, cdiAllowClaimAdoption) {
-		t.Error("expected PVC adoption annotation in rules")
+	// CDI reads allowClaimAdoption only on the DataVolume.
+	if containsString(rulesYAML, cdiAllowClaimAdoption) {
+		t.Error("restored PVCs must not get the CDI claim adoption annotation")
 	}
 	// Should contain OVN IP annotation (keepOriginalIpAndMac defaults to true)
 	if !containsString(rulesYAML, ovnIPAnnotation) {
@@ -1372,9 +1372,9 @@ func TestCreateResourceModifiersConfigMap_Copy_NoOVN(t *testing.T) {
 
 	rulesYAML := cm.Data["resource-modifier-rules.yaml"]
 
-	// Should contain PVC adoption annotation
-	if !containsString(rulesYAML, cdiAllowClaimAdoption) {
-		t.Error("expected PVC adoption annotation in rules")
+	// CDI reads allowClaimAdoption only on the DataVolume.
+	if containsString(rulesYAML, cdiAllowClaimAdoption) {
+		t.Error("restored PVCs must not get the CDI claim adoption annotation")
 	}
 	// Should contain merge patch nulling out selector and volumeName (copy restore)
 	if !containsString(rulesYAML, "selector: null") {
@@ -1396,7 +1396,7 @@ func TestCreateResourceModifiersConfigMap_AlreadyExists_IsIdempotent(t *testing.
 
 	target := restoreTarget{Namespace: ns, AppName: "test-vm", AppKind: "VMInstance", IsCopy: false}
 	opts := RestoreOptions{}
-	ur := makeVMInstanceUR("", "", nil)
+	ur := makeVMInstanceUR("10.0.0.5", "", nil)
 
 	reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
 	ctx := context.Background()

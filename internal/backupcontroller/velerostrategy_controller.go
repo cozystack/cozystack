@@ -886,38 +886,16 @@ func marshalPatchData(v any) (string, error) {
 
 // createResourceModifiersConfigMap creates a Velero resource modifiers ConfigMap
 // that patches VM resources during restore:
-//   - PVC adoption: adds cdi.kubevirt.io/allowClaimAdoption=true to all
-//     restored PVCs. CDI v1.66 does not read it there, only on the DataVolume,
-//     so adoption of a restored PVC rests on the vm-disk chart annotating the
-//     DataVolume it recreates. Without it, CDI refuses that DataVolume unless
-//     the DataVolumeClaimAdoption feature gate is on.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
+//
+// It returns nil when there is nothing to patch: Velero fails validation of a
+// Restore whose resource modifier has no rules.
 func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
 
 	targetNS := target.Namespace
 
 	var rules []resourceModifierRule
-
-	// Inert for CDI, which reads allowClaimAdoption only on the DataVolume.
-	pvcPatch, err := marshalPatchData(map[string]any{
-		"metadata": map[string]any{
-			"annotations": map[string]string{
-				cdiAllowClaimAdoption: "true",
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	rules = append(rules, resourceModifierRule{
-		Conditions: resourceModifierConditions{
-			GroupResource:     "persistentvolumeclaims",
-			ResourceNameRegex: ".*",
-			Namespaces:        []string{targetNS},
-		},
-		MergePatches: []mergePatch{{PatchData: pvcPatch}},
-	})
 
 	// For cross-namespace restore: strip Velero's dynamic PV restore selector and
 	// volumeName from PVCs so the storage provisioner can dynamically provision new PVs.
@@ -978,6 +956,10 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 				MergePatches: []mergePatch{{PatchData: vmPatch}},
 			})
 		}
+	}
+
+	if len(rules) == 0 {
+		return nil, nil
 	}
 
 	rulesYAML, err := yaml.Marshal(resourceModifiers{
