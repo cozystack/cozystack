@@ -1,0 +1,22 @@
+suite: cozystack-api tenant quota reservation flag
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: cozystack-api
+  namespace: cozy-system
+
+tests:
+  - it: the shipped default leaves the reservation gate off
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-quota-reservation
+
+  - it: turning the value on passes the flag
+    set:
+      cozystackAPI.tenantQuotaReservation: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-quota-reservation

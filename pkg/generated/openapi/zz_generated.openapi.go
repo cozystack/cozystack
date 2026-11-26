@@ -290,6 +290,48 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 							Format:      "int32",
 						},
 					},
+					"reserved": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Reserved is what the applications of the tenant quota pool this Tenant roots reserve, keyed like the pool's budget. Set for a Tenant that declares resourceQuotas while the tenant quota reservation is on.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"carvedOut": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CarvedOut is what the bounded sub-tenants of the pool this Tenant roots declared, each a slice of its budget. Set with Reserved.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"budget": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Budget is the pool's budget: this Tenant's resourceQuotas in reservation keys. Set with Reserved.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 					"installFailures": {
 						SchemaProps: spec.SchemaProps{
 							Description: "InstallFailures is the install failure count of the underlying HelmRelease. It counts only attempts that recorded a Helm release, so a failure before Helm records one, such as a chart that fails to render, shows only as Ready=False; a failure to apply the rendered resources is counted. It resets when the desired state (generation, chart version, values) changes, and on success only under the RetryOnFailure strategy, so a Ready release may carry it.",
@@ -315,7 +357,7 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			metav1.Condition{}.OpenAPIModelName()},
+			resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 

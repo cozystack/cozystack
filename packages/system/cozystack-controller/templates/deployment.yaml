@@ -28,6 +28,9 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
+        {{- if .Values.cozystackController.tenantQuotaReservation }}
+        - --tenant-quota-reservation
+        {{- end }}
         {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
         - --seaweedfs-metrics-endpoint={{ . }}
         {{- end }}

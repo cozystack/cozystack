@@ -1,0 +1,22 @@
+suite: cozystack-controller tenant quota reservation flag
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+tests:
+  - it: the shipped default leaves the reservation oracle off
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-quota-reservation
+
+  - it: turning the value on passes the flag
+    set:
+      cozystackController.tenantQuotaReservation: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tenant-quota-reservation

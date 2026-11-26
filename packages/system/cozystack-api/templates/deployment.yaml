@@ -34,6 +34,9 @@ spec:
         {{- if not .Values.cozystackAPI.serveSDN }}
         - --serve-sdn=false
         {{- end }}
+        {{- if .Values.cozystackAPI.tenantQuotaReservation }}
+        - --tenant-quota-reservation
+        {{- end }}
         image: "{{ .Values.cozystackAPI.image }}"
         ports:
         - containerPort: 443

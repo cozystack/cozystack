@@ -53,6 +53,7 @@ import (
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
 	securitygroupstorage "github.com/cozystack/cozystack/pkg/registry/sdn/securitygroup"
+	"github.com/cozystack/cozystack/pkg/reservation"
 )
 
 var (
@@ -116,6 +117,8 @@ type Config struct {
 	GenericConfig  *genericapiserver.RecommendedConfig
 	ResourceConfig *config.ResourceConfig
 	ServeSDN       bool
+
+	TenantQuotaReservation bool
 }
 
 // CozyServer holds the state for the Kubernetes master/api server.
@@ -127,6 +130,8 @@ type completedConfig struct {
 	GenericConfig  genericapiserver.CompletedConfig
 	ResourceConfig *config.ResourceConfig
 	ServeSDN       bool
+
+	TenantQuotaReservation bool
 }
 
 // CompletedConfig embeds a private pointer that cannot be created outside of this package.
@@ -140,6 +145,7 @@ func (cfg *Config) Complete() CompletedConfig {
 		cfg.GenericConfig.Complete(),
 		cfg.ResourceConfig,
 		cfg.ServeSDN,
+		cfg.TenantQuotaReservation,
 	}
 
 	return CompletedConfig{&c}
@@ -221,9 +227,17 @@ func (c completedConfig) New() (*CozyServer, error) {
 	}
 
 	// --- dynamically-configured, per-tenant resources ---
+	var gate *applicationstorage.Reservation
+	if c.TenantQuotaReservation {
+		env := reservation.NewClusterEnvironment(dyn, reservation.ShippedPresets())
+		gate = applicationstorage.NewReservation(c.ResourceConfig.Resources, env)
+	}
 	appsV1alpha1Storage := map[string]rest.Storage{}
 	for _, resConfig := range c.ResourceConfig.Resources {
 		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		if gate != nil {
+			storage.SetReservation(gate)
+		}
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
 	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {

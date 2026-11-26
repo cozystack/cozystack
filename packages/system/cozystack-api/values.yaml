@@ -14,3 +14,9 @@ cozystackAPI:
   # owns the group; off drops both the APIService and the group itself
   # (--serve-sdn=false), so cozystack-api stops publishing its OpenAPI.
   serveSDN: true
+  # Check every application write of a kind whose ApplicationDefinition
+  # declares its consumption against its tenant pool's budget, and count tenant
+  # pools in declared reservations instead of ResourceQuota usage
+  # (--tenant-quota-reservation). Off until every kind declares its
+  # consumption.
+  tenantQuotaReservation: false
