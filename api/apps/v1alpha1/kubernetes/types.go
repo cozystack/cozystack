@@ -25,7 +25,7 @@ type ConfigSpec struct {
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
-	// External hostname for Kubernetes cluster. Defaults to `kubernetes-<cluster-name>.<tenant-host>` if empty.
+	// External hostname of the Kubernetes API. With `controlPlane.exposeMethod: Proxied` it is the ingress hostname, and defaults to `kubernetes-<cluster-name>.<tenant-host>` if empty. With the other methods it has no default; when set, it is added to the apiserver certificate, so that a DNS record pointing at the apiserver Service can be used as the endpoint.
 	// +kubebuilder:default:=""
 	Host string `json:"host"`
 	// Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Every KubernetesNodes pool of this cluster must set the same `substrate`: a pool set to the other one refuses to render once this cluster exists. Switching an existing cluster is not supported; create a new one.
@@ -132,6 +132,9 @@ type ControlPlane struct {
 	// Controller Manager configuration.
 	// +kubebuilder:default:={}
 	ControllerManager ControllerManager `json:"controllerManager"`
+	// How the tenant kube-apiserver is published outside its in-cluster Service. `Proxied` routes it through the tenant's ingress controller with TLS passthrough, on `host`. `LoadBalancer` makes the apiserver Service a LoadBalancer and creates no Ingress; `serviceAnnotations` is where the load-balancer implementation is told which address or pool to use. `None` publishes nothing and leaves the apiserver reachable on its in-cluster Service only. The worker nodes and the platform's own components use the in-cluster Service with every method. `substrate: proxmox` accepts only `Proxied`.
+	// +kubebuilder:default:="Proxied"
+	ExposeMethod ControlPlaneExposeMethod `json:"exposeMethod,omitempty"`
 	// Konnectivity configuration.
 	// +kubebuilder:default:={}
 	Konnectivity Konnectivity `json:"konnectivity"`
@@ -144,6 +147,9 @@ type ControlPlane struct {
 	// Scheduler configuration.
 	// +kubebuilder:default:={}
 	Scheduler Scheduler `json:"scheduler"`
+	// Annotations added to the apiserver Service, passed through to KamajiControlPlane `spec.network.serviceAnnotations`.
+	// +kubebuilder:default:={}
+	ServiceAnnotations map[string]string `json:"serviceAnnotations,omitempty"`
 }
 
 type ControllerManager struct {
@@ -378,6 +384,9 @@ type VerticalPodAutoscalerAddon struct {
 
 // +kubebuilder:validation:Enum="AlwaysAdmit";"AlwaysDeny";"AlwaysPullImages";"CertificateApproval";"CertificateSigning";"CertificateSubjectRestriction";"DefaultIngressClass";"DefaultStorageClass";"DefaultTolerationSeconds";"DenyEscalatingExec";"DenyExecOnPrivileged";"DenyServiceExternalIPs";"EventRateLimit";"ExtendedResourceToleration";"ImagePolicyWebhook";"LimitPodHardAntiAffinityTopology";"LimitRanger";"MutatingAdmissionWebhook";"NamespaceAutoProvision";"NamespaceExists";"NamespaceLifecycle";"NodeRestriction";"OwnerReferencesPermissionEnforcement";"PersistentVolumeClaimResize";"PersistentVolumeLabel";"PodNodeSelector";"PodSecurity";"PodSecurityPolicy";"PodTolerationRestriction";"Priority";"ResourceQuota";"RuntimeClass";"SecurityContextDeny";"ServiceAccount";"StorageObjectInUseProtection";"TaintNodesByCondition";"ValidatingAdmissionWebhook"
 type AdmissionController string
+
+// +kubebuilder:validation:Enum="Proxied";"LoadBalancer";"None"
+type ControlPlaneExposeMethod string
 
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string

@@ -49,7 +49,13 @@
 */}}
 {{- $clientId := include "kubernetes.oidc.clientId" . | trim }}
 {{- $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
-{{- $externalHost := .Values.host | default (printf "%s.%s" .Release.Name (.Values._namespace.host)) }}
+{{- /* The OIDC kubeconfig points at the ingress hostname when there is one.
+       Otherwise the endpoint is an address allocated at run time, which the
+       render cannot know: the Job reads it from the kubeconfig Kamaji issued. */}}
+{{- $oidcServerURL := "" }}
+{{- if eq (.Values.controlPlane.exposeMethod | default "Proxied") "Proxied" }}
+{{- $oidcServerURL = printf "https://%s:443" (.Values.host | default (printf "%s.%s" .Release.Name (.Values._namespace.host))) }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -169,7 +175,7 @@ spec:
             - name: OIDC_ISSUER_URL
               value: {{ $issuer | quote }}
             - name: OIDC_SERVER_URL
-              value: {{ printf "https://%s:443" $externalHost | quote }}
+              value: {{ $oidcServerURL | quote }}
             - name: OIDC_BINDINGS_DIR
               value: /etc/oidc-bindings
           resources:
@@ -292,6 +298,14 @@ spec:
                 if [ -z "$CA_DATA" ]; then
                   echo "tenant admin kubeconfig has no certificate-authority-data; refusing to leave the OIDC kubeconfig Secret as the install-time placeholder" >&2
                   exit 1
+                fi
+                if [ -z "$OIDC_SERVER_URL" ]; then
+                  OIDC_SERVER_URL=$(kubectl --kubeconfig /etc/kubernetes/kubeconfig/admin.conf config view \
+                    --output=jsonpath='{.clusters[0].cluster.server}')
+                  if [ -z "$OIDC_SERVER_URL" ]; then
+                    echo "tenant admin kubeconfig names no server; refusing to write an OIDC kubeconfig without an endpoint" >&2
+                    exit 1
+                  fi
                 fi
                 KUBECONFIG_FILE=$(mktemp)
                 cat > "$KUBECONFIG_FILE" <<EOF

@@ -79,7 +79,7 @@ storageClass: replicated
 version: "v1.35"
 
 
-## @param {string} host - External hostname for Kubernetes cluster. Defaults to `kubernetes-<cluster-name>.<tenant-host>` if empty.
+## @param {string} host - External hostname of the Kubernetes API. With `controlPlane.exposeMethod: Proxied` it is the ingress hostname, and defaults to `kubernetes-<cluster-name>.<tenant-host>` if empty. With the other methods it has no default; when set, it is added to the apiserver certificate, so that a DNS record pointing at the apiserver Service can be used as the endpoint.
 host: ""
 
 ##
@@ -311,8 +311,15 @@ addons:
 ## @typedef {struct} Kubelet - Kubelet connection settings of the tenant control plane.
 ## @field {[]NodeAddressType} preferredAddressTypes - Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`, or the list of a `--kubelet-preferred-address-types=` entry in `controlPlane.apiServer.extraArgs` when there is one.
 
+## @enum {string} ControlPlaneExposeMethod - How the tenant kube-apiserver is published.
+## @value Proxied
+## @value LoadBalancer
+## @value None
+
 ## @typedef {struct} ControlPlane - Kubernetes control plane configuration.
 ## @field {int} replicas=2 - Number of control-plane replicas.
+## @field {ControlPlaneExposeMethod} [exposeMethod] - How the tenant kube-apiserver is published outside its in-cluster Service. `Proxied` routes it through the tenant's ingress controller with TLS passthrough, on `host`. `LoadBalancer` makes the apiserver Service a LoadBalancer and creates no Ingress; `serviceAnnotations` is where the load-balancer implementation is told which address or pool to use. `None` publishes nothing and leaves the apiserver reachable on its in-cluster Service only. The worker nodes and the platform's own components use the in-cluster Service with every method. `substrate: proxmox` accepts only `Proxied`.
+## @field {map[string]string} [serviceAnnotations] - Annotations added to the apiserver Service, passed through to KamajiControlPlane `spec.network.serviceAnnotations`.
 ## @field {APIServer} apiServer - API Server configuration.
 ## @field {ControllerManager} controllerManager - Controller Manager configuration.
 ## @field {Scheduler} scheduler - Scheduler configuration.
@@ -322,6 +329,8 @@ addons:
 ## @param {ControlPlane} controlPlane - Kubernetes control-plane configuration.
 controlPlane:
   replicas: 2
+  exposeMethod: Proxied
+  serviceAnnotations: {}
   apiServer:
     resources: {}
     resourcesPreset: "c1.medium"

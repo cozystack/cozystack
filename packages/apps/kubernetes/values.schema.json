@@ -34,7 +34,7 @@
       ]
     },
     "host": {
-      "description": "External hostname for Kubernetes cluster. Defaults to `kubernetes-\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty.",
+      "description": "External hostname of the Kubernetes API. With `controlPlane.exposeMethod: Proxied` it is the ingress hostname, and defaults to `kubernetes-\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty. With the other methods it has no default; when set, it is added to the apiserver certificate, so that a DNS record pointing at the apiserver Service can be used as the endpoint.",
       "type": "string",
       "default": ""
     },
@@ -718,6 +718,16 @@
             }
           }
         },
+        "exposeMethod": {
+          "description": "How the tenant kube-apiserver is published outside its in-cluster Service. `Proxied` routes it through the tenant's ingress controller with TLS passthrough, on `host`. `LoadBalancer` makes the apiserver Service a LoadBalancer and creates no Ingress; `serviceAnnotations` is where the load-balancer implementation is told which address or pool to use. `None` publishes nothing and leaves the apiserver reachable on its in-cluster Service only. The worker nodes and the platform's own components use the in-cluster Service with every method. `substrate: proxmox` accepts only `Proxied`.",
+          "type": "string",
+          "default": "Proxied",
+          "enum": [
+            "Proxied",
+            "LoadBalancer",
+            "None"
+          ]
+        },
         "konnectivity": {
           "description": "Konnectivity configuration.",
           "type": "object",
@@ -949,6 +959,14 @@
                 "2xlarge"
               ]
             }
+          }
+        },
+        "serviceAnnotations": {
+          "description": "Annotations added to the apiserver Service, passed through to KamajiControlPlane `spec.network.serviceAnnotations`.",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
           }
         }
       }

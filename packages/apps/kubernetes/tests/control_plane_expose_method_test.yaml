@@ -1,0 +1,203 @@
+suite: control plane expose method
+# controlPlane.exposeMethod decides whether the tenant apiserver is published
+# outside the tenant namespace. Everything the platform runs against the tenant
+# (CAPI, the addon HelmReleases, kccm, CSI, the chart's Jobs) dials the
+# in-cluster Service through the super-admin.svc kubeconfig, so only the
+# externally reachable endpoint may differ between the three methods.
+templates:
+  - templates/cluster.yaml
+  - templates/oidc-rbac-job.yaml
+values:
+  - values/common.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+tests:
+  - it: refuses an expose method the chart does not know
+    template: templates/cluster.yaml
+    set:
+      controlPlane.exposeMethod: NodePort
+    asserts:
+      - failedTemplate: {}
+
+  # Proxmox workers are VMs outside this cluster: None leaves them nothing to
+  # bootstrap against, and dropping the ingress moves an endpoint the
+  # control-plane provider refuses to move on a ProxmoxCluster.
+  - it: refuses LoadBalancer on the proxmox substrate
+    template: templates/cluster.yaml
+    set:
+      substrate: proxmox
+      proxmox:
+        allowedNodes: [prox-home]
+        dnsServers: ["192.0.2.53"]
+        ipv4Config:
+          addresses: ["192.0.2.160-192.0.2.170"]
+          gateway: "192.0.2.1"
+          prefix: 24
+      controlPlane.exposeMethod: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.exposeMethod "LoadBalancer" is not supported on substrate proxmox, which accepts only "Proxied"'
+
+  - it: refuses None on the proxmox substrate
+    template: templates/cluster.yaml
+    set:
+      substrate: proxmox
+      proxmox:
+        allowedNodes: [prox-home]
+        dnsServers: ["192.0.2.53"]
+        ipv4Config:
+          addresses: ["192.0.2.160-192.0.2.170"]
+          gateway: "192.0.2.1"
+          prefix: 24
+      controlPlane.exposeMethod: None
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.exposeMethod "None" is not supported on substrate proxmox, which accepts only "Proxied"'
+
+  - it: publishes the apiserver through the tenant ingress by default
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+      - equal:
+          path: spec.network.ingress.hostname
+          value: kubernetes-test.example.com:443
+      - equal:
+          path: spec.network.ingress.className
+          value: nginx
+      - notExists:
+          path: spec.network.serviceAnnotations
+
+  - it: publishes a LoadBalancer Service and no Ingress with LoadBalancer
+    template: templates/cluster.yaml
+    set:
+      controlPlane.exposeMethod: LoadBalancer
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: LoadBalancer
+      - notExists:
+          path: spec.network.ingress
+
+  - it: keeps the apiserver inside the tenant namespace with None
+    template: templates/cluster.yaml
+    set:
+      controlPlane.exposeMethod: None
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+      - notExists:
+          path: spec.network.ingress
+
+  # The apex only names the ingress hostname. A cluster that publishes no
+  # ingress must not be refused for a tenant that has none.
+  - it: renders without a tenant apex when no ingress is published
+    template: templates/cluster.yaml
+    set:
+      _namespace.host: ""
+      controlPlane.exposeMethod: None
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - notExists:
+          path: spec.network.ingress
+
+  - it: copies serviceAnnotations onto the apiserver Service
+    template: templates/cluster.yaml
+    set:
+      controlPlane.exposeMethod: LoadBalancer
+      controlPlane.serviceAnnotations:
+        metallb.io/address-pool: private
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.serviceAnnotations
+          value:
+            metallb.io/address-pool: private
+
+  # Kamaji adds the ingress hostname to the certificate by itself. Without an
+  # ingress nothing does, and a client that dials the LoadBalancer by name
+  # would fail TLS verification.
+  - it: adds host to the certificate SANs when no ingress carries it
+    template: templates/cluster.yaml
+    set:
+      host: api.example.org
+      controlPlane.exposeMethod: LoadBalancer
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - contains:
+          path: spec.network.certSANs
+          content: api.example.org
+
+  - it: leaves host out of the chart SANs when the ingress carries it
+    template: templates/cluster.yaml
+    set:
+      host: api.example.org
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.ingress.hostname
+          value: api.example.org:443
+      - notContains:
+          path: spec.network.certSANs
+          content: api.example.org
+
+  - it: hands the OIDC kubeconfig the ingress URL when Proxied
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_SERVER_URL
+            value: https://kubernetes-test.example.com:443
+        documentIndex: 3
+
+  # Without an ingress the address is allocated at run time, so the render
+  # cannot know it: the Job reads it from the kubeconfig Kamaji issued.
+  - it: leaves the OIDC kubeconfig URL to the Job when no ingress is published
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      controlPlane.exposeMethod: LoadBalancer
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_SERVER_URL
+            value: ""
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'OIDC_SERVER_URL=\$\(kubectl --kubeconfig /etc/kubernetes/kubeconfig/admin\.conf config view'
+        documentIndex: 3
