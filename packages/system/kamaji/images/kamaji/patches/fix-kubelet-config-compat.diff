@@ -1,8 +1,16 @@
 diff --git a/internal/kubeadm/uploadconfig.go b/internal/kubeadm/uploadconfig.go
-index 89c9b54..1ee38cd 100644
+index e8bbd58..2e52b6a 100644
 --- a/internal/kubeadm/uploadconfig.go
 +++ b/internal/kubeadm/uploadconfig.go
-@@ -41,7 +41,7 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
+@@ -11,6 +11,7 @@ import (
+ 	corev1 "k8s.io/api/core/v1"
+ 	rbacv1 "k8s.io/api/rbac/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+ 	"k8s.io/client-go/kubernetes"
+ 	kubelettypes "k8s.io/kubelet/config/v1beta1"
+ 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
+@@ -41,7 +42,7 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
  		TenantControlPlaneCgroupDriver:  config.Parameters.TenantControlPlaneCGroupDriver,
  	}
  
@@ -11,22 +19,34 @@ index 89c9b54..1ee38cd 100644
  	if err != nil {
  		return nil, err
  	}
-@@ -72,7 +72,13 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
+@@ -72,7 +73,25 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
  	return nil, nil
  }
  
 -func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch jsonpatchv5.Patch) ([]byte, error) {
-+// minVerKubeletNewDefaults is the minimum Kubernetes version that supports the
-+// CrashLoopBackOff and ImagePullCredentialsVerificationPolicy kubelet
-+// configuration fields (gated by KubeletCrashLoopBackOffMax and
-+// KubeletEnsureSecretPulledImages feature gates respectively).
++// minVerKubeletNewDefaults is the first Kubernetes version whose kubelet
++// accepts the CrashLoopBackOff and ImagePullCredentialsVerificationPolicy
++// defaults without enabling the KubeletCrashLoopBackOffMax and
++// KubeletEnsureSecretPulledImages feature gates.
 +var minVerKubeletNewDefaults = semver.MustParse("1.35.0")
++
++// kubeletConfigFieldsMinVersion maps the KubeletConfiguration fields Kamaji
++// emits by default to the first Kubernetes release whose kubelet config API
++// knows them: older kubelets and kubeadm fail strict decoding on them.
++// A pre-release compares below its minor and loses that minor's fields, which
++// its early alphas do not have yet.
++// Tenants older than v1.31 would need more entries, starting with failCgroupV1.
++var kubeletConfigFieldsMinVersion = map[string]semver.Version{
++	"crashLoopBackOff":             semver.MustParse("1.32.0"),
++	"mergeDefaultEvictionSettings": semver.MustParse("1.33.0"),
++	"memoryReservationPolicy":      semver.MustParse("1.36.0"),
++}
 +
 +func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch jsonpatchv5.Patch, version string) ([]byte, error) {
  	var kc kubelettypes.KubeletConfiguration
  
  	kubeletv1beta1.SetDefaults_KubeletConfiguration(&kc)
-@@ -94,6 +100,20 @@ func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch
+@@ -89,6 +108,20 @@ func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch
  	// determine the resolvConf location, as reported in clastix/kamaji#581.
  	kc.ResolverConfig = nil
  
@@ -47,3 +67,155 @@ index 89c9b54..1ee38cd 100644
  	if len(patch) > 0 {
  		kubeletConfig, patchErr := utilities.EncodeToJSON(&kc)
  		if patchErr != nil {
+@@ -105,7 +138,25 @@ func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch
+ 		}
+ 	}
+ 
+-	return utilities.EncodeToYaml(&kc)
++	// Non-pointer struct fields survive zeroing and the JSON patch round trip,
++	// so the fields are dropped from the encoded object instead.
++	content, err := utilities.EncodeToJSON(&kc)
++	if err != nil {
++		return nil, fmt.Errorf("unable to encode KubeletConfiguration to JSON: %w", err)
++	}
++
++	var u unstructured.Unstructured
++	if err = u.UnmarshalJSON(content); err != nil {
++		return nil, fmt.Errorf("unable to decode KubeletConfiguration JSON: %w", err)
++	}
++
++	for field, minVer := range kubeletConfigFieldsMinVersion {
++		if parsedVer.LT(minVer) {
++			unstructured.RemoveNestedField(u.Object, field)
++		}
++	}
++
++	return utilities.EncodeToYaml(&u)
+ }
+ 
+ func createConfigMapRBACRules(client kubernetes.Interface, configMapName string) error {
+diff --git a/internal/kubeadm/uploadconfig_test.go b/internal/kubeadm/uploadconfig_test.go
+new file mode 100644
+index 0000000..e5927c9
+--- /dev/null
++++ b/internal/kubeadm/uploadconfig_test.go
+@@ -0,0 +1,119 @@
++// Copyright 2022 Clastix Labs
++// SPDX-License-Identifier: Apache-2.0
++
++package kubeadm
++
++import (
++	"testing"
++
++	jsonpatchv5 "github.com/evanphx/json-patch/v5"
++	"github.com/stretchr/testify/require"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/client-go/kubernetes/fake"
++	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
++)
++
++func TestGetKubeletConfigmapContentFieldsByTenantVersion(t *testing.T) {
++	testCases := []struct {
++		version string
++		present []string
++		absent  []string
++	}{
++		{
++			version: "v1.31.14",
++			absent:  []string{"crashLoopBackOff", "mergeDefaultEvictionSettings", "memoryReservationPolicy", "imagePullCredentialsVerificationPolicy"},
++		},
++		{
++			version: "v1.32.13",
++			present: []string{"crashLoopBackOff"},
++			absent:  []string{"mergeDefaultEvictionSettings", "memoryReservationPolicy", "imagePullCredentialsVerificationPolicy"},
++		},
++		{
++			version: "v1.33.0",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings"},
++			absent:  []string{"memoryReservationPolicy", "imagePullCredentialsVerificationPolicy"},
++		},
++		{
++			version: "v1.34.9",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings"},
++			absent:  []string{"memoryReservationPolicy", "imagePullCredentialsVerificationPolicy"},
++		},
++		{
++			version: "v1.35.0-rc.1",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings"},
++			absent:  []string{"memoryReservationPolicy", "imagePullCredentialsVerificationPolicy"},
++		},
++		{
++			version: "v1.35.6",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings", "imagePullCredentialsVerificationPolicy"},
++			absent:  []string{"memoryReservationPolicy"},
++		},
++		{
++			version: "v1.36.0-rc.1",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings", "imagePullCredentialsVerificationPolicy"},
++			absent:  []string{"memoryReservationPolicy"},
++		},
++		{
++			version: "v1.36.0",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings", "imagePullCredentialsVerificationPolicy", "memoryReservationPolicy"},
++		},
++		{
++			version: "v1.37.0",
++			present: []string{"crashLoopBackOff", "mergeDefaultEvictionSettings", "imagePullCredentialsVerificationPolicy", "memoryReservationPolicy"},
++		},
++	}
++
++	for _, testCase := range testCases {
++		t.Run(testCase.version, func(t *testing.T) {
++			content, err := getKubeletConfigmapContent(KubeletConfiguration{}, nil, testCase.version)
++			require.NoError(t, err)
++
++			for _, field := range testCase.present {
++				require.Regexp(t, `(?m)^`+field+`:`, string(content))
++			}
++
++			for _, field := range testCase.absent {
++				require.NotRegexp(t, `(?m)^`+field+`:`, string(content))
++			}
++		})
++	}
++}
++
++func TestGetKubeletConfigmapContentCrashLoopBackOffByTenantVersion(t *testing.T) {
++	for _, version := range []string{"v1.34.9", "v1.35.0-rc.1"} {
++		content, err := getKubeletConfigmapContent(KubeletConfiguration{}, nil, version)
++		require.NoError(t, err)
++		require.Regexp(t, `(?m)^crashLoopBackOff: \{\}$`, string(content))
++	}
++
++	content, err := getKubeletConfigmapContent(KubeletConfiguration{}, nil, "v1.35.0")
++	require.NoError(t, err)
++	require.Regexp(t, `(?m)^crashLoopBackOff:\n  maxContainerRestartPeriod: `, string(content))
++}
++
++func TestUploadKubeletConfigRendersForTenantVersion(t *testing.T) {
++	client := fake.NewClientset()
++	config := &Configuration{Parameters: Parameters{TenantControlPlaneVersion: "v1.35.6"}}
++
++	_, err := UploadKubeletConfig(client, config, nil)
++	require.NoError(t, err)
++
++	configMap, err := client.CoreV1().ConfigMaps(metav1.NamespaceSystem).Get(t.Context(), "kubelet-config", metav1.GetOptions{})
++	require.NoError(t, err)
++	require.NotRegexp(t, `(?m)^memoryReservationPolicy:`, configMap.Data[kubeadmconstants.KubeletBaseConfigurationConfigMapKey])
++}
++
++func TestGetKubeletConfigmapContentDropsUnknownFieldsAfterPatch(t *testing.T) {
++	patch, err := jsonpatchv5.DecodePatch([]byte(`[{"op": "add", "path": "/memoryReservationPolicy", "value": "None"}, {"op": "add", "path": "/maxPods", "value": 250}]`))
++	require.NoError(t, err)
++
++	content, err := getKubeletConfigmapContent(KubeletConfiguration{}, patch, "v1.35.6")
++	require.NoError(t, err)
++	require.NotRegexp(t, `(?m)^memoryReservationPolicy:`, string(content))
++	require.Regexp(t, `(?m)^maxPods: 250$`, string(content))
++}
++
++func TestGetKubeletConfigmapContentInvalidVersion(t *testing.T) {
++	_, err := getKubeletConfigmapContent(KubeletConfiguration{}, nil, "not-a-version")
++	require.Error(t, err)
++}
