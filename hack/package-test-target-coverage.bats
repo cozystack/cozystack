@@ -23,7 +23,7 @@
 # dropping packages/system from it would take every package under that root out
 # of the run while each one keeps its target and this file stays green. That is
 # the same shape as the packages/tests incident recorded in the sweep's own
-# header, and it wants its own guard rather than a looser predicate here.
+# header. This guard now checks root membership as well as the Makefile probe.
 #
 # The predicate is "holds at least one tests/*_test.yaml", not "has a tests/
 # directory". That glob is helm-unittest's own default, so a package outside it
@@ -76,6 +76,7 @@
 load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
+. "$REPO_ROOT/hack/helm-test-package-roots.sh"
 
 @test "every package shipping a helm-unittest suite answers the sweep probe" {
     # An empty violation list means "no violations" only if the scan reached
@@ -103,6 +104,15 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
         # 0 for a target a path of that name satisfies. Either shape would pass
         # the probe below while the sweep skipped the package, which is the one
         # thing this file claims cannot happen.
+        relative_pkg=${pkg#"$REPO_ROOT"/}
+        package_root=${relative_pkg%/*}
+
+        if ! helm_test_package_root_known "$package_root"; then
+            diagnostics="$diagnostics
+  $relative_pkg: Helm test suite is under unvisited root $package_root"
+            continue
+        fi
+
         if [ ! -f "$pkg/Makefile" ]; then
             diagnostics="$diagnostics
   ${pkg#"$REPO_ROOT"/}: no Makefile, so the sweep returns before probing"
@@ -158,4 +168,45 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
         echo "    	helm unittest ." >&2
         return 1
     fi
+}
+
+
+@test "coverage guard rejects a suite under an unvisited package root" {
+    repo="$REPO_ROOT"
+    t=$(mktemp -d)
+
+    mkdir -p "$t/hack"
+    mkdir -p "$t/packages/gpu/example-pkg/tests"
+
+    cp "$repo/hack/package-test-target-coverage.bats" "$t/hack/"
+    cp "$repo/hack/helm-test-package-roots.sh" "$t/hack/"
+    cp "$repo/hack/test_helper.bash" "$t/hack/"
+
+    printf '.PHONY: test\ntest:\n\t@true\n' \
+        > "$t/packages/gpu/example-pkg/Makefile"
+
+    printf 'suite: example\ntests: []\n' \
+        > "$t/packages/gpu/example-pkg/tests/example_test.yaml"
+
+    rc=0
+    out=$(bats --filter \
+        'every package shipping a helm-unittest suite answers the sweep probe' \
+        "$t/hack/package-test-target-coverage.bats" 2>&1) || rc=$?
+
+    rm -rf "$t"
+
+    if [ "$rc" -eq 0 ]; then
+        echo "Coverage guard incorrectly accepted an unvisited root:" >&2
+        echo "$out" >&2
+        return 1
+    fi
+
+    case "$out" in
+        *"unvisited root packages/gpu"*) ;;
+        *)
+            echo "Guard failed without identifying the unvisited root:" >&2
+            echo "$out" >&2
+            return 1
+            ;;
+    esac
 }
