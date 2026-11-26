@@ -18,6 +18,28 @@ spec:
   upgrade:
     remediation:
       retries: -1
+  {{- if $tlsEnabled }}
+  postRenderers:
+  - kustomize:
+      patches:
+      - target:
+          group: monitoring.coreos.com
+          version: v1
+          kind: ServiceMonitor
+          name: {{ .Release.Name }}
+        patch: |
+          - op: replace
+            path: /spec/endpoints/0/scheme
+            value: https
+          - op: add
+            path: /spec/endpoints/0/tlsConfig
+            value:
+              ca:
+                secret:
+                  name: {{ .Release.Name }}-tls
+                  key: ca.crt
+              serverName: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+  {{- end }}
   valuesFrom:
   - kind: Secret
     name: cozystack-values
