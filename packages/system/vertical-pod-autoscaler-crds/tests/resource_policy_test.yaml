@@ -1,0 +1,47 @@
+# The tenant addon HelmRelease that ships this chart remediates a failed
+# install by uninstalling the release, and an uninstall deletes whatever the
+# chart rendered. Deleting a CRD makes the API server garbage-collect every
+# custom resource of that kind, so an unannotated CRD here costs the cluster
+# every VerticalPodAutoscaler it holds, along with the recommendation history
+# in the checkpoints.
+#
+# The first case scopes to no template at all, so it holds every document the
+# chart renders. The named cases pin each CRD by name: a selector that matches
+# nothing fails with "document not found" rather than passing on an empty
+# document set.
+suite: VerticalPodAutoscaler CRDs survive a release uninstall
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  # Pins the rendered document count so a CRD added upstream by `make update`
+  # turns this red instead of arriving untested.
+  - it: renders both CRDs
+    template: templates/vpa-v1-crd-gen.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: keeps the VerticalPodAutoscaler CRD
+    documentSelector:
+      path: metadata.name
+      value: verticalpodautoscalers.autoscaling.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the VerticalPodAutoscalerCheckpoint CRD
+    documentSelector:
+      path: metadata.name
+      value: verticalpodautoscalercheckpoints.autoscaling.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

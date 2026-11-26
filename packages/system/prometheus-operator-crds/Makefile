@@ -3,6 +3,9 @@ export NAMESPACE=cozy-victoria-metrics-operator
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update prometheus-community
