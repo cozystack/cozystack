@@ -1,0 +1,244 @@
+# EndpointAttachment on the cozyplane networking variant. Parked as .disabled
+# apart from the endpointattachment suite: no e2e lane installs cozyplane, and
+# on any other variant the cluster serves no FloatingIP and a VMInstance's
+# networks name a different kind of VPC. See README.md.
+#
+# A VM whose only interface is in a cozyplane VPC. The launcher pod address a
+# cozy-proxy Service maps to never reaches the guest, so a whole-IP attachment
+# binds a FloatingIP on the VM's VPC address instead; the two modes that
+# cannot work there are refused before anything is bound.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: endpointattachment-vpc
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: local.sdn.cozystack.io/v1alpha1
+      kind: EndpointAttachment
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-ea-vpc-vm
+  - get:
+      apiVersion: sdn.cozystack.io/v1alpha1
+      kind: FloatingIP
+  - describe:
+      apiVersion: sdn.cozystack.io/v1alpha1
+      kind: Route
+  - get:
+      apiVersion: v1
+      kind: Service
+  steps:
+  - name: create-vpc-vm
+    try:
+    - apply:
+        file: vpc.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: virtualprivatecloud-ea-vpc
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - apply:
+        file: routes.yaml
+    - assert:
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: Route
+          metadata:
+            name: ea-vpc-internet
+          status:
+            state: Active
+    - apply:
+        file: vmdisk.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-ea-vpc-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-ea-vpc-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - apply:
+        file: vminstance.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-instance-ea-vpc-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-ea-vpc-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # The controller decides on the VPC path from the launcher pod, and binds
+    # only once cozyplane has stamped the pod's VPC address on it.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              vm.kubevirt.io/name: vm-instance-ea-vpc-vm
+            annotations:
+              sdn.cozystack.io/vpc: virtualprivatecloud-ea-vpc
+              '("sdn.cozystack.io/vpc-ip" != null)': true
+
+  # PortList filters ports through cozy-proxy, which cannot reach a VPC
+  # address, so it is refused and nothing is bound.
+  - name: refuse-portlist-in-vpc
+    try:
+    - apply:
+        file: attach-portlist.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vpc-portlist
+          status:
+            phase: Pending
+            (conditions[?type == 'Provisioned']):
+            - status: "False"
+              reason: MethodUnsupportedInVPC
+    - error:
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: FloatingIP
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-vpc-portlist
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-vpc-portlist
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-vpc-portlist
+
+  # A FloatingIP wears one address, so a Dual claim is refused.
+  - name: refuse-dual-in-vpc
+    try:
+    - apply:
+        file: attach-dual.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vpc-dual
+          status:
+            phase: Pending
+            (conditions[?type == 'Provisioned']):
+            - status: "False"
+              reason: DualStackUnsupportedInVPC
+    - error:
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: FloatingIP
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-vpc-dual
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-vpc-dual
+
+  # WholeIP: a FloatingIP binds the attachment's address to the VM's VPC
+  # address, renders no cozy-proxy Service, and the address reaches the guest.
+  - name: attach-wholeip-in-vpc
+    try:
+    - apply:
+        file: attach-wholeip.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vpc-wholeip
+          status:
+            phase: Attached
+            (addresses[0] != null): true
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          ip=$(kubectl get endpointattachment ea-vpc-wholeip --namespace "$NAMESPACE" --output jsonpath='{.status.addresses[0]}')
+          test -n "$ip"
+          vpcip=$(kubectl get pod --namespace "$NAMESPACE" --selector vm.kubevirt.io/name=vm-instance-ea-vpc-vm --output jsonpath='{.items[0].metadata.annotations.sdn\.cozystack\.io/vpc-ip}')
+          test -n "$vpcip"
+          fip=$(kubectl get floatingip --namespace "$NAMESPACE" --selector cozystack.io/endpoint-attachment=ea-vpc-wholeip --output jsonpath='{range .items[*]}{.status.phase} {.status.address} {.spec.target} {.spec.vpcRef.name}{"\n"}{end}')
+          [ "$fip" = "Ready $ip $vpcip virtualprivatecloud-ea-vpc" ]
+          # The FloatingIP owns the Service that wears the claim; the
+          # attachment renders none of its own.
+          svcs=$(kubectl get service --namespace "$NAMESPACE" --selector cozystack.io/endpoint-attachment=ea-vpc-wholeip --output name)
+          [ -z "$svcs" ]
+        check:
+          ($error == null): true
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          ip=$(kubectl get endpointattachment ea-vpc-wholeip --namespace "$NAMESPACE" --output jsonpath='{.status.addresses[0]}')
+          # sshd inside the guest comes up after cloud-init; no condition
+          # models "the guest listens", so the port is polled.
+          # TODO(e2e-replace-fixed-timeouts): replace with a guest-readiness signal if KubeVirt grows one.
+          for _ in $(seq 1 60); do
+            if nc -z -w 3 "$ip" 22; then exit 0; fi
+            sleep 3
+          done
+          echo "port 22 on $ip never answered through the FloatingIP" >&2
+          exit 1
+        check:
+          ($error == null): true
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-vpc-wholeip
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: FloatingIP
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-vpc-wholeip

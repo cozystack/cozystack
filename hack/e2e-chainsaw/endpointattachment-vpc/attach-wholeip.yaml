@@ -1,0 +1,12 @@
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-vpc-wholeip
+spec:
+  applicationRef:
+    kind: VMInstance
+    name: ea-vpc-vm
+  endpoint:
+    serviceName: vm-instance-ea-vpc-vm
+  loadBalancer:
+    method: WholeIP

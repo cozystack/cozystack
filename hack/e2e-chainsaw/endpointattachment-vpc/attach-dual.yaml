@@ -1,0 +1,15 @@
+# The minted claim is Dual: a FloatingIP binds one address, so this is
+# refused before the claim needs to bind, whatever families the class holds.
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-vpc-dual
+spec:
+  applicationRef:
+    kind: VMInstance
+    name: ea-vpc-vm
+  endpoint:
+    serviceName: vm-instance-ea-vpc-vm
+  loadBalancer:
+    method: WholeIP
+    family: Dual
