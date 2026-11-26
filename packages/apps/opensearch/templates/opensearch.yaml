@@ -13,6 +13,18 @@ spec:
     serviceName: {{ .Release.Name }}
     version: {{ include "opensearch.versionMap" $ }}
     httpPort: 9200
+    {{- /*
+    JVM options go in as a jvm.options.d file because neither other route works:
+    bin/opensearch-env unsets JAVA_TOOL_OPTIONS, and setting nodePools[].jvm makes
+    the operator stop sizing the heap from the memory request.
+    */}}
+    additionalVolumes:
+      - name: jvm-options
+        path: /usr/share/opensearch/config/jvm.options.d/cozystack.options
+        subPath: cozystack.options
+        restartPods: true
+        configMap:
+          name: {{ .Release.Name }}-jvm-options
     setVMMaxMapCount: true
     drainDataNodes: true
     {{- if gt (len .Values.images.opensearch) 0 }}
