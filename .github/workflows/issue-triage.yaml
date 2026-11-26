@@ -55,6 +55,7 @@ concurrency:
 
 jobs:
   triage:
+    if: github.repository == 'cozystack/cozystack'
     runs-on: ubuntu-latest
     # A run that reaches the write cap paces roughly seven minutes of work, so
     # anything near this ceiling is a call that hung rather than a long sweep.

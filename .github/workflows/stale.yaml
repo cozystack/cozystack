@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   stale:
+    if: github.repository == 'cozystack/cozystack'
     runs-on: ubuntu-latest
     permissions:
       issues: write

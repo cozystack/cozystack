@@ -24,6 +24,7 @@ permissions:
 
 jobs:
   test:
+    if: (github.event_name == 'pull_request' || github.repository == 'cozystack/cozystack')
     name: Typecheck and test
     runs-on: ubuntu-latest
     steps:
