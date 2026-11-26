@@ -9,6 +9,28 @@
 {{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
 {{- end }}
 {{- $isProxmox := eq $substrate "proxmox" }}
+{{- $vpc := include "kubernetes.vpc" . }}
+{{- if $vpc }}
+{{- if not (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") }}
+{{- fail "network.name names a cozyplane VPC, but the cluster does not serve sdn.cozystack.io: the cozyplane networking variant is required" }}
+{{- end }}
+{{- if $isProxmox }}
+{{- fail "network.name applies to kubevirt workers, which are pods; substrate proxmox workers are not" }}
+{{- end }}
+{{- if $sharedDataStore }}
+{{- fail (printf "network.name puts the control plane inside a VPC, which cannot reach the shared DataStore %q this cluster runs on; only a cluster with its own etcd can run in a VPC" $sharedDataStore) }}
+{{- end }}
+{{- end }}
+{{- /* etcd-operator stamps the VPC annotation only on members it creates and
+       never re-stamps a running one, so a cluster moved into or out of a VPC
+       would leave its etcd behind. Compared against the live control plane;
+       inert where there is no cluster to read. */}}
+{{- with lookup "controlplane.cluster.x-k8s.io/v1alpha1" "KamajiControlPlane" .Release.Namespace .Release.Name }}
+{{- $liveVPC := dig "spec" "deployment" "podAdditionalMetadata" "annotations" "sdn.cozystack.io/vpc" "" . }}
+{{- if ne $liveVPC $vpc }}
+{{- fail (printf "network.name can only be set when the cluster is created: the running control plane is in VPC %q and this render would move it to %q" $liveVPC $vpc) }}
+{{- end }}
+{{- end }}
 {{- if $isProxmox }}
 {{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
        these fields and has no DHCP mode, so an unset pool is not a default —
@@ -710,6 +732,14 @@ spec:
           unreachable address. Publishing the Service moves the endpoint onto
           a network the workers share. */}}
     serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
+    {{- with $vpc }}
+    {{- /* Attaches the apiserver Service to the VPC: inside it, the VPC
+          resolver answers the Service's name with a VIP from the VPC's own
+          range, the only address of the control plane a VPC client can reach.
+          The pools' talos-reconcile Job advertises that VIP. */}}
+    serviceAnnotations:
+      sdn.cozystack.io/vpc: {{ . | quote }}
+    {{- end }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
@@ -735,6 +765,10 @@ spec:
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
   deployment:
     podAdditionalMetadata:
+      {{- with $vpc }}
+      annotations:
+        sdn.cozystack.io/vpc: {{ . | quote }}
+      {{- end }}
       labels:
         {{- if $sharedDataStore }}
         policy.cozystack.io/allow-to-etcd: "true"

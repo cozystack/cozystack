@@ -15,6 +15,13 @@
 {{- if and (eq $replicas 1) (gt (int (dig "spec" "replicas" 1 .)) 1) (or (and $localClass (eq $liveClass $localClass)) (and $replicatedClass (ne $liveClass $replicatedClass))) }}
 {{- fail (printf "etcd.replicas cannot drop to 1: the etcd of %s keeps the StorageClass %q it was created with, so a single member would hold the only copy of the control-plane state on a volume the platform does not count as replicated. Keep 3 members." $.Release.Name $liveClass) }}
 {{- end }}
+{{- /* cluster.yaml checks the live control plane, which a failed first
+       install may not have created while this etcd exists. */}}
+{{- $liveVPC := dig "spec" "additionalMetadata" "annotations" "sdn.cozystack.io/vpc" "" . }}
+{{- $vpc := include "kubernetes.vpc" $ }}
+{{- if ne $liveVPC $vpc }}
+{{- fail (printf "network.name can only be set when the cluster is created: the etcd of %s is in VPC %q and this render would move it to %q" $.Release.Name $liveVPC $vpc) }}
+{{- end }}
 {{- end }}
 {{- $values := dict
       "version" (include "cozy-lib.etcd.defaultVersion" .)
@@ -25,7 +32,14 @@
 {{- $etcd := dict "name" $name "values" $values "root" $ }}
 {{- $clientLabels := dict "policy.cozystack.io/allow-to-etcd-cluster" $name }}
 ---
-{{ include "cozy-lib.etcd.cluster" (merge (dict "labels" (dict "cozystack.io/service" "kubernetes-etcd")) $etcd) }}
+{{- /* The operator merges additionalMetadata onto the member Pods and both
+       etcd Services, so one annotation puts the members in the control
+       plane's VPC and attaches the Services the apiserver dials. */}}
+{{- $etcdMetadata := dict "labels" (dict "cozystack.io/service" "kubernetes-etcd") }}
+{{- with include "kubernetes.vpc" . }}
+{{- $_ := set $etcdMetadata "annotations" (dict "sdn.cozystack.io/vpc" .) }}
+{{- end }}
+{{ include "cozy-lib.etcd.cluster" (merge $etcdMetadata $etcd) }}
 ---
 {{ include "cozy-lib.etcd.certificates" (merge (dict "extraDNSNames" (list (printf "%s-client" $name) (printf "%s-client.%s.svc" $name .Release.Namespace))) $etcd) }}
 ---
