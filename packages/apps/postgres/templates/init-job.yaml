@@ -44,8 +44,7 @@ spec:
     is idempotent and the purged pod stays Pending on the missing mount, so a retry
     buys nothing.
   */}}
-  {{- $deadline := ternary 570 540 .Release.IsInstall }}
-  activeDeadlineSeconds: {{ $deadline }}
+  activeDeadlineSeconds: {{ if .Release.IsInstall }}570{{ else }}540{{ end }}
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:
@@ -78,8 +77,6 @@ spec:
           value: "5432"
         - name: PGDATABASE
           value: postgres
-        - name: JOB_DEADLINE
-          value: {{ $deadline | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
