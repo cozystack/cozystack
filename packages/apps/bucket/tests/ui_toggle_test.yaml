@@ -1,7 +1,6 @@
 suite: bucket ui flag
 templates:
   - templates/helmrelease.yaml
-  - templates/dashboard-resourcemap.yaml
 
 release:
   name: bucket-my-bucket
@@ -23,28 +22,3 @@ tests:
       - equal:
           path: spec.values.ui
           value: false
-
-  - it: grants dashboard read access to the UI Ingress by default
-    template: templates/dashboard-resourcemap.yaml
-    documentIndex: 0
-    asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["networking.k8s.io"]
-            resources: ["ingresses"]
-            resourceNames: ["bucket-my-bucket-ui"]
-            verbs: ["get", "list", "watch"]
-
-  - it: drops the Ingress rule when ui is false
-    template: templates/dashboard-resourcemap.yaml
-    documentIndex: 0
-    set:
-      ui: false
-    asserts:
-      - lengthEqual:
-          path: rules
-          count: 1
-      - notContains:
-          path: rules[0].resources
-          content: ingresses

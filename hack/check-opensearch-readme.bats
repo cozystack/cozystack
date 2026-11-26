@@ -46,8 +46,7 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # The key-free trust anchor the CA-extraction controller publishes, selected by
   # label rather than by name. This entry is the whole tenant read path: it drives the
   # lineage webhook's tenantresource verdict, and the tenant reads the projection
-  # through core.cozystack.io/tenantsecrets, which the base tenant roles grant. The
-  # chart Role grants no name for it — tests/dashboard-resourcemap_test.yaml pins that.
+  # through core.cozystack.io/tenantsecrets, which the base tenant roles grant.
   grep -q "internal.cozystack.io/tenant-ca" "$COZYRDS"
 }
 

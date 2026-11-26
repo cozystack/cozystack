@@ -1,3 +1,9 @@
+{{- /*
+TODO: remove this file once Cozystack has an interface that serves
+application ConfigMaps to tenants, the way tenantsecrets serves Secrets.
+Until then it is the only way a tenant can read the FoundationDB cluster
+file in <release>-config. It grants ConfigMaps only, never Secrets.
+*/}}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -13,14 +19,6 @@ data:
     - apiVersion: v1
       kind: ConfigMap
       name: {{ .Release.Name }}-config
-    - apiVersion: apps.foundationdb.org/v1beta2
-      kind: FoundationDBCluster
-      name: {{ .Release.Name }}
-    {{- if .Values.backup.enabled }}
-    - apiVersion: apps.foundationdb.org/v1beta2
-      kind: FoundationDBBackup
-      name: {{ .Release.Name }}-backup
-    {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

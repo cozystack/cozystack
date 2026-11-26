@@ -6,7 +6,6 @@ release:
 
 templates:
   - templates/check-release-name.yaml
-  - templates/dashboard-resourcemap.yaml
   - templates/datastore.yaml
   - templates/etcd-defrag.yaml
   - templates/hook/job.yaml

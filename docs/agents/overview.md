@@ -52,15 +52,14 @@ Every package is a Helm chart following the umbrella chart pattern:
 
 ```text
 packages/<category>/<package-name>/
-├── Chart.yaml                           # Chart definition and parameter docs
-├── Makefile                             # Development workflow targets
-├── charts/                              # Vendored upstream charts
-├── images/                              # Dockerfiles and image build context
-├── patches/                             # Optional upstream chart patches
-├── templates/                           # Additional manifests
-├── templates/dashboard-resourcemap.yaml # Dashboard resource mapping
-├── values.yaml                          # Override values for upstream
-└── values.schema.json                   # JSON schema for validation and UI
+├── Chart.yaml         # Chart definition and parameter docs
+├── Makefile           # Development workflow targets
+├── charts/            # Vendored upstream charts
+├── images/            # Dockerfiles and image build context
+├── patches/           # Optional upstream chart patches
+├── templates/         # Additional manifests
+├── values.yaml        # Override values for upstream
+└── values.schema.json # JSON schema for validation and UI
 ```
 
 ## Build and Development Commands

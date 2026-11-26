@@ -107,6 +107,16 @@ securityContext:
 2. Deploy this application package with your desired configuration
 3. The cluster will be automatically provisioned and configured
 
+## Connecting a client
+
+The cluster file is in the `cluster-file` key of the `<release>-config` ConfigMap, also shown on the ConfigMaps tab of the application in the console:
+
+```bash
+kubectl get configmap <release>-config --output jsonpath='{.data.cluster-file}' > fdb.cluster
+```
+
+Point the client at it with `FDB_CLUSTER_FILE=fdb.cluster`. Tenant users with the `use` level and above can read it.
+
 ## Monitoring
 
 This package includes WorkloadMonitor integration for cluster health monitoring and resource tracking. Monitoring can be disabled by setting:

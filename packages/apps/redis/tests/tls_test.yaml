@@ -56,30 +56,6 @@ tests:
       - notExists:
           path: spec.tls
 
-  - it: "external=true alone grants the tenant no TLS secrets"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: true
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-
   - it: "redisfailover.yaml does not have spec.tls when tls.enabled is unset"
     templates:
       - templates/redisfailover.yaml
@@ -91,30 +67,6 @@ tests:
     asserts:
       - notExists:
           path: spec.tls
-
-  - it: "dashboard-resourcemap.yaml does not list TLS secrets when tls.enabled is unset"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: false
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
 
   # ------------------------------------------------------------------
   # Case 2: tls.enabled=true -> the full cert-manager chain
@@ -388,110 +340,6 @@ tests:
       - contains:
           path: spec.ipAddresses
           content: "::1"
-
-  - it: "dashboard-resourcemap.yaml grants no TLS secret in RBAC when authClients defaults to no"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: true
-      tls:
-        enabled: true
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      # The trust anchor reaches the tenant as the <release>.tenant-ca
-      # projection, not as a grant on a Secret name, so the Role lists exactly
-      # the auth Secret and nothing TLS-related.
-      - equal:
-          path: rules[1].resourceNames
-          value:
-            - my-redis-auth
-      # The CA-only Secret the operator publishes. Key-free today, but the name
-      # is the operator's to fill and RBAC cannot filter by key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      # CA certificate and private key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
-      # Server leaf and private key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-
-  - it: "dashboard-resourcemap.yaml withholds both key-bearing secrets in RBAC when authClients=yes"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: true
-      tls:
-        enabled: true
-        authClients: "yes"
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      # The server leaf carries tls.key. Granting it would let the tenant
-      # impersonate this release's Redis and Sentinel endpoints, so it stays
-      # withheld even though authClients=yes leaves the tenant without a
-      # client certificate the CA would accept.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
-
-  - it: "dashboard-resourcemap.yaml withholds both key-bearing secrets in RBAC when authClients=optional"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: true
-      tls:
-        enabled: true
-        authClients: "optional"
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
 
   # ------------------------------------------------------------------
   # Case 3: external=true, tls.enabled=false -> TLS explicitly off
@@ -788,29 +636,6 @@ tests:
       - equal:
           path: spec.tls.caCertSecretName
           value: my-redis.ca-cert
-
-  - it: "the tenant is not granted the operator's CA-only secret by name"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      external: true
-      tls:
-        enabled: true
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
-      - lengthEqual:
-          path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
 
   # The chart creates <release>-external-lb itself when external is on. It
   # resolves in-cluster like any Service, so a client dialing it by name needs

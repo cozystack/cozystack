@@ -1,13 +1,11 @@
 suite: OTLP trace collector is accounted for in tenant workload monitoring
 # Every workload the monitoring chart ships is enumerated in workloadmonitors.yaml
-# (so tenant workload health is tracked) and whitelisted in the dashboard-resources
-# Role (so the tenant dashboard may read its WorkloadMonitor). The OTLP collector
-# must be covered the same way — under the same gate it renders on
+# so tenant workload health is tracked. The OTLP collector must be covered the
+# same way — under the same gate it renders on
 # (tracingCollector.enabled AND a configured tracingStorages backend) and not when
 # tracing is off.
 templates:
   - templates/workloadmonitors.yaml
-  - templates/dashboard-resourcemap.yaml
 
 release:
   name: monitoring
@@ -108,26 +106,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: whitelists the central collector's WorkloadMonitor with no local backend
-    template: templates/dashboard-resourcemap.yaml
-    release:
-      namespace: tenant-foo
-    set:
-      _namespace:
-        tracingCentral: true
-      tracingCollector:
-        enabled: true
-        replicas: 1
-        samplingPercentage: 10
-      tracingStorages: []
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - contains:
-          path: rules[3].resourceNames
-          content: otel-traces
-
   - it: accounts for the shared-store vmauth where tenant-root hosts it
     template: templates/workloadmonitors.yaml
     release:
@@ -220,93 +198,18 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: whitelists the shared-store vmauth WorkloadMonitor in the dashboard-resources Role
-    template: templates/dashboard-resourcemap.yaml
-    release:
-      namespace: tenant-root
-    set:
-      tracingCentralHost: true
-      tracingStorages:
-        - name: generic
-          mode: cluster
-          retentionPeriod: "14d"
-          storage: 10Gi
-          storageClassName: replicated
+  - it: renders no collector WorkloadMonitor when tracing is off (empty tracingStorages)
+    template: templates/workloadmonitors.yaml
     documentSelector:
-      path: kind
-      value: Role
+      path: metadata.name
+      value: otel-traces
+      skipEmptyTemplates: true
     asserts:
-      - contains:
-          path: rules[3].resourceNames
-          content: vmauth-traces-central
+      - hasDocuments:
+          count: 0
 
-  - it: whitelists no vmauth WorkloadMonitor where tenant-root does not host
-    template: templates/dashboard-resourcemap.yaml
-    release:
-      namespace: tenant-root
-    set:
-      tracingStorages:
-        - name: generic
-          mode: cluster
-          retentionPeriod: "14d"
-          storage: 10Gi
-          storageClassName: replicated
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - notContains:
-          path: rules[3].resourceNames
-          content: vmauth-traces-central
-
-  - it: whitelists the collector WorkloadMonitor in the dashboard-resources Role
-    template: templates/dashboard-resourcemap.yaml
-    set:
-      tracingCollector:
-        enabled: true
-        replicas: 1
-        samplingPercentage: 10
-      tracingStorages:
-        - name: generic
-          mode: cluster
-          retentionPeriod: "14d"
-          storage: 10Gi
-          storageClassName: replicated
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - contains:
-          path: rules[3].resourceNames
-          content: otel-traces
-      # The Role must whitelist each WorkloadMonitor by its real name. Guard the
-      # alertmanager entry, which shipped misspelled ("alermanager") so the
-      # alertmanager WorkloadMonitor was silently not RBAC-covered for the
-      # dashboard — a defect in the exact resourceNames list this PR edits.
-      - contains:
-          path: rules[3].resourceNames
-          content: alertmanager
-      - notContains:
-          path: rules[3].resourceNames
-          content: alermanager
-
-  # Absence is asserted on the resourcemap Role (a single deterministic document)
-  # via notContains rather than on workloadmonitors.yaml: that template emits a
-  # leading `---`, which makes containsDocument+not a no-op (an empty lead doc).
-  # Both templates gate the collector on the identical condition, so the Role's
-  # resourceNames list is a faithful proxy for whether the WorkloadMonitor renders.
-  - it: does not whitelist the collector when tracing is off (empty tracingStorages)
-    template: templates/dashboard-resourcemap.yaml
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - notContains:
-          path: rules[3].resourceNames
-          content: otel-traces
-
-  - it: does not whitelist the collector when the collector is disabled
-    template: templates/dashboard-resourcemap.yaml
+  - it: renders no collector WorkloadMonitor when the collector is disabled
+    template: templates/workloadmonitors.yaml
     set:
       tracingCollector:
         enabled: false
@@ -319,9 +222,9 @@ tests:
           storage: 10Gi
           storageClassName: replicated
     documentSelector:
-      path: kind
-      value: Role
+      path: metadata.name
+      value: otel-traces
+      skipEmptyTemplates: true
     asserts:
-      - notContains:
-          path: rules[3].resourceNames
-          content: otel-traces
+      - hasDocuments:
+          count: 0
