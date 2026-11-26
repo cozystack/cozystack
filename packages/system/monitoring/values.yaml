@@ -53,7 +53,7 @@ tracingCollector:
   enabled: true
   replicas: 1
   samplingPercentage: 10
-  image: ghcr.io/cozystack/cozystack/otelcol-tracing:v0.136.0-cozystack.0@sha256:006107b8a0467d87746f873d15d032ab729babef86b1cbe1fd8a9c16562d61dd
+  image: ghcr.io/cozystack/cozystack/otelcol-tracing:v0.136.0-cozystack.0@sha256:bb924cdc62f597d015927859f988acf08565d667d4f35e7d7a8b45d49d467491
   redactAttributes: []
   resources:
     limits:

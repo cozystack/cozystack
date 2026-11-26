@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/kubevirt-cloud-provider:v1.7.1@sha256:7f32eddd46edb85c728d824d681bff242e572b63619fa82ae5e6647fcd9acea4
+ghcr.io/cozystack/cozystack/kubevirt-cloud-provider:v1.7.2-rc.1@sha256:9a70f6b38fce0ba5d98c53589dc8c11728eab8d3a2c05146ed322e3f1af919d8

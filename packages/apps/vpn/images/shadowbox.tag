@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/shadowbox:v1.7.1@sha256:e0ef5583279ab27d9a7711a20bd443b3e2b1c3dfa0a53552c9e54a05b9d38781
+ghcr.io/cozystack/cozystack/shadowbox:v1.7.2-rc.1@sha256:3ed8e42b21525286c7164e214e7bc601e434d37339d46f6df1bb5bf247a8e977
