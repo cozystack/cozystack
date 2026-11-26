@@ -19,8 +19,16 @@
 # an explicit kubeconfig, so the in-cluster branch is not what serves it and the
 # flag is harmless there. That is a per-file judgement, not per-command, which
 # is the coarse part of this check and is why it is written down rather than
-# inferred. Vendored charts under packages/*/*/charts are upstream and out of
-# scope.
+# inferred. A script under files/ that gets KUBECONFIG from its template's env
+# has no reason to name it, so a line passing a non-empty --context or
+# --kubeconfig is skipped instead: client-go then serves the call from that
+# kubeconfig or fails with "context was not found", never from localhost:8080.
+# A literally empty value does fall back, so it is still reported; a variable
+# that expands to nothing at runtime is not visible here, so guard it with
+# ${VAR:?} as the shipped hooks do. The match is per
+# line, so a flag in a trailing comment or in another command on the same line
+# also exempts it. Vendored charts under packages/*/*/charts are upstream and
+# out of scope.
 #
 # Bounding the call is still available: --timeout bounds a watch, and
 # activeDeadlineSeconds bounds the whole Job, which is what
@@ -55,7 +63,8 @@ request_timeout_candidates() {
 }
 
 # request_timeout_offenders FILE...: the files, with matching lines, that pass
-# a non-zero --request-timeout without naming KUBECONFIG.
+# a non-zero --request-timeout without naming KUBECONFIG or a non-empty
+# --context or --kubeconfig.
 request_timeout_offenders() {
   local f hits
   for f in "$@"; do
@@ -63,7 +72,7 @@ request_timeout_offenders() {
     if grep -q 'KUBECONFIG' "$f"; then
       continue
     fi
-    hits="$(grep -nE -- "$REQUEST_TIMEOUT_RE" "$f" || true)"
+    hits="$(grep -nE -- "$REQUEST_TIMEOUT_RE" "$f" | grep -vE -- "--(context|kubeconfig)(=|[[:space:]]+)[\"']?[^\"'[:space:]]" || true)"
     if [ -n "$hits" ]; then
       printf '%s\n%s\n' "$f" "$hits"
     fi
@@ -145,4 +154,29 @@ write_tree_file() {
   write_tree_file packages/x/y/files/external.sh "$(printf 'export KUBECONFIG=/etc/kubeconfig\nkubectl get pods --request-timeout=30s')"
   write_tree_file packages/x/y/files/manifest.yaml 'command: ["kubectl", "get", "pods", "--request-timeout=30s"]'
   [ -z "$(scan_tree)" ]
+}
+
+@test "a call that names a kubeconfig context or file is left alone" {
+  write_tree_file packages/x/y/files/hook.sh "$(printf '%s\n' \
+    'timeout "$remaining" kubectl --context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --request-timeout=10s "$@"' \
+    'kubectl --kubeconfig=/etc/kubeconfig get pods --request-timeout 30s')"
+  [ -z "$(scan_tree)" ]
+}
+
+@test "a bare call is still caught next to a call that names a context" {
+  write_tree_file packages/x/y/files/hook.sh "$(printf '%s\n' \
+    'kubectl --context "$KUBE_CONTEXT" get pods --request-timeout=10s' \
+    'kubectl get pods --request-timeout=10s')"
+  run scan_tree
+  [ "${#lines[@]}" -eq 2 ]
+  [ "${lines[1]}" = '2:kubectl get pods --request-timeout=10s' ]
+}
+
+@test "an empty context or kubeconfig value is still caught" {
+  write_tree_file packages/x/y/files/hook.sh "$(printf '%s\n' \
+    'kubectl --context "" get pods --request-timeout=10s' \
+    'kubectl --kubeconfig= get pods --request-timeout=10s' \
+    'kubectl --context= get pods --request-timeout=10s')"
+  run scan_tree
+  [ "${#lines[@]}" -eq 4 ]
 }
