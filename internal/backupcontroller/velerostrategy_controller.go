@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -306,12 +307,12 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	if len(veleroBackupList.Items) > 1 {
-		logger.Error(fmt.Errorf("too many Velero backups for BackupJob"), "found more than one Velero Backup referencing a single BackupJob as owner")
-		j.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-		if err := r.Status().Update(ctx, j); err != nil {
-			logger.Error(err, "failed to update BackupJob status")
+		names := make([]string, 0, len(veleroBackupList.Items))
+		for _, vb := range veleroBackupList.Items {
+			names = append(names, vb.Name)
 		}
-		return ctrl.Result{}, nil
+		sort.Strings(names)
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("more than one Velero Backup references this BackupJob: %s", strings.Join(names, ", ")))
 	}
 
 	veleroBackup := veleroBackupList.Items[0].DeepCopy()
@@ -359,6 +360,8 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
+		// The Velero backup is deleted by deleteFailedJobVeleroBackups once
+		// the Failed phase written here triggers the next reconcile.
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
 		return r.markBackupJobFailed(ctx, j, message)
 	}
