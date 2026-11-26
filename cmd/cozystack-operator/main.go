@@ -781,6 +781,10 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 			Name: packageSourceName,
 			Annotations: map[string]string{
 				"operator.cozystack.io/skip-cozystack-values": "true",
+				// The platform copies its source into cozystack-packages
+				// when it renders, so it has to render whenever the source
+				// moves, not only when the platform chart changes.
+				operator.AnnotationRenderOnSourceChange: "true",
 			},
 		},
 		Spec: cozyv1alpha1.PackageSourceSpec{
