@@ -6,6 +6,14 @@
 ## @immutable
 cluster: ""
 
+## @typedef {struct} Network - The cozyplane VPC this pool's workers join
+## @field {string} [name] - Name of the VirtualPrivateCloud (without the "virtualprivatecloud-" prefix) in this namespace
+## @maxLength 63
+## @pattern ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+
+## @param {Network} [network] - Joins this pool's worker VMs to a cozyplane VPC. Must match the parent Kubernetes cluster's `network`, which puts the control plane in the same VPC. Setting or changing it on an existing pool rolls every worker VM of the pool. Requires the cozyplane networking variant and `substrate: kubevirt`.
+network: {}
+
 # Internal wiring value `clusterReleaseName` (consumed by kubernetes-nodes.clusterName
 # in templates/_helpers.tpl) is deliberately NOT declared here and NOT a @param:
 # it must stay out of the public KubernetesNodes API (values.schema.json / CRD /

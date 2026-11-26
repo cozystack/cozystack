@@ -39,6 +39,27 @@
 {{-   fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
 {{- end }}
 {{- $isProxmox := eq $substrate "proxmox" }}
+{{- $vpc := "" }}
+{{- with dig "name" "" (.Values.network | default dict) }}
+{{-   $vpc = printf "virtualprivatecloud-%s" . }}
+{{- end }}
+{{- if $vpc }}
+{{-   if not (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") }}
+{{-     fail "network.name names a cozyplane VPC, but the cluster does not serve sdn.cozystack.io: the cozyplane networking variant is required" }}
+{{-   end }}
+{{-   if $isProxmox }}
+{{-     fail "network.name applies to kubevirt workers, which are pods; substrate proxmox workers are not" }}
+{{-   end }}
+{{- end }}
+{{- /* A worker inside a VPC reaches only what is attached to that VPC, so its
+       control plane has to be in the same one. Compared against the live
+       apiserver Service; inert where there is no cluster to read. */}}
+{{- with lookup "v1" "Service" $.Release.Namespace $clusterName }}
+{{-   $parentVPC := dig "metadata" "annotations" "sdn.cozystack.io/vpc" "" . }}
+{{-   if ne $parentVPC $vpc }}
+{{-     fail (printf "network.name must match the parent Kubernetes cluster's network: the control plane of %s is in VPC %q, this pool asks for %q" $clusterName $parentVPC $vpc) }}
+{{-   end }}
+{{- end }}
 {{- if $isProxmox }}
 {{- /* Proxmox has no equivalent of a VirtualMachineClusterInstancetype, so the
          instancetype lookup that normally supplies effective CPU and memory has
@@ -589,6 +610,9 @@ spec:
         metadata:
           annotations:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+            {{- with dig "name" "" (.Values.network | default dict) }}
+            sdn.cozystack.io/vpc: {{ printf "virtualprivatecloud-%s" . | quote }}
+            {{- end }}
           labels:
             {{- /* The VM pod is intentionally attributed to the parent Kubernetes
                    application (kind Kubernetes, name <cluster>), not to this
