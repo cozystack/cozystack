@@ -22,3 +22,69 @@ tests:
             apiGroups: ["subresources.kubevirt.io"]
             resources: ["virtualmachines/addvolume", "virtualmachines/removevolume", "virtualmachineinstances/removevolume"]
             verbs: ["update"]
+
+  - it: names the PersistentVolume ClusterRole after the namespace and the release
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test-kubernetes-test-kcsi
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["persistentvolumes"]
+              verbs: ["get"]
+
+  - it: binds that ClusterRole to the release's own ServiceAccount
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test-kubernetes-test-kcsi-binding
+      - equal:
+          path: roleRef.name
+          value: tenant-test-kubernetes-test-kcsi
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: kubernetes-test-kcsi
+              namespace: tenant-test
+
+  - it: gives a same-named cluster in another tenant its own ClusterRole and binding
+    release:
+      name: kubernetes-test
+      namespace: tenant-other
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-other-kubernetes-test-kcsi
+        documentSelector:
+          path: kind
+          value: ClusterRole
+      - equal:
+          path: metadata.name
+          value: tenant-other-kubernetes-test-kcsi-binding
+        documentSelector:
+          path: kind
+          value: ClusterRoleBinding
+      - equal:
+          path: roleRef.name
+          value: tenant-other-kubernetes-test-kcsi
+        documentSelector:
+          path: kind
+          value: ClusterRoleBinding
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: kubernetes-test-kcsi
+              namespace: tenant-other
+        documentSelector:
+          path: kind
+          value: ClusterRoleBinding
