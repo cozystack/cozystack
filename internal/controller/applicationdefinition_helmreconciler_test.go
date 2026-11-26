@@ -10,6 +10,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/account"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/kustomize"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -957,5 +958,48 @@ func TestAppDefHelm_UpdateFailureRequeues(t *testing.T) {
 	}
 	if len(got.Spec.HealthCheckExprs) != 1 {
 		t.Fatalf("expected %s synced past the failed %s, got %+v", written, failed, got.Spec.HealthCheckExprs)
+	}
+}
+
+// TestAppDefHelm_KeepsAccountValuesFrom pins that the canonical valuesFrom
+// leaves the entries the CredentialTemplate controller owns in place: they
+// carry each account's stored value into the chart, and stripping them on
+// every definition change would take the accounts out of the release.
+func TestAppDefHelm_KeepsAccountValuesFrom(t *testing.T) {
+	scheme := newAppDefHelmScheme(t)
+	chartRef := &helmv2.CrossNamespaceSourceReference{Kind: "OCIRepository", Name: "clickhouse-app", Namespace: "cozy-public"}
+	appDef := &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "clickhouse"},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "ClickHouse"},
+			Release:     cozyv1alpha1.ApplicationDefinitionRelease{ChartRef: chartRef},
+		},
+	}
+	entry := account.ValuesFrom("clickhouse-logs.web.account", "_accounts", "web")
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clickhouse-logs",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				"apps.cozystack.io/application.kind":  "ClickHouse",
+				"apps.cozystack.io/application.group": "apps.cozystack.io",
+			},
+		},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef:   chartRef,
+			ValuesFrom: []helmv2.ValuesReference{{Kind: "ConfigMap", Name: "wrong"}, entry},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, hr).Build()
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "clickhouse"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "clickhouse-logs", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Spec.ValuesFrom) != 2 || got.Spec.ValuesFrom[0].Name != "cozystack-values" || got.Spec.ValuesFrom[1] != entry {
+		t.Fatalf("valuesFrom = %+v, want the platform values and the account entry", got.Spec.ValuesFrom)
 	}
 }
