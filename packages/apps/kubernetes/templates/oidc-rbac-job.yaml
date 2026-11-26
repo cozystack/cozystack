@@ -25,7 +25,9 @@
   - `mode: System | CustomConfig`:
       - Apply one ClusterRoleBinding per `users[]` entry inside the tenant
         cluster (`admin` → `cluster-admin`, `view` → `view`, subject = the
-        literal email matched against the `email` claim).
+        literal email matched against the `email` claim). The bindings are
+        rendered by oidc-rbac-bindings.yaml into a ConfigMap this Job mounts,
+        not into the script below.
       - Prune stale CRBs labelled by this release.
       - `mode: System`: patch the pre-rendered `<release>-oidc-kubeconfig`
         Secret with a real kubeconfig wired to `kubectl oidc-login`
@@ -168,6 +170,8 @@ spec:
               value: {{ $issuer | quote }}
             - name: OIDC_SERVER_URL
               value: {{ printf "https://%s:443" $externalHost | quote }}
+            - name: OIDC_BINDINGS_DIR
+              value: /etc/oidc-bindings
           resources:
             requests:
               cpu: 10m
@@ -254,46 +258,32 @@ spec:
                 sleep 5
               done
 
+              # A missing list must stop the Job here: grep on a file that is not
+              # there exits 2, `! grep` is then true, and the prune below would
+              # delete every binding of the release.
+              BINDINGS=$OIDC_BINDINGS_DIR
+              if [ ! -f "$BINDINGS/desired.txt" ]; then
+                echo "$BINDINGS/desired.txt is not mounted (ConfigMap $RELEASE-oidc-bindings); refusing to prune against a list that is not there" >&2
+                exit 1
+              fi
+
               echo "Applying ${OIDC_MODE} ClusterRoleBindings to the tenant cluster..."
-              DESIRED_FILE=$(mktemp)
-              {{- range .Values.oidc.users }}
-              {{-   $hash := printf "%s-%s" $.Release.Name .email | sha256sum | trunc 16 }}
-              {{-   $crbName := printf "cozystack-oidc-%s" $hash }}
-              {{-   $role := "view" }}
-              {{-   if eq .role "admin" }}
-              {{-     $role = "cluster-admin" }}
-              {{-   end }}
-              echo "{{ $crbName }}" >> "$DESIRED_FILE"
-              cat <<'EOF' | kubectl --kubeconfig "$KUBECONFIG_TENANT" apply --filename -
-              apiVersion: rbac.authorization.k8s.io/v1
-              kind: ClusterRoleBinding
-              metadata:
-                name: {{ $crbName }}
-                labels:
-                  app.kubernetes.io/managed-by: cozystack-oidc
-                  app.kubernetes.io/instance: {{ $.Release.Name }}
-              roleRef:
-                apiGroup: rbac.authorization.k8s.io
-                kind: ClusterRole
-                name: {{ $role }}
-              subjects:
-                - kind: User
-                  apiGroup: rbac.authorization.k8s.io
-                  name: {{ .email | quote }}
-              EOF
-              {{- end }}
+              # kubectl apply fails on a file with no objects, and a release with
+              # no users has none.
+              if [ -s "$BINDINGS/crbs.yaml" ]; then
+                kubectl --kubeconfig "$KUBECONFIG_TENANT" apply --filename "$BINDINGS/crbs.yaml"
+              fi
 
               echo "Pruning stale ClusterRoleBindings labelled by this release..."
               EXISTING=$(kubectl --kubeconfig "$KUBECONFIG_TENANT" get clusterrolebindings \
                 --selector=app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=$RELEASE \
                 --output=jsonpath='{.items[*].metadata.name}')
               for crb in $EXISTING; do
-                if ! grep -x -q -F "$crb" "$DESIRED_FILE"; then
+                if ! grep -x -q -F "$crb" "$BINDINGS/desired.txt"; then
                   echo "  removing $crb"
                   kubectl --kubeconfig "$KUBECONFIG_TENANT" delete clusterrolebinding "$crb" --ignore-not-found
                 fi
               done
-              rm -f "$DESIRED_FILE"
 
               if [ "$OIDC_MODE" = "System" ]; then
                 echo "Patching the OIDC kubeconfig Secret on the management cluster..."
@@ -349,12 +339,19 @@ spec:
             - name: kubeconfig
               mountPath: /etc/kubernetes/kubeconfig
               readOnly: true
+            - name: oidc-bindings
+              mountPath: /etc/oidc-bindings
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
         - name: kubeconfig
           secret:
             secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
+        - name: oidc-bindings
+          configMap:
+            name: {{ .Release.Name }}-oidc-bindings
             optional: true
         - name: tmp
           emptyDir: {}
