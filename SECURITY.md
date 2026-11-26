@@ -121,7 +121,7 @@ Four automated controls run continuously against this repository and the artifac
 
 Dependency updates are additionally automated by **Renovate** ([`.github/renovate.json`](.github/renovate.json)), which raises pull requests for Go modules, Dockerfile base images, GitHub Actions and a small number of regex-pinned references. The `helm-values` manager is disabled repo-wide, so the curated component images that make up the shipped platform are bumped by maintainers when preparing a release rather than by a bot.
 
-CodeQL is intended to run as a required pull-request check, so that a newly introduced alert at error severity blocks merge until it is fixed or dismissed. It is **not** currently among the required status checks on `main` — those are `pre-commit` and `E2E Tests` — so today a new error-severity alert is expected to be resolved before merge by review convention rather than enforced by branch protection.
+CodeQL is a required pull-request check: a newly introduced alert at error severity blocks merge until it is fixed or dismissed. The required status checks on `main` are `pre-commit`, `E2E Tests`, `CodeQL` and `DCO`.
 
 ## Security Fixes and Announcements
 
