@@ -5,8 +5,8 @@ ingress-nginx:
     image:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
-      tag: v1.11.6-cozystack.1
-      digest: sha256:1d3f0e01ae61801b5ba2ec121f649eec76ce8577c81ef98c2a96fc24c8264f9b
+      tag: v1.11.6-cozystack.3
+      digest: sha256:059a75d56e567cbf12b4c5df440bfa06f7ed59b7404a0efd8c74e923b340a5cc
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
