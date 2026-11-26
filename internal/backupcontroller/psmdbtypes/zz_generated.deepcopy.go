@@ -86,7 +86,15 @@ func (in *PerconaServerMongoDBList) DeepCopyObject() runtime.Object {
 
 func (in *PerconaServerMongoDBSpec) DeepCopyInto(out *PerconaServerMongoDBSpec) {
 	*out = *in
+	if in.Secrets != nil {
+		out.Secrets = new(PerconaServerMongoDBSecrets)
+		*out.Secrets = *in.Secrets
+	}
 	in.Backup.DeepCopyInto(&out.Backup)
+	if in.Sharding != nil {
+		out.Sharding = new(PerconaServerMongoDBSharding)
+		*out.Sharding = *in.Sharding
+	}
 }
 
 func (in *PerconaServerMongoDBSpec) DeepCopy() *PerconaServerMongoDBSpec {
@@ -292,6 +300,27 @@ func (in *PerconaServerMongoDBRestoreSpec) DeepCopyInto(out *PerconaServerMongoD
 		out.PITR = new(PITRSpec)
 		*out.PITR = *in.PITR
 	}
+	if in.Selective != nil {
+		out.Selective = new(SelectiveRestoreOpts)
+		in.Selective.DeepCopyInto(out.Selective)
+	}
+}
+
+func (in *SelectiveRestoreOpts) DeepCopyInto(out *SelectiveRestoreOpts) {
+	*out = *in
+	if in.Namespaces != nil {
+		out.Namespaces = make([]string, len(in.Namespaces))
+		copy(out.Namespaces, in.Namespaces)
+	}
+}
+
+func (in *SelectiveRestoreOpts) DeepCopy() *SelectiveRestoreOpts {
+	if in == nil {
+		return nil
+	}
+	out := new(SelectiveRestoreOpts)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *PerconaServerMongoDBRestoreSpec) DeepCopy() *PerconaServerMongoDBRestoreSpec {

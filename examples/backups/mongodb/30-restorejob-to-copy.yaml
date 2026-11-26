@@ -4,11 +4,15 @@
 # source backup's S3 destination, so the operator replays the logical dump into
 # the target while mongodb-src stays running and untouched.
 #
-# Driven for the same-namespace happy path by run-all.sh in this directory; also
-# applicable manually with kubectl apply -f. The mongodb-2-backup-roundtrip
-# Chainsaw suite stops before this step while #3832 is open, so nothing in CI
-# exercises it. The cross-tenant variant stays manual; see the README for the
-# network-policy reason.
+# The restore is selective. It copies the databases mongodb-target declares
+# under spec.databases (demo) and leaves the target's own system users and
+# Secrets as they are, and the RestoreJob reports Succeeded once the target
+# cluster reports ready again after it.
+#
+# Driven for the same-namespace happy path by run-all.sh in this directory and
+# the mongodb-2-backup-roundtrip Chainsaw suite, also applicable manually with
+# kubectl apply -f. The cross-tenant variant stays manual, see the README for
+# the network-policy reason.
 ---
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob

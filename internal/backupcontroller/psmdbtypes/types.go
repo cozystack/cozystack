@@ -86,15 +86,28 @@ type PerconaServerMongoDBList struct {
 	Items           []PerconaServerMongoDB `json:"items"`
 }
 
-// PerconaServerMongoDBSpec carries only the backup sub-tree the driver reads
-// to gate on "does this cluster have on-demand backups wired up". The psmdb
-// operator only runs the percona-backup-mongodb agents (and therefore only
-// services PerconaServerMongoDBBackup CRs) when spec.backup.enabled is true
-// and at least one storage is declared; without that a Backup CR would sit in
-// "waiting"/"error" forever. The driver reads these to surface a precise
-// precondition message instead of a generic deadline hang.
+// PerconaServerMongoDBSpec carries the backup configuration and the image and
+// TLS Secret used to check the target after a restore.
 type PerconaServerMongoDBSpec struct {
-	Backup PerconaServerMongoDBBackupConfig `json:"backup,omitempty"`
+	Image   string                           `json:"image,omitempty"`
+	Secrets *PerconaServerMongoDBSecrets     `json:"secrets,omitempty"`
+	Backup  PerconaServerMongoDBBackupConfig `json:"backup,omitempty"`
+	// Sharding is read on the restore path only. It is a pointer so the
+	// server-side apply of spec.backup.storages never sends a sharding key and
+	// never takes ownership of it.
+	Sharding *PerconaServerMongoDBSharding `json:"sharding,omitempty"`
+}
+
+type PerconaServerMongoDBSecrets struct {
+	SSL string `json:"ssl,omitempty"`
+}
+
+// PerconaServerMongoDBSharding mirrors psmdb .spec.sharding down to the enabled
+// flag. percona-backup-mongodb cannot restore selected databases to a point in
+// time on a sharded cluster, so a to-copy restore with a recoveryTime is refused
+// there.
+type PerconaServerMongoDBSharding struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // PerconaServerMongoDBBackupConfig mirrors the psmdb .spec.backup fields the
@@ -125,8 +138,13 @@ type PerconaServerMongoDBPITR struct {
 // hold is resolved by the operator against whatever pbm still carries.
 type PerconaServerMongoDBStatus struct {
 	State              string                          `json:"state,omitempty"`
+	BackupVersion      string                          `json:"backupVersion,omitempty"`
 	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
 	Conditions         []PerconaServerMongoDBCondition `json:"conditions,omitempty"`
+	// Message is the operator's last reconcile error, empty while the cluster
+	// reconciles cleanly. The restore path quotes it when a target does not come
+	// back after a restore.
+	Message string `json:"message,omitempty"`
 }
 
 // PerconaServerMongoDBCondition mirrors the operator's ClusterCondition down
@@ -215,11 +233,23 @@ type PerconaServerMongoDBRestoreList struct {
 // destination + credentials explicitly, so it works both in-place and to-copy
 // and survives the source Backup CR being reaped.
 type PerconaServerMongoDBRestoreSpec struct {
-	ClusterName  string        `json:"clusterName"`
-	BackupName   string        `json:"backupName,omitempty"`
-	BackupSource *BackupSource `json:"backupSource,omitempty"`
-	StorageName  string        `json:"storageName,omitempty"`
-	PITR         *PITRSpec     `json:"pitr,omitempty"`
+	ClusterName  string                `json:"clusterName"`
+	BackupName   string                `json:"backupName,omitempty"`
+	BackupSource *BackupSource         `json:"backupSource,omitempty"`
+	StorageName  string                `json:"storageName,omitempty"`
+	PITR         *PITRSpec             `json:"pitr,omitempty"`
+	Selective    *SelectiveRestoreOpts `json:"selective,omitempty"`
+}
+
+// SelectiveRestoreOpts mirrors restore.spec.selective. The operator hands it to
+// percona-backup-mongodb as is, which restores only Namespaces ("<db>.*") and
+// leaves the cluster's users and roles alone unless WithUsersAndRoles is set.
+// WithUsersAndRoles has no omitempty, unlike the operator's own type, so the
+// false a to-copy restore depends on is written into the CR where a reader of
+// the object can see it.
+type SelectiveRestoreOpts struct {
+	WithUsersAndRoles bool     `json:"withUsersAndRoles"`
+	Namespaces        []string `json:"namespaces,omitempty"`
 }
 
 type PerconaServerMongoDBRestoreStatus struct {
