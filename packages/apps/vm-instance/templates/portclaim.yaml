@@ -1,0 +1,16 @@
+{{- $networks := .Values.networks | default .Values.subnets }}
+{{- if and (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") (gt (len ($networks | default list)) 0) }}
+{{- /* Named after the VM: cozyplane adopts the Port a VM had before
+       PortClaims existed by the VM's name, so a running VM keeps its IP
+       and MAC through the upgrade. The spec is immutable. */}}
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: PortClaim
+metadata:
+  name: {{ include "virtual-machine.fullname" . }}
+  labels:
+    {{- include "virtual-machine.labels" . | nindent 4 }}
+spec:
+  vpcRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ printf "virtualprivatecloud-%s" (index $networks 0).name | quote }}
+{{- end }}

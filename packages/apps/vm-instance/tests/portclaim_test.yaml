@@ -1,0 +1,98 @@
+suite: a cozyplane VPC VM keeps its IP and MAC through a PortClaim
+
+# The VM's launcher pods come and go; the PortClaim holds the Port between
+# them. It is named after the VM so cozyplane adopts the Port a running VM
+# had before PortClaims existed.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+  - templates/portclaim.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+tests:
+  - it: claims a Port in the VM's VPC, named after the VM
+    template: templates/portclaim.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PortClaim
+      - equal:
+          path: metadata.name
+          value: test-vm
+      - equal:
+          path: spec.vpcRef
+          value:
+            namespace: tenant-test
+            name: virtualprivatecloud-mynet
+      - notExists:
+          path: spec.mac
+
+  - it: binds the VM's launcher pods to the claim
+    template: templates/vm.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/port-claim"]
+          value: test-vm
+
+  - it: claims nothing without a VPC
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/portclaim.yaml
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/port-claim"]
+        template: templates/vm.yaml
+
+  - it: claims nothing on kube-ovn
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/portclaim.yaml
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/port-claim"]
+        template: templates/vm.yaml
+
+  - it: keeps a network name with a newline inside the claim's VPC reference
+    template: templates/portclaim.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: "mynet\n---\nkind: ClusterRoleBinding"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.vpcRef.name
+          value: "virtualprivatecloud-mynet\n---\nkind: ClusterRoleBinding"

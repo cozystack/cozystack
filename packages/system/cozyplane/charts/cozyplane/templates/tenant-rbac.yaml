@@ -23,6 +23,7 @@ rules:
       - vpcpeerings
       - securitygroups
       - floatingips
+      - portclaims
       - natgateways
       - routetables
       - routes
@@ -34,6 +35,7 @@ rules:
       - vpcpeerings/status
       - securitygroups/status
       - floatingips/status
+      - portclaims/status
       - natgateways/status
       - routetables/status
       - routes/status
@@ -67,6 +69,7 @@ rules:
       - vpcpeerings
       - securitygroups
       - floatingips
+      - portclaims
       - natgateways
       - routetables
       - routes

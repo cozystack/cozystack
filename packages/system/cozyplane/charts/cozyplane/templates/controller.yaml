@@ -60,6 +60,14 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcpeerings/status"]
     verbs: ["get", "update", "patch"]
+  # PortClaims: bind each claim's Port to its lifetime and publish the pinned
+  # identity in status; the finalizer holds the claim until its Port is gone.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["portclaims"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["portclaims/status", "portclaims/finalizers"]
+    verbs: ["get", "update", "patch"]
   # FloatingIPs: own the delegated LoadBalancer Service that sources the address
   # and gate readiness on a live target Port (docs/external-addresses.md).
   - apiGroups: ["sdn.cozystack.io"]
@@ -87,13 +95,6 @@ rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # VirtualMachineInstances: the migration controller reads status.nodeName /
-  # status.migrationState as the cutover signal (the Kube-OVN model). Optional —
-  # only present when KubeVirt is installed; the controller degrades to the
-  # launcher-pod signal without it.
-  - apiGroups: ["kubevirt.io"]
-    resources: ["virtualmachineinstances"]
-    verbs: ["get", "list", "watch"]
   # Gateway Deployments for a VPCGateway family with no eBPF identity yet
   # (one with addresses for every family is pure eBPF — docs/north-south.md §6a).
   # Read-only cluster-wide because the manager's informer cache is not namespace
@@ -106,8 +107,7 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
   # Severed-gateway heal: recreate a Ready gateway pod whose .1 Port is gone.
-  # watch: the persistent-Port controller watches virt-launcher pods to drive
-  # live-migration cutover (kubevirt.io/nodeName) and GC.
+  # watch: the PortClaim controller follows the pods that bind each claim.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "delete"]
