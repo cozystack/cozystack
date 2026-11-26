@@ -116,11 +116,26 @@ These rules apply to changes with testable behavior. Documentation-only edits an
 
 1. Write the test before changing the implementation and watch it fail for the intended reason, not on a typo or a missing fixture. Then make it green, then refactor under it.
 2. Cover relevant failure paths before the happy path: empty or null values, invalid input, a number where a string is expected, a missing resource, a timeout or an API error. Assert the resulting message, exit status and post-failure state required by the operation's contract.
-3. Fix regressions in the implementation. Do not skip, weaken or delete a test, or silence a linter, merely to get a green run. When the intended contract changes, update or replace the obsolete assertions and retain coverage of applicable failure cases.
+3. Fix regressions in the implementation. Do not skip, weaken or delete a test, or silence a linter, merely to get a green run. When the intended contract changes, update or replace the obsolete assertions and retain coverage of applicable failure cases. Replacing a test that checks the wrong layer (see [What a test may depend on](#what-a-test-may-depend-on)) with one at the right layer is not weakening it.
 4. A stub needs a failing test for the intended behavior during development. Finish that behavior and make the test pass before merge; do not make the test accept an unintended not-implemented result just to get green CI.
 5. A bug found along the way that is out of the PR's scope gets an issue and a test pinning the current broken behaviour, marked `FIXME(#N)`. The PR that fixes the bug flips the test to pin the fixed behaviour.
 
 Do not negate a BATS assertion with `!`: it can silently pass. Bats catches a failing negation only when it is the last command in the test body; `hack/cozytest.sh` appends a successful return and misses it there too. See [§11 of `e2e-testing.md`](./e2e-testing.md#11-never-negate-a-bats-assertion-with-).
+
+### What a test may depend on
+
+A test exercises the code it covers through that code's interface: a Go package through its API, a chart through `helm template` or helm-unittest, a deployed component in e2e. It does not read another package's source to guess what ships. A Go test does not open chart templates, `cozyrds/` files, `values.yaml` or other files under `packages/`, and no test greps or regex-matches source, templates or rendered manifests for a string. Such a test passes when a stray comment matches its pattern, fails when the packaging changes in a way Helm accepts (a variant, a conditional, an `include`), and keeps a second copy of behaviour the toolchain already defines, so every change to that behaviour has to be made twice. Tests of this kind already in the tree, Go tests under `internal/` that read `packages/` and `hack/` scripts that grep chart sources among them, are not precedent.
+
+When two artifacts have to agree, make the agreement mechanical:
+
+- one is generated from the other under `make generate`, which the codegen drift check enforces;
+- both read one constant or one data file, so a rename fails to compile or to render;
+- the component that consumes the artifact validates it when the artifact is applied, so a mismatch fails in the cluster with a clear error;
+- an e2e suite asserts the behaviour against what the cluster actually built.
+
+If none of these fits, say so in the PR body and let a maintainer decide; do not add a test that parses the other side.
+
+**Applications are tested where they live.** A test in `api/`, `cmd/`, `internal/` or `pkg/` does not name an application kind or read an application package. What the platform requires of applications is enforced by a check that ships with the platform and runs on any ApplicationDefinition: at admission, or as a command a catalog's CI can run on its own definitions. Whether one application's chart and declarations are right is tested in that application's package (helm-unittest under `packages/apps/<name>/tests/`) and in its e2e suite. A design proposal's Testing section does not override this; when one asks for a core-level test over in-tree applications, raise it on the proposal or in the PR body instead of writing that test.
 
 ### Linters
 
@@ -191,7 +206,7 @@ When a document could go in either `docs/` or the website, the test is whether a
 
 Documenting a feature's current limitations is useful and belongs with the feature. Documenting the *development process* around it does not: no "What is NOT in Phase N", no "out of scope for this PR", no "this PR" phrasing, no action plans or review negotiation. A merged document describes what the code does now, and states a limitation as a limitation rather than as a roadmap position. Scope, phasing and follow-ups belong in the pull request description or an issue.
 
-An app's README and the field descriptions in its `values.yaml` describe what the app does now, for the person using it: no history ("moves from", "previously", "used to", rollout phase names) and no account of how another chart behaved before. A change users must act on is announced by a `!` in the pull request title and described on the website's per-version upgrade page (`content/en/docs/next/operations/cluster/upgrade-to-vX.Y.md`), so an app README carries no history or breaking-changes section. A description says what the field does, what it accepts and what it refuses, not what it replaced, and does not tell the reader to keep it in sync with another chart; when two charts have to agree, a test says so. A change that touches a README or a description fixes what is wrong in that place while it is there.
+An app's README and the field descriptions in its `values.yaml` describe what the app does now, for the person using it: no history ("moves from", "previously", "used to", rollout phase names) and no account of how another chart behaved before. A change users must act on is announced by a `!` in the pull request title and described on the website's per-version upgrade page (`content/en/docs/next/operations/cluster/upgrade-to-vX.Y.md`), so an app README carries no history or breaking-changes section. A description says what the field does, what it accepts and what it refuses, not what it replaced, and does not tell the reader to keep it in sync with another chart; when two charts have to agree, one of the mechanisms in [What a test may depend on](#what-a-test-may-depend-on) holds them together. A change that touches a README or a description fixes what is wrong in that place while it is there.
 
 A document that names an unmerged pull request or an unreleased dependency needs a tracking issue, because nothing re-checks that claim later and it silently becomes false once the thing ships.
 
