@@ -92,7 +92,10 @@
         "large",
         "xlarge",
         "2xlarge"
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "resourcepreset"
+      }
     },
     "external": {
       "description": "Enable external access from outside the cluster.",

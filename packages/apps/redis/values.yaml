@@ -62,6 +62,7 @@ replicas: 2
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "t1.nano"
 
 ## @typedef {struct} AffinitySpec - Kubernetes affinity configuration.
@@ -153,6 +154,7 @@ snapshots: true
 ## @typedef {struct} Sentinel - Sentinel configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.
 ## @field {ResourcesPreset} [resourcesPreset] - Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Sentinel} [sentinel] - Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 sentinel: {}

@@ -616,7 +616,10 @@
                 "large",
                 "xlarge",
                 "2xlarge"
-              ]
+              ],
+              "x-cozystack-options": {
+                "source": "resourcepreset"
+              }
             }
           }
         },
@@ -714,7 +717,10 @@
                 "large",
                 "xlarge",
                 "2xlarge"
-              ]
+              ],
+              "x-cozystack-options": {
+                "source": "resourcepreset"
+              }
             }
           }
         },
@@ -820,7 +826,10 @@
                     "large",
                     "xlarge",
                     "2xlarge"
-                  ]
+                  ],
+                  "x-cozystack-options": {
+                    "source": "resourcepreset"
+                  }
                 }
               }
             }
@@ -947,7 +956,10 @@
                 "large",
                 "xlarge",
                 "2xlarge"
-              ]
+              ],
+              "x-cozystack-options": {
+                "source": "resourcepreset"
+              }
             }
           }
         }

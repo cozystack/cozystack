@@ -186,6 +186,7 @@ godaddy:
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "t1.nano"
 
 ## @section Scheduling parameters

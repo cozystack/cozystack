@@ -73,6 +73,7 @@ storageClass: ""
 ## @typedef {struct} Core - Core API server configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Core} core - Core API server configuration.
 core:
@@ -82,6 +83,7 @@ core:
 ## @typedef {struct} Registry - Container image registry configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Registry} registry - Container image registry configuration.
 registry:
@@ -91,6 +93,7 @@ registry:
 ## @typedef {struct} Jobservice - Background job service configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Jobservice} jobservice - Background job service configuration.
 jobservice:
@@ -102,6 +105,7 @@ jobservice:
 ## @field {quantity} size - Persistent Volume size for vulnerability database cache.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Trivy} trivy - Trivy vulnerability scanner configuration.
 trivy:

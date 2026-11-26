@@ -5,6 +5,7 @@ package option
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -464,5 +465,93 @@ func TestVMDiskProviderShowsSizeInLabel(t *testing.T) {
 	}
 	if blank, ok := itemByValue(items, "blank"); !ok || blank.Label != "" {
 		t.Errorf("blank = %+v, want bare value with no size label", blank)
+	}
+}
+
+func TestResourcePresetOptions(t *testing.T) {
+	provider, ok := DefaultProviders(nil)["resourcepreset"]
+	if !ok {
+		t.Fatal("resourcepreset provider is not registered")
+	}
+	storage := NewREST(map[string]providerFunc{"resourcepreset": provider})
+	obj, err := storage.Get(context.Background(), "resourcepreset", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := obj.(*corev1alpha1.Option).Spec.Items
+	if len(items) != 47 {
+		t.Fatalf("got %d presets, want 47", len(items))
+	}
+	sizes := []string{"nano", "micro", "small", "medium", "large", "xlarge", "2xlarge", "4xlarge"}
+	for i, series := range []string{"t1", "c1", "s1", "u1", "m1"} {
+		for j, size := range sizes {
+			if got := items[i*8+j].Value; got != series+"."+size {
+				t.Fatalf("unexpected order: %s", got)
+			}
+		}
+	}
+	for i, size := range sizes[:7] {
+		if items[40+i].Value != size {
+			t.Fatalf("unexpected legacy order: %v", items[40:])
+		}
+	}
+	for index, want := range map[int]string{
+		0:  "t1.nano (250m CPU, 128Mi)",
+		27: "u1.medium (2 CPU, 8Gi)",
+		42: "small (1 CPU, 512Mi, deprecated: use t1.small)",
+		43: "medium (1 CPU, 1Gi, deprecated: use c1.small)",
+	} {
+		if items[index].Label != want {
+			t.Errorf("label = %q, want %q", items[index].Label, want)
+		}
+	}
+	list, err := storage.List(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(list.(*corev1alpha1.OptionList).Items[0].Spec.Items, items) {
+		t.Fatal("List and Get disagree on preset order")
+	}
+}
+
+func TestInstancetypeLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cpu, memory any
+		want        string
+	}{
+		{name: "missing"},
+		{name: "missing-memory", cpu: int64(2)},
+		{name: "missing-cpu", memory: "8Gi"},
+		{name: "wrong-cpu-type", cpu: "2", memory: "8Gi"},
+		{name: "wrong-memory-type", cpu: int64(2), memory: int64(8)},
+		{name: "empty-memory", cpu: int64(2), memory: ""},
+		{name: "u1.medium", cpu: int64(2), memory: "8Gi", want: "u1.medium (2 CPU, 8Gi)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+				newObj(gvrInstancetype.GroupVersion().WithKind("VirtualMachineClusterInstancetype"), "", tc.name,
+					map[string]any{"cpu": map[string]any{"guest": tc.cpu}, "memory": map[string]any{"guest": tc.memory}}),
+			)
+			items, err := DefaultProviders(dyn)["instancetype"](context.Background(), "tenant-example")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != 1 || items[0].Value != tc.name || items[0].Label != tc.want {
+				t.Fatalf("items = %v, want name %q and label %q", items, tc.name, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstancetypeListFailure(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds())
+	want := errors.New("list unavailable")
+	dyn.PrependReactor("list", gvrInstancetype.Resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, want
+	})
+	_, err := DefaultProviders(dyn)["instancetype"](context.Background(), "")
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
 	}
 }

@@ -187,7 +187,10 @@
             "large",
             "xlarge",
             "2xlarge"
-          ]
+          ],
+          "x-cozystack-options": {
+            "source": "resourcepreset"
+          }
         },
         "size": {
           "description": "Persistent Volume size for Kafka.",

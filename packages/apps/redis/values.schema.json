@@ -92,7 +92,10 @@
         "large",
         "xlarge",
         "2xlarge"
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "resourcepreset"
+      }
     },
     "affinity": {
       "description": "Kubernetes affinity configuration for Redis and Sentinel pods.",
@@ -311,7 +314,10 @@
             "large",
             "xlarge",
             "2xlarge"
-          ]
+          ],
+          "x-cozystack-options": {
+            "source": "resourcepreset"
+          }
         }
       }
     },

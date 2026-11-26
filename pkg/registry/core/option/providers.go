@@ -21,6 +21,7 @@ import (
 	"k8s.io/klog/v2"
 
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -68,7 +69,8 @@ const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-cla
 func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 	return map[string]providerFunc{
 		"gpu":             gpuProvider(dyn),
-		"instancetype":    nameListProvider(dyn, gvrInstancetype),
+		"resourcepreset":  resourcePresetProvider,
+		"instancetype":    instancetypeProvider(dyn),
 		"instanceprofile": nameListProvider(dyn, gvrPreference),
 		"network":         nameListNamespacedProvider(dyn, gvrNADs),
 		"image":           imageProvider(dyn),
@@ -466,4 +468,42 @@ func sortItems(items []corev1alpha1.OptionItem) {
 
 func logProviderError(source string, err error) {
 	klog.V(2).InfoS("option provider failed", "source", source, "err", err)
+}
+
+func resourcePresetProvider(_ context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+	table := presets.Table()
+	items := make([]corev1alpha1.OptionItem, 0, len(table))
+	for _, preset := range table {
+		sizing := fmt.Sprintf("%s CPU, %s", preset.CPU, preset.Memory)
+		if preset.Replacement != "" {
+			sizing += ", deprecated: use " + preset.Replacement
+		}
+		items = append(items, corev1alpha1.OptionItem{
+			Value: preset.Name,
+			Label: fmt.Sprintf("%s (%s)", preset.Name, sizing),
+		})
+	}
+	return items, nil
+}
+
+func instancetypeProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrInstancetype).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		for i := range list.Items {
+			obj := &list.Items[i]
+			item := corev1alpha1.OptionItem{Value: obj.GetName()}
+			cpu, hasCPU, _ := unstructured.NestedInt64(obj.Object, "spec", "cpu", "guest")
+			memory, hasMemory, _ := unstructured.NestedString(obj.Object, "spec", "memory", "guest")
+			if hasCPU && hasMemory && memory != "" {
+				item.Label = fmt.Sprintf("%s (%d CPU, %s)", item.Value, cpu, memory)
+			}
+			items = append(items, item)
+		}
+		sortItems(items)
+		return items, nil
+	}
 }

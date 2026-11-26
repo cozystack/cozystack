@@ -62,6 +62,7 @@ replicas: 3
 resources: {}
 
 ## @param {ResourcesPreset} resourcesPreset="c1.medium" - Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.
+## @x-cozystack-options {source: resourcepreset}
 resourcesPreset: "c1.medium"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
@@ -221,6 +222,7 @@ users: {}
 ## @field {int} replicas - Number of Dashboards replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration for Dashboards.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset for Dashboards.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {Dashboards} dashboards - OpenSearch Dashboards configuration.
 dashboards:

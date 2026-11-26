@@ -79,6 +79,7 @@ replicationFactor: 2
 ## @field {string} [storageClass] - StorageClass used to store the data.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {DB} db - Database configuration.
 db:
@@ -92,6 +93,7 @@ db:
 ## @field {int} [replicas] - Number of master replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 ## @field {int} [volumeSizeLimitMB] - Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead. Changing it on an instance that already holds data costs something either way: lowering it stops writes to every bucket whose volumes all reach the new value until that bucket can grow, and raising it takes the room new buckets grow into, so run the check in docs/operations/seaweedfs-lowering-the-volume-size-limit.md first. Must be between 1 and 30000. A value close to or above `volume.size` leaves each volume server a single slot rather than failing, since the server floors its slot count at one.
 ## @minimum 1
 ## @maximum 30000
@@ -125,6 +127,7 @@ master:
 ## @field {int} [replicas] - Number of filer replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 ## @field {string} [grpcHost] - The hostname used to expose or access the filer service externally.
 ## @field {int} [grpcPort] - The port used to access the filer service externally.
 ## @field {[]string} [whitelist] - A list of IP addresses or CIDR ranges that are allowed to access the filer service.
@@ -145,6 +148,7 @@ filer:
 ## @field {string} [storageClass] - Kubernetes StorageClass for the pool. Defaults to volume.storageClass.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @typedef {struct} Zone - Zone configuration.
 ## @field {int} [replicas] - Number of replicas in the zone.
@@ -162,6 +166,7 @@ filer:
 ## @field {string} [diskType] - SeaweedFS disk type tag for the default volume servers (e.g., "hdd", "ssd").
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 ## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
 ## @field {map[string]StoragePool} [pools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
 
@@ -186,6 +191,7 @@ volume:
 ## @field {int} [replicas] - Number of S3 replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @x-cozystack-options {source: resourcepreset}
 
 ## @param {S3} [s3] - S3 service configuration.
 s3:
