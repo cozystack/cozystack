@@ -88,6 +88,7 @@ These hold for every task, whichever document the routes above point at.
 - **Go Code**: Controller-runtime patterns, kubebuilder style
 - **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`; an agent-assisted commit adds one `Assisted-by: LLM` trailer
 - **Comments and commit bodies**: WHY, not a narration of WHAT; see [Review Blockers](./docs/agents/contributing.md#review-blockers-messages-trailers-comments) in contributing.md
+- **Tests and checks**: a new test is seen to fail without its change, and a check that can fail somebody else's change names the requirement it protects and the code that consumes what it checks; see [New Tests and Checks](./docs/agents/contributing.md#new-tests-and-checks)
 - **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do

@@ -10,6 +10,8 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
+- [ ] Every new or changed test was seen to fail without the change it covers, and the commit body says how (see [New Tests and Checks](#new-tests-and-checks))
+- [ ] Filled in "New checks" in the PR template for anything that can fail somebody else's change, or wrote "None"
 - [ ] Walked the [Downstream Repositories](#downstream-repositories) trigger map against the diff, and linked a follow-up (a PR, or an issue when the PR is out of scope) in every repository the change reaches
 
 ## Regenerate Artifacts Before Committing
@@ -64,7 +66,7 @@ git commit --signoff --message "type(scope): brief description"
 
 Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
-The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
+The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. The one exception is a line on how the change was tested, which the diff cannot show (see [New Tests and Checks](#new-tests-and-checks)). Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
 
 **Examples:**
 
@@ -311,10 +313,18 @@ The rest of the organisation's repositories do not restate anything this one own
 
 The release process keeps a **separate** list of repositories, in [`changelog.md`](./changelog.md), checked for tags cut during a release window. That list exists to assemble release notes; this one exists to catch code coupling. They overlap but are not interchangeable, and neither replaces the other.
 
+## New Tests and Checks
+
+A test proves something only if it can fail. Before committing a new or changed test, see it fail without the change it covers: revert the fix, or break the one line the test is about, and run it. Put the result in the commit body as one line, with what was reverted or mutated and the failure message. This is the line on how the change was tested that [What Goes in the Commit](#what-goes-in-the-commit-what-goes-in-the-pr-body) asks for, and the one place where the body says how. A test that stays green without its change checks nothing and blocks the PR.
+
+Do not add a separate failing commit for this. Pull requests into `main` are merged with a merge commit (squash and rebase merges are switched off in the repository settings), so every commit of the branch lands on `main` as it is, and each one has to build and pass on its own for `git bisect` to stay usable. The evidence goes into the message, not into the history.
+
+A check that can fail somebody else's change needs more than that: a test that reads files outside its own package or chart, a lint, a validator, a schema restriction, a CI gate. Such a check becomes a rule for the whole repository the moment it merges. In the "New checks" section of the PR template, name the requirement it protects, with a link to where that requirement is stated, and the code that consumes the artifact it checks. A check whose only source is how the tree looks today, or one over an artifact nothing reads yet, is a proposal for a new rule, and that is decided with the owners of the files it constrains, not by a green run.
+
 ## Review Expectations
 
 - A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
-- Keep the PR description aligned with the template: `## What this PR does` plus the `release-note` block.
+- Keep the PR description aligned with the template: fill in every section that applies, from `## What this PR does` to the `release-note` block.
 - Before posting a claim about a set ("all callers", "the only user", "never happens"), grep for the counterexample, or state the mechanism instead.
 - Disagreement carries a mechanism: a code path, a number, a spec clause, a failing test. Time spent and urgency are not arguments.
 - Answer the point directly and explain why it is accepted or declined. Read brief feedback literally rather than inferring tone, and avoid unnecessary notifications. Follow the [prose guidance](../../AGENTS.md#working-principles).
