@@ -67,6 +67,37 @@ spec:
             name: postgres-ea-b-rw
           (subsets[0].addresses[0].ip != null): true
 
+  # Lineage: ea-b's primary is tenant-facing, but not ea-a's, so an attachment
+  # naming ea-a is refused and renders nothing.
+  - name: refuse-other-applications-endpoint
+    try:
+    - apply:
+        file: attach-a-names-b-rw.yaml
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-a-names-b
+          status:
+            phase: Pending
+            (conditions[?type == 'Resolved']):
+            - status: "False"
+              reason: EndpointLineageMismatch
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-a-names-b
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-a-names-b
+
   # Minted address: the read replicas of ea-a get an address from the default
   # class, and the address serves a replica.
   - name: attach-replicas-minted
@@ -283,64 +314,6 @@ spec:
             name: ea-held
           status:
             phase: Bound
----
-# The marker half of the authorization seam: a Service that carries the
-# application's lineage labels but is not listed in its application
-# definition is not attachable.
-apiVersion: chainsaw.kyverno.io/v1alpha1
-kind: Test
-metadata:
-  name: endpointattachment-refusal
-spec:
-  catch:
-  - events: {}
-  - describe:
-      apiVersion: local.sdn.cozystack.io/v1alpha1
-      kind: EndpointAttachment
-  - describe:
-      apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: mariadb-ea-c
-  steps:
-  - name: create-mariadb
-    try:
-    - apply:
-        file: mariadb-c.yaml
-    - assert:
-        timeout: 6m
-        resource:
-          apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          metadata:
-            name: mariadb-ea-c
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    # The Service is asserted first so that a renamed metrics Service fails
-    # here by name, not below as EndpointNotFound in place of the refusal.
-    - assert:
-        timeout: 3m
-        resource:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: mariadb-ea-c-metrics
-  - name: refuse-undeclared-service
-    try:
-    - apply:
-        file: attach-c-metrics.yaml
-    - assert:
-        timeout: 1m
-        resource:
-          apiVersion: local.sdn.cozystack.io/v1alpha1
-          kind: EndpointAttachment
-          metadata:
-            name: ea-c-metrics
-          status:
-            phase: Pending
-            (conditions[?type == 'Resolved']):
-            - status: "False"
-              reason: EndpointNotTenantFacing
 ---
 # The VM datapath modes against cozy-proxy as deployed. The VM keeps
 # external: false, so the attachment is the only delegated Service on its pod:
