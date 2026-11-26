@@ -1,0 +1,6 @@
+{
+  "source": "ba0ff0f8e81ce43974ec12b55ad9968dd5813432",
+  "operatorImage": "ghcr.io/cozystack/cozystack/cozystack-operator:0.0.0-nightly.20261125.45531239791.1@sha256:28322133b9373f859af90413abe9617466dcb234b597730d3cc5aa02d32778ef",
+  "packagesURL": "oci://ghcr.io/cozystack/cozystack/cozystack-packages",
+  "packagesRef": "digest=sha256:f27825af445e550036b08ff820005d92214c753fe57989dbdc444b52164fbe61"
+}

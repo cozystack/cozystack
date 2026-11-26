@@ -27,9 +27,12 @@
 # ClusterIP with a 206; otherwise it falls back to the public factory, so the
 # mirror can only help, never make CI worse.
 #
-# The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
-# time by hack/e2e-install-cozystack.bats from
-# packages/apps/kubernetes-nodes/files/worker-defaults.json.
+# The __SEEDS__ placeholder is substituted at apply time by
+# hack/e2e-install-cozystack.bats with the <schematicID>/<version> pairs of
+# packages/apps/kubernetes-nodes/files/worker-defaults.json and, in a required
+# worker upgrade, of the pinned baseline's charts, whose pools boot before the
+# upgrade. The server answers 404 for any other image, which the harness does
+# not fall back from.
 #
 # CI band-aid, not a product artifact. The durable fix is the overridable
 # `talos.imageFactoryURL` chart value this manifest exercises; a self-hosted
@@ -83,8 +86,10 @@ spec:
           command: [/bin/sh, -ec]
           args:
             - |
-              dest="/data/image/__SCHEMATIC_ID__/__TALOS_VERSION__/openstack-amd64.raw.xz"
-              url="https://factory.talos.dev/image/__SCHEMATIC_ID__/__TALOS_VERSION__/openstack-amd64.raw.xz"
+              # One <schematicID>/<version> pair per image the run's pools boot.
+              for seed in __SEEDS__; do
+              dest="/data/image/$seed/openstack-amd64.raw.xz"
+              url="https://factory.talos.dev/image/$seed/openstack-amd64.raw.xz"
               mkdir -p "$(dirname "$dest")"
               echo "seeding $dest from $url"
               # --retry-all-errors + a long retry budget rides out the mid-transfer
@@ -100,6 +105,7 @@ spec:
                    --output "$dest" \
                    "$url"
               ls -la "$dest"
+              done
           volumeMounts:
             - name: data
               mountPath: /data

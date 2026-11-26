@@ -119,9 +119,9 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
 # The e2e install seeds an image-factory mirror for the default worker image
 # and skips it silently when the keys it reads come back null.
 @test "the e2e image-factory mirror reads the default Talos image from the worker defaults" {
+  grep -qF "_talos_image_cache_pair packages/apps/kubernetes-nodes/files/worker-defaults.json" "$REPO_ROOT/hack/e2e-chainsaw/_lib/talos-image-cache.sh" \
+    || { echo "hack/e2e-chainsaw/_lib/talos-image-cache.sh does not seed the mirror from the worker defaults" >&2; return 1; }
   for key in schematicID version; do
-    grep -qF "'.talos.${key}' packages/apps/kubernetes-nodes/files/worker-defaults.json" "$REPO_ROOT/hack/e2e-install-cozystack.bats" \
-      || { echo "hack/e2e-install-cozystack.bats does not read talos.${key} from the worker defaults" >&2; return 1; }
     value=$(yq --input-format=json --output-format=yaml --unwrapScalar ".talos.${key}" "$APP_DEFAULTS")
     [ -n "$value" ] && [ "$value" != null ] \
       || { echo "talos.${key} is missing from $APP_DEFAULTS" >&2; return 1; }

@@ -94,6 +94,8 @@ spec:
         # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
         # ceilings only bind when something is already hung.
         timeout: 67m
+        # The upgrade library is bash, and the sandbox's sh is dash.
+        shell: bash
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
         # the global .chainsaw.yaml catch's host snapshot.
@@ -104,10 +106,56 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh
+          . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh
+          version_expr='keys | sort_by(.) | .[-1]'
+          if cozy_worker_upgrade_required; then
+            cozy_worker_upgrade_preflight
+            minor=$(cozy_worker_upgrade_minor)
+            version_expr="\"$minor\""
+            cozy_worker_upgrade_decline_green_capture
+          fi
           # 4th arg folds the ouroboros hairpin-NAT assertions onto this cluster;
           # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
           # ready workers. Neither feature needs another tenant-cluster bringup.
-          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
+          run_kubernetes_test "$version_expr" 'test-latest-version' '59991' 'true' 'true'
+          if cozy_worker_upgrade_required; then
+            cozy_worker_upgrade_before test-latest-version
+          fi
+        check:
+          ($error == null): true
+    - script:
+        timeout: 47m
+        shell: bash
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh
+          # The bound is the sum of the stage ceilings. A stage checks its
+          # deadline between reads, so it can run one read past it; when such
+          # tails push the operation past the bound, the bound fires first and
+          # names the stage.
+          if cozy_worker_upgrade_required; then
+            cozy_worker_upgrade_run_bounded "$(cozy_worker_upgrade_apply_bound)" bash -c 'set -eu; . hack/e2e-chainsaw/_lib/run-kubernetes.sh; . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh; . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh; cozy_worker_upgrade_apply test-latest-version'
+          fi
+        check:
+          ($error == null): true
+    # The inner timeout outlasts the sum of the default-class pool test's
+    # ceilings (cozy_worker_upgrade_default_bound) by at least a minute, and
+    # the step outlasts the inner timeout; a test holds both.
+    - script:
+        timeout: 34m
+        content: |
+          timeout --kill-after=10s 32m bash <<'BASH'
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh
+          . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh
+          if cozy_worker_upgrade_required; then
+            cozy_worker_upgrade_default_test test-latest-version
+          fi
+          BASH
         check:
           ($error == null): true
     - script:
@@ -218,12 +266,21 @@ spec:
     # child it orphaned holds the pipe open (see .chainsaw.yaml), and the 265m
     # itself being an envelope rather than a computed bound, since the install
     # and prepare steps carry no ceilings of their own and the computeplane
-    # suite's red path was never counted in it. 38.3m is an estimate of the
-    # worst path, not a bound: like every Chainsaw step this one has no hard
-    # limit, since its ceiling kills the shell and not a child holding the
-    # pipe, and the job's 305m timeout is the outer limit.
+    # suite's red path was never counted in it. Required upgrade mode adds the
+    # separate upgrade and 34m default-Talos operations above. Its headroom
+    # checks reserve the sum of the required operations' ceilings, the
+    # teardown and every other Test in this file, read from it, and leave this
+    # step out. In that mode this step runs only for a Kairos change, and only
+    # when the job can still fit it, the teardown and those other Tests; it
+    # fails the test on missing headroom or a failure. The runner fails on an
+    # exhausted job budget instead of raising the 305m ceiling or reporting
+    # unrun suites green. In every mode the test runs under its own bound, 20s
+    # inside this ceiling, because the ceiling kills only the shell and a
+    # child holding its pipe would keep the step running (.chainsaw.yaml);
+    # that bound, not the sum above, is what holds.
     - script:
         timeout: 39m
+        shell: bash
         env:
         # Not the test name: the op above already wrote its passing-path serial
         # console baseline there, and a red pool's capture would overwrite it.
@@ -234,7 +291,12 @@ spec:
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
           . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh
-          run_kairos_pool_test 'test-latest-version'
+          . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh
+          if cozy_worker_upgrade_required; then
+            cozy_worker_upgrade_kairos_operation bash -c 'set -eu; . hack/e2e-chainsaw/_lib/run-kubernetes.sh; . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh; run_kairos_pool_test test-latest-version'
+          else
+            cozy_worker_upgrade_kairos_bounded bash -c 'set -eu; . hack/e2e-chainsaw/_lib/run-kubernetes.sh; . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh; run_kairos_pool_test test-latest-version'
+          fi
         check:
           ($error == null): true
     finally:
