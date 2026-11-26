@@ -32,9 +32,10 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# Get available image tags
+# Get available image tags. Only standard-trixie builds count: the chart
+# appends that suffix to the minor it reads from versions.yaml.
 echo "Fetching available image tags from registry..."
-AVAILABLE_TAGS=$(skopeo list-tags docker://ghcr.io/cloudnative-pg/postgresql | jq -r '.Tags[] | select(test("^[0-9]+\\.[0-9]+$"))' | sort -V)
+AVAILABLE_TAGS=$(skopeo list-tags docker://ghcr.io/cloudnative-pg/postgresql | jq -r '.Tags[] | select(test("^[0-9]+\\.[0-9]+-standard-trixie$")) | sub("-standard-trixie$"; "")' | sort -V)
 
 if [ -z "$AVAILABLE_TAGS" ]; then
     echo "Error: Could not fetch available image tags" >&2
