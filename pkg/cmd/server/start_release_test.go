@@ -118,3 +118,30 @@ func TestBuildResourceFromCRD_AnnotationAbsentLeavesDefault(t *testing.T) {
 		t.Errorf("HealthCheckExprs = %v, want empty", res.Release.HealthCheckExprs)
 	}
 }
+
+// The reservation gate reads each kind's declaration from the resource
+// config; a definition whose consumption is dropped here would be served as a
+// kind that declares nothing, and its orders would go ungated.
+func TestBuildResourceFromCRD_CarriesTheConsumptionDeclaration(t *testing.T) {
+	crd := v1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk"},
+		Spec: v1alpha1.ApplicationDefinitionSpec{
+			Application: v1alpha1.ApplicationDefinitionApplication{Kind: "VMDisk"},
+			Release:     v1alpha1.ApplicationDefinitionRelease{Prefix: "vm-disk-", ChartRef: &helmv2.CrossNamespaceSourceReference{Kind: "ExternalArtifact", Name: "x", Namespace: "cozy-system"}},
+			Consumption: &v1alpha1.ApplicationDefinitionConsumption{
+				Resources: map[string]string{"storage": "quantity(values.storage)"},
+			},
+		},
+	}
+	res, err := buildResourceFromCRD(crd, helmReleaseFlagValues{})
+	if err != nil {
+		t.Fatalf("buildResourceFromCRD returned error: %v", err)
+	}
+	if res.Application.Consumption == nil || res.Application.Consumption.Resources["storage"] != "quantity(values.storage)" {
+		t.Fatalf("Consumption = %+v, want the definition's declaration", res.Application.Consumption)
+	}
+	crd.Spec.Consumption.Resources["storage"] = "changed"
+	if res.Application.Consumption.Resources["storage"] != "quantity(values.storage)" {
+		t.Fatal("the resource config shares the declaration with the definition it was read from")
+	}
+}

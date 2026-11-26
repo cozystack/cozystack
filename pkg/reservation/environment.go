@@ -28,6 +28,13 @@ import (
 // reserving nothing.
 var ErrNotFound = errors.New("not found")
 
+// ErrUnavailable is wrapped by an Environment when it could not read the
+// cluster objects it resolves names against. Unlike ErrNotFound it says
+// nothing about the declaration or the values: the same evaluation may
+// succeed a moment later, so a caller summing a pool must not take it for an
+// application that no longer evaluates.
+var ErrUnavailable = errors.New("unavailable")
+
 // Environment resolves the cluster objects a declaration may reference by
 // name. Implementations must be safe for concurrent use and return a list
 // the caller may keep: the evaluator does not copy it.
