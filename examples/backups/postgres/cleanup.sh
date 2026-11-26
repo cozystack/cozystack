@@ -20,6 +20,13 @@ for app in "$PG_SRC_NAME" "$PG_TARGET_NAME"; do
     fi
 done
 
+# Run-all step 26 fences the source Cluster; an aborted run leaves it fenced.
+if kubectl get clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+    log_substep "Lifting the fence on ${PG_SRC_CLUSTER} (no-op if not fenced)..."
+    kubectl annotate clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" --namespace "$NAMESPACE" \
+        'cnpg.io/fencedInstances-' >/dev/null || true
+fi
+
 log_substep "Deleting RestoreJobs..."
 kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io \
     "$RESTOREJOB_TOCOPY_NAME" "$RESTOREJOB_PITR_NAME" "$RESTOREJOB_UNREACHABLE_NAME" \
@@ -28,7 +35,7 @@ kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io \
 log_substep "Deleting Plan + BackupJob + derived Backup artefacts..."
 kubectl -n "$NAMESPACE" delete plan.backups.cozystack.io "$PLAN_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete backupjob.backups.cozystack.io \
-    "$BACKUPJOB_NAME" "$BACKUPJOB_POSTMARKER_NAME" --ignore-not-found
+    "$BACKUPJOB_NAME" "$BACKUPJOB_POSTMARKER_NAME" "$BACKUPJOB_FENCED_NAME" --ignore-not-found
 # Only the Backups of THIS demo's apps — never `--all`: on a shared cluster the
 # namespace can hold Backup artefacts of other applications and flows.
 for b in $(kubectl -n "$NAMESPACE" get backups.backups.cozystack.io \

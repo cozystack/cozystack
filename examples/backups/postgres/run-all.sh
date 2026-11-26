@@ -8,7 +8,8 @@
 # automated test can never drift. Stops on the first failure.
 #
 # Flow: Bucket -> source Postgres (+ a sentinel row) -> CNPG strategy +
-# BackupClass -> ad-hoc BackupJob (wait Succeeded) -> empty target Postgres +
+# BackupClass -> ad-hoc BackupJob (wait Succeeded) -> a BackupJob on a fenced
+# Cluster (stall reported, then Succeeded once unfenced) -> empty target Postgres +
 # to-copy RestoreJob (wait Succeeded) -> assert the sentinel round-tripped
 # through S3 into the restored copy.
 #
@@ -157,6 +158,80 @@ BACKUP_NAME=$(kubectl -n "$NAMESPACE" get backupjobs.backups.cozystack.io "$BACK
     -o jsonpath='{.status.backupRef.name}')
 [[ -n "$BACKUP_NAME" ]] || { log_error "BackupJob succeeded but reported no backupRef"; exit 1; }
 log_success "Backup artefact: ${BACKUP_NAME}"
+
+print_header "Step 26: A BackupJob on a fenced Cluster reports the stall, then completes once the fence is lifted"
+# Fencing stops PostgreSQL on every instance, so no backup target is ready and
+# CloudNativePG keeps the Backup pending with a Warning event on it, while no
+# other backup of the Cluster runs. The driver must record that as a stall
+# carrying the event, which it reads by the Backup's UID, and must end the
+# stall once CloudNativePG starts the Backup. Failing at the 30m deadline is
+# left to the unit tests.
+kubectl annotate clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" --namespace "$NAMESPACE" \
+    --overwrite 'cnpg.io/fencedInstances=["*"]'
+# The fence takes effect asynchronously, and CloudNativePG starts a Backup on
+# a target instance that is still Ready, so the BackupJob is created only once
+# every instance has gone NotReady.
+FENCED_PODS=$(kubectl get pods --namespace "$NAMESPACE" \
+    --selector "cnpg.io/cluster=${PG_SRC_CLUSTER},cnpg.io/podRole=instance" \
+    --output jsonpath='{.items[*].metadata.name}')
+[[ -n "$FENCED_PODS" ]] || { log_error "no instance pods of ${PG_SRC_CLUSTER} to wait on"; exit 1; }
+for pod in $FENCED_PODS; do
+    wait_for_field pods "$pod" '{.status.conditions[?(@.type=="Ready")].status}' False "$NAMESPACE" 300
+done
+kubectl apply --namespace "$NAMESPACE" --filename - <<EOF
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: ${BACKUPJOB_FENCED_NAME}
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: ${PG_SRC_NAME}
+  backupClassName: ${BACKUPCLASS_NAME}
+EOF
+STALLED_PATH='{.status.conditions[?(@.type=="CNPGBackupStalled")].status}'
+# CloudNativePG retries a pending Backup every 30s and the driver polls every
+# 5s, so the stall shows within a minute of the Backup being created. Its
+# event recorder is asynchronous, so the first stall message can predate the
+# event, and a single events read can fail; the driver rewrites the message
+# on its next pass. A job that finishes first fails the step at once.
+log_substep "Waiting for ${BACKUPJOB_FENCED_NAME} to report the stall with the reason CloudNativePG recorded..."
+STALL_WAIT=0
+while true; do
+    # One read, so the phase, the stall and its message come from the same
+    # pass of the driver; the message goes last since it may contain the
+    # separator.
+    FENCED_STATE=$(kubectl get backupjobs.backups.cozystack.io "$BACKUPJOB_FENCED_NAME" --namespace "$NAMESPACE" \
+        --output jsonpath='{.status.phase}|{.status.conditions[?(@.type=="CNPGBackupStalled")].status}|{.status.conditions[?(@.type=="CNPGBackupStalled")].message}' || true)
+    IFS='|' read -r FENCED_PHASE STALLED STALL_MESSAGE <<<"$FENCED_STATE"
+    if [[ "$FENCED_PHASE" == Failed || "$FENCED_PHASE" == Succeeded ]]; then
+        log_error "${BACKUPJOB_FENCED_NAME} reached '${FENCED_PHASE}' before reporting the stall: $(kubectl get backupjobs.backups.cozystack.io "$BACKUPJOB_FENCED_NAME" --namespace "$NAMESPACE" --output jsonpath='{.status.message}')"
+        exit 1
+    fi
+    if [[ "$STALLED" == True ]]; then
+        case "$STALL_MESSAGE" in
+            *"cannot be read"*|*"recorded no warning event"*) ;;
+            *) break ;;
+        esac
+    fi
+    if [[ $STALL_WAIT -ge 420 ]]; then
+        log_error "${BACKUPJOB_FENCED_NAME} did not report the stall with the reason CloudNativePG recorded (CNPGBackupStalled '${STALLED}'): ${STALL_MESSAGE}"
+        exit 1
+    fi
+    sleep 5
+    STALL_WAIT=$((STALL_WAIT + 5))
+done
+log_info "Stall: ${STALL_MESSAGE}"
+kubectl annotate clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" --namespace "$NAMESPACE" 'cnpg.io/fencedInstances-'
+wait_for_field clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" \
+    '{.status.phase}' 'Cluster in healthy state' "$NAMESPACE" 360
+wait_for_field backupjobs.backups.cozystack.io "$BACKUPJOB_FENCED_NAME" \
+    '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed
+STALLED=$(kubectl get backupjobs.backups.cozystack.io "$BACKUPJOB_FENCED_NAME" --namespace "$NAMESPACE" \
+    --output jsonpath="$STALLED_PATH")
+[[ "$STALLED" == "False" ]] || { log_error "CNPGBackupStalled is '${STALLED}' on the BackupJob that completed, want False"; exit 1; }
+log_success "The stall was reported while fenced and ended when the backup ran"
 
 if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
     log_warning "SKIP_RESTORE=1: stopping after a successful backup."
