@@ -205,11 +205,25 @@ jobs:
         with:
           fetch-depth: 0
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
-      # self-hosted runner accreted. Install if absent (idempotent).
+      # self-hosted runner accreted. Install if absent (idempotent). bats-core
+      # runs the unit suites that load hack/test_helper.bash; pinned like on
+      # main, and the tag's commit is verified because archive bytes can change.
       - name: Set up test toolchain
+        env:
+          BATS_VERSION: "1.14.0"
+          BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
+          if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
+            bats_parent=$(mktemp -d "$RUNNER_TEMP/bats-core.XXXXXX")
+            bats_source="$bats_parent/source"
+            git clone --quiet --depth=1 --branch "v$BATS_VERSION" \
+              https://github.com/bats-core/bats-core.git "$bats_source"
+            test "$(git -C "$bats_source" rev-parse HEAD)" = "$BATS_COMMIT"
+            sudo "$bats_source/install.sh" /usr/local
+          fi
+          bats --version | grep -qx "Bats $BATS_VERSION"
       - name: Run unit tests
         run: make unit-tests
       - name: Run controller Go tests

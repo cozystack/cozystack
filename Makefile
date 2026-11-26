@@ -153,9 +153,15 @@ test-controllers:
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
-# up automatically on the next `make unit-tests` run.
+# Discover every hack/*.bats file that is NOT an e2e test. Drop a new
+# *.bats file in hack/ and it is picked up automatically on the next
+# `make unit-tests` run.
+#
+# Suites that load hack/test_helper.bash were written for bats-core on main
+# (#3849) and reach this line through backports: they need its setup() hook
+# and BATS_TEST_TMPDIR, which cozytest.sh does not provide, so they run under
+# bats. Every other suite keeps running through cozytest.sh, under /bin/sh
+# and nounset, as it always has here.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
@@ -163,16 +169,26 @@ test-check-readiness:
 # introduces whitespace-bearing filenames this recipe must be rewritten
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+BATS_NATIVE_FILES := $(if $(BATS_UNIT_FILES),$(shell grep -l '^[[:space:]]*load[[:space:]][[:space:]]*test_helper[[:space:]]*$$' $(BATS_UNIT_FILES)))
+BATS_COZYTEST_FILES := $(filter-out $(BATS_NATIVE_FILES),$(BATS_UNIT_FILES))
 
 bats-unit-tests:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
 		exit 1; \
 	fi
-	@for f in $(BATS_UNIT_FILES); do \
+	@for f in $(BATS_COZYTEST_FILES); do \
 		echo "--- running $$f ---"; \
 		hack/cozytest.sh "$$f" || exit 1; \
 	done
+	@if [ -n "$(BATS_NATIVE_FILES)" ]; then \
+		command -v bats >/dev/null 2>&1 || { \
+			echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
+			exit 1; \
+		}; \
+		echo "--- running under bats: $(BATS_NATIVE_FILES) ---"; \
+		bats $(BATS_NATIVE_FILES); \
+	fi
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded
