@@ -33,7 +33,8 @@ spec:
           is working properly.
       expr: vector(1)
       labels:
-        severity: ok
+        severity: major
+        timeout: "300"
         exported_instance: global
         service: general.rules
         event: Heartbeat
