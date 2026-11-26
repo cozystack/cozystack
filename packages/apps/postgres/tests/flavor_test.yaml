@@ -1,8 +1,8 @@
 suite: postgres image flavor
 # The Cluster and the init Job must resolve the same image, and a live
-# cluster must never be moved to the other flavor: only one image family
-# carries the PostGIS libraries, and CNPG would roll the swap out as an
-# ordinary image update. Tags are matched by pattern so that
+# cluster must never be moved to the other flavor: the two image families
+# ship different glibc versions, so CNPG would roll an image swap that
+# corrupts collatable indexes. Tags are matched by pattern so that
 # hack/update-versions.sh can bump minors without touching this suite.
 release:
   name: pg-test
@@ -20,7 +20,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.imageName
-          pattern: ^ghcr\.io/cloudnative-pg/postgresql:18\.[0-9]+-standard-trixie$
+          pattern: ^ghcr\.io/cloudnative-pg/postgresql:18\.[0-9]+$
 
   - it: postgis flavor switches the Cluster to the standard-trixie PostGIS image
     set:
