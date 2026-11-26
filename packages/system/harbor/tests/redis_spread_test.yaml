@@ -12,7 +12,7 @@ templates:
   - templates/redis.yaml
 
 tests:
-  - it: requires one sentinel and one Redis pod per node by default
+  - it: requires one sentinel and one Redis pod per node by default, and prefers spreading them across zones
     documentSelector:
       path: kind
       value: RedisFailover
@@ -30,6 +30,13 @@ tests:
                 matchLabels:
                   app.kubernetes.io/name: harbor-test-redis
                   app.kubernetes.io/component: sentinel
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: harbor-test-redis
+                  app.kubernetes.io/component: sentinel
       - equal:
           path: spec.redis.topologySpreadConstraints
           value:
@@ -37,6 +44,13 @@ tests:
               topologyKey: kubernetes.io/hostname
               whenUnsatisfiable: DoNotSchedule
               nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: harbor-test-redis
+                  app.kubernetes.io/component: redis
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
               labelSelector:
                 matchLabels:
                   app.kubernetes.io/name: harbor-test-redis
