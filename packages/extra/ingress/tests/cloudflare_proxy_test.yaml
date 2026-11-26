@@ -8,7 +8,7 @@ set:
   _cluster: {}
   cloudflareProxy: true
 tests:
-  - it: trusts CF-Connecting-IP only from the Cloudflare ranges
+  - it: trusts CF-Connecting-IP from Cloudflare ranges and the passthrough proxy
     asserts:
       - matchRegex:
           path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
@@ -16,12 +16,48 @@ tests:
       - notMatchRegex:
           path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
           pattern: (^|,)(0\.0\.0\.0/0|::/0)(,|$)
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
+          pattern: '(^|,)127\.0\.0\.1/32(,|$)'
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
+          pattern: '(^|,)::1/128(,|$)'
       - equal:
           path: spec.values.ingress-nginx.controller.config.use-forwarded-headers
           value: "true"
-      - equal:
+      - matchRegex:
           path: spec.values.ingress-nginx.controller.config.server-snippet
-          value: "real_ip_header CF-Connecting-IP;"
+          pattern: 'real_ip_header CF-Connecting-IP;'
+
+  - it: rejects a spoofed Cloudflare header before the whitelist
+    asserts:
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: 'geo \$cozy_cf_source \$cozy_cf_trusted \{\n    default 0;'
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: '173\.245\.48\.0/20 1;'
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: '2400:cb00::/32 1;'
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: 'map "\$cozy_cf_trusted:\$http_cf_connecting_ip" \$cozy_cf_reject \{\n    default 0;\n    "~\^0:\.\+\$" 1;\n\}'
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.server-snippet
+          pattern: 'if \(\$cozy_cf_reject = 1\) \{\n    return 403;\n\}'
+
+  - it: checks the original socket peer when PROXY protocol is absent on port 80
+    asserts:
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: 'map \$proxy_protocol_addr \$cozy_cf_source \{\n    ""      \$realip_remote_addr;\n    default \$proxy_protocol_addr;\n\}'
+
+  - it: preserves the controller keepalive override
+    asserts:
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.http-snippet
+          pattern: 'keepalive_time 12h;'
 
   - it: does not use set_real_ip_from, which is not an ingress-nginx ConfigMap key
     asserts:
