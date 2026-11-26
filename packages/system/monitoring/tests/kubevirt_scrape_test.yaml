@@ -1,0 +1,40 @@
+suite: kubevirt virt-handler scrape
+templates:
+  - templates/vm/kubevirt-scrape.yaml
+
+tests:
+  - it: a tenant Monitoring keeps only the VMI series of its own subtree
+    release:
+      name: monitoring
+      namespace: tenant-acme
+    asserts:
+      - isKind:
+          of: VMPodScrape
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value: [cozy-kubevirt]
+      - equal:
+          path: spec.selector.matchLabels["kubevirt.io"]
+          value: virt-handler
+      - equal:
+          path: spec.podMetricsEndpoints[0].honorLabels
+          value: true
+      - equal:
+          path: spec.podMetricsEndpoints[0].scheme
+          value: https
+      - equal:
+          path: spec.podMetricsEndpoints[0].metricRelabelConfigs
+          value:
+            - action: keep
+              sourceLabels: [namespace]
+              regex: "tenant-acme(-.*)?"
+
+  - it: the root Monitoring keeps every VMI series
+    release:
+      name: monitoring
+      namespace: tenant-root
+    asserts:
+      - isKind:
+          of: VMPodScrape
+      - notExists:
+          path: spec.podMetricsEndpoints[0].metricRelabelConfigs
