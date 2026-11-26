@@ -3,6 +3,9 @@ apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
 metadata:
   name: {{ .Release.Name }}-registry
+  labels:
+    release: {{ .Release.Name }}-system
+    component: registry
 spec:
   bucketClassName: {{ $seaweedfs }}
   protocols:
