@@ -1,5 +1,36 @@
 {{- $seaweedfs := .Values._namespace.seaweedfs }}
 {{- $pool := .Values.storagePool }}
+{{- /*
+COSI classes are cluster-scoped and named after the namespace of the instance
+that owns them, so a class name built from a storagePool can also be the name
+of another tenant's instance class. The driver identifies the instance; a
+storage pool class that does not exist is refused too, so that a claim cannot
+wait for another instance to create it. The release namespace lookup is empty
+only when no cluster is reachable.
+*/}}
+{{- if and $seaweedfs (lookup "v1" "Namespace" "" .Release.Namespace) }}
+{{-   $base := $seaweedfs }}
+{{-   if $pool }}{{ $base = printf "%s-%s" $seaweedfs $pool }}{{ end }}
+{{-   $claimClass := $base }}
+{{-   if .Values.locking }}
+{{-     $claimClass = printf "%s-lock" $base }}
+{{-     if eq (toString .Values.lockingDefaultRetention) "false" }}{{ $claimClass = printf "%s-noretention" $claimClass }}{{ end }}
+{{-   end }}
+{{-   $classes := list (list "BucketClass" $claimClass) }}
+{{-   range $name, $user := .Values.users }}
+{{-     $classes = append $classes (list "BucketAccessClass" (printf "%s%s" $base (ternary "-readonly" "" (not (not $user.readonly))))) }}
+{{-   end }}
+{{-   if .Values.publicRead }}
+{{-     $classes = append $classes (list "BucketAccessClass" (printf "%s-public" $base)) }}
+{{-   end }}
+{{-   $driver := printf "%s.seaweedfs.objectstorage.k8s.io" $seaweedfs }}
+{{-   range $class := $classes }}
+{{-     $live := lookup "objectstorage.k8s.io/v1alpha1" (index $class 0) "" (index $class 1) }}
+{{-     if or (and $live (ne (toString $live.driverName) $driver)) (and (not $live) $pool) }}
+{{-       fail (printf "%s %q is not provided by the SeaweedFS instance in namespace %q: set storagePool to a pool declared in that instance's volume.pools or volume.zones.<zone>.pools, or leave it empty" (index $class 0) (index $class 1) $seaweedfs) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
 metadata:
