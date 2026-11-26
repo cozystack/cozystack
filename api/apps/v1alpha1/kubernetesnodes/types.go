@@ -25,6 +25,11 @@ type ConfigSpec struct {
 	// Joins this pool's worker VMs to a cozyplane VPC. Must match the parent Kubernetes cluster's `network`, which puts the control plane in the same VPC. Setting or changing it on an existing pool rolls every worker VM of the pool. Requires the cozyplane networking variant and `substrate: kubevirt`.
 	// +kubebuilder:default:={}
 	Network Network `json:"network,omitempty"`
+	// Name of a cozyplane RouteTable in the VPC's namespace that routes this pool's worker VMs. Empty uses the VPC's default table. Requires `network.name` and the cozyplane networking variant. Like `network`, setting or changing it rolls every worker VM of the pool.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
+	RouteTable string `json:"routeTable"`
 	// StorageClass for the worker node system disk. When empty, CDI picks the class: the one annotated `storageclass.kubevirt.io/is-default-virt-class`, else the cluster default. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class. On an `osImage.builtin` pool this field also decides whether the pool renders at all: the chart refuses a pool whose class differs from its golden's, because across classes CDI either falls back to a host-assisted copy over the pod network (different CSI drivers or volume modes) or leaves a clone into the other class to the CSI driver. Leaving it empty makes the same comparison against the class CDI would pick. On a `builtin` pool the resolved class is then written onto the worker disk rather than left for the cluster to fill in at bind time, so a pool that has already cloned keeps binding on the class its disks are on even after an admin moves the default annotation; on the HTTP path an empty class is still left to the cluster. Has no effect on `substrate: proxmox`, where the worker disk is cloned from the VM template onto the template's storage or `proxmox.storage`.
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"

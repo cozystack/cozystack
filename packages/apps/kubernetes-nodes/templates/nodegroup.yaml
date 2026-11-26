@@ -51,6 +51,18 @@
 {{-     fail "network.name applies to kubevirt workers, which are pods; substrate proxmox workers are not" }}
 {{-   end }}
 {{- end }}
+{{- $routeTable := .Values.routeTable | default "" }}
+{{- if $routeTable }}
+{{-   if not (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") }}
+{{-     fail (printf "routeTable %q names a cozyplane RouteTable, but the cluster does not serve sdn.cozystack.io: route tables need the cozyplane networking variant" $routeTable) }}
+{{-   end }}
+{{-   if $isProxmox }}
+{{-     fail (printf "routeTable %q applies to kubevirt workers, which are pods; substrate proxmox workers are not" $routeTable) }}
+{{-   end }}
+{{-   if not $vpc }}
+{{-     fail (printf "routeTable %q needs the pool to join a VPC: name the VirtualPrivateCloud in network.name" $routeTable) }}
+{{-   end }}
+{{- end }}
 {{- /* A worker inside a VPC reaches only what is attached to that VPC, so its
        control plane has to be in the same one. Compared against the live
        apiserver Service; inert where there is no cluster to read. */}}
@@ -612,6 +624,9 @@ spec:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
             {{- with dig "name" "" (.Values.network | default dict) }}
             sdn.cozystack.io/vpc: {{ printf "virtualprivatecloud-%s" . | quote }}
+            {{- end }}
+            {{- with .Values.routeTable }}
+            sdn.cozystack.io/route-table: {{ . | quote }}
             {{- end }}
           labels:
             {{- /* The VM pod is intentionally attributed to the parent Kubernetes

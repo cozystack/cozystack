@@ -14,6 +14,11 @@ cluster: ""
 ## @param {Network} [network] - Joins this pool's worker VMs to a cozyplane VPC. Must match the parent Kubernetes cluster's `network`, which puts the control plane in the same VPC. Setting or changing it on an existing pool rolls every worker VM of the pool. Requires the cozyplane networking variant and `substrate: kubevirt`.
 network: {}
 
+## @param {string} routeTable - Name of a cozyplane RouteTable in the VPC's namespace that routes this pool's worker VMs. Empty uses the VPC's default table. Requires `network.name` and the cozyplane networking variant. Like `network`, setting or changing it rolls every worker VM of the pool.
+## @maxLength 253
+## @pattern ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$
+routeTable: ""
+
 # Internal wiring value `clusterReleaseName` (consumed by kubernetes-nodes.clusterName
 # in templates/_helpers.tpl) is deliberately NOT declared here and NOT a @param:
 # it must stay out of the public KubernetesNodes API (values.schema.json / CRD /

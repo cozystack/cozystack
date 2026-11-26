@@ -196,7 +196,86 @@ tests:
             resources: ["pods"]
             verbs: ["create"]
 
+  - it: names the pool's route table next to the VPC on the worker VM template
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+      routeTable: to-internet
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/route-table"]
+          value: to-internet
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+
   # Rendered only when set: the KubevirtMachineTemplate is content-hash named.
+  - it: leaves the VPC's default route table to cozyplane when routeTable is empty
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/route-table"]
+
+  - it: refuses a route table where sdn.cozystack.io is not served
+    template: templates/nodegroup.yaml
+    set:
+      routeTable: to-internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable "to-internet" names a cozyplane RouteTable, but the cluster does not serve sdn.cozystack.io'
+
+  - it: refuses a route table on the proxmox substrate
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      routeTable: to-internet
+      substrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable "to-internet" applies to kubevirt workers'
+
+  - it: refuses a route table without a VPC to route
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      routeTable: to-internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable "to-internet" needs the pool to join a VPC'
+
+  - it: refuses a route table name that is not a DNS-1123 name
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+      routeTable: To_Internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable.*does not match pattern'
+
   - it: refuses a network name that is not a DNS-1123 label
     template: templates/nodegroup.yaml
     capabilities:
