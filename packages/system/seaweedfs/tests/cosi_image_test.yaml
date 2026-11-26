@@ -7,7 +7,7 @@ suite: seaweedfs COSI driver image pin
 # BucketAccess and ignores the accessPolicy parameter. The chart ships a
 # -readonly BucketAccessClass with parameters.accessPolicy: readonly, so on
 # v0.1.2 a credential meant to be read-only is silently granted read-write.
-# The package values.yaml overrides cosi.image to v0.3.1, which honours
+# The package values.yaml overrides cosi.image to v0.4.0, which honours
 # accessPolicy: readonly.
 #
 # This test does not set the image itself; it relies on the package values.yaml
@@ -25,7 +25,7 @@ release:
   namespace: cozy-seaweedfs
 
 tests:
-  - it: pins the cosi-driver container to v0.3.1 (read-only access enforcement)
+  - it: pins the cosi-driver container to v0.4.0 (read-only access enforcement)
     template: charts/seaweedfs/templates/cosi/cosi-deployment.yaml
     set:
       seaweedfs.cosi.enabled: true
@@ -35,4 +35,4 @@ tests:
           value: seaweedfs-cosi-driver
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1
+          value: ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.4.0
