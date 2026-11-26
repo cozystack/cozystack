@@ -285,6 +285,8 @@ load test_helper
     body { sub(/^          /, ""); print }' "$root/.github/workflows/pull-requests.yaml")"
   [ -n "$script" ] || { echo "cannot extract the pull step's script" >&2; exit 1; }
 
+  mkdir -p hack
+  cp "$root/hack/pr-artifact-ref.sh" hack/
   mkdir -p "$w/bin"
   printf '#!/bin/sh\nprintf "%%s\\n" "$3" > "%s/pulled"\nexit 1\n' "$w" > "$w/bin/flux"
   chmod +x "$w/bin/flux"
