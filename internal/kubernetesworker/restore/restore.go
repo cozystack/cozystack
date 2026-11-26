@@ -142,10 +142,14 @@ func workerSpecs(raw []byte) (map[string]any, error) {
 		}
 		result[key] = obj.Object[field]
 		if obj.GetKind() == "MachineDeployment" {
-			// Autoscaler bounds and capacity live in MD annotations; only the
-			// class marker is expected to differ.
+			// Autoscaler bounds and capacity live in MD annotations; the class
+			// marker and the label and taint hints, which the pre-class chart
+			// never renders, are expected to differ. The labels and taints
+			// themselves are in the compared spec and bootstrap template.
 			annotations := obj.GetAnnotations()
 			delete(annotations, classAnnotation)
+			delete(annotations, "capacity.cluster-autoscaler.kubernetes.io/labels")
+			delete(annotations, "capacity.cluster-autoscaler.kubernetes.io/taints")
 			if len(annotations) == 0 {
 				annotations = nil
 			}

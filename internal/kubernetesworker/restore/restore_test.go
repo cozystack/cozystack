@@ -143,3 +143,19 @@ func TestProxmoxRestorationLeavesOutTheImportCA(t *testing.T) {
 		t.Fatalf("a Proxmox restoration kept the import CA: %v", got["talos"])
 	}
 }
+
+// The pre-class chart renders no label or taint hints for the autoscaler; the
+// labels and taints themselves are part of the compared MachineDeployment spec
+// and bootstrap template.
+func TestRenderProofSkipsAutoscalerLabelAndTaintHints(t *testing.T) {
+	md := func(annotations string) []byte {
+		return []byte("apiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: pool\n  annotations:\n    capacity.cluster-autoscaler.kubernetes.io/memory: 3Gi\n" + annotations + "spec: {replicas: 1}\n---\napiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: KubevirtMachineTemplate\nmetadata:\n  name: vm-a\nspec: {}\n")
+	}
+	current := md("    capacity.cluster-autoscaler.kubernetes.io/labels: node-role.kubernetes.io/ingress-nginx=\n    capacity.cluster-autoscaler.kubernetes.io/taints: dedicated=gpu:NoSchedule\n")
+	if err := VerifyRendered(current, md("")); err != nil {
+		t.Fatalf("label and taint hints failed the proof: %v", err)
+	}
+	if err := VerifyRendered(current, []byte(strings.Replace(string(md("")), "3Gi", "4Gi", 1))); err == nil {
+		t.Fatal("a changed memory capacity passed the proof")
+	}
+}
