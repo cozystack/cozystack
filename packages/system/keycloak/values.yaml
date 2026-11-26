@@ -273,6 +273,47 @@ encryption:
 database:
   affinity: {}
   topologySpreadConstraints: []
+  # Optional read-only login role on keycloak-db, managed by CloudNativePG
+  # (spec.managed.roles), for operators who need to query the database
+  # without Keycloak's own credentials. It inherits pg_read_all_data and
+  # nothing else: no superuser, createdb, createrole, replication or
+  # bypassrls. Off by default.
+  #
+  # pg_read_all_data reads every table, which in a Keycloak database
+  # includes credential hashes, OTP secrets, client secrets and the realm
+  # signing keys. Treat this password like an administrator credential.
+  # Columns the KMS proxy encrypts (encryption.enabled) are read as
+  # ciphertext: this role connects to the database, not to the proxy.
+  #
+  # The password comes from a Secret this chart does NOT create, in the
+  # release namespace. CloudNativePG reads its keys `username` (equal to
+  # `name` below, or the role is not reconciled) and `password`; its
+  # documentation also gives such a Secret type kubernetes.io/basic-auth
+  # and the label cnpg.io/reload: "true", and the label is what makes a
+  # password change reach the database without waiting for another
+  # reconcile. Until the Secret exists the role cannot log in: depending on
+  # the CloudNativePG version it is either not created (and listed under
+  # the Cluster's status.managedRolesStatus) or created without a password.
+  #
+  # Logins are password (scram-sha-256) over TCP through CloudNativePG's
+  # default pg_hba rule, from inside the cluster: the database Services are
+  # ClusterIP.
+  #
+  # Turning `enabled` off again does NOT drop the role: CloudNativePG only
+  # stops managing it and the login keeps working. To revoke access, keep
+  # it enabled and set `ensure: absent`.
+  readonlyRole:
+    enabled: false
+    # Role name: lowercase letters, digits and underscores, starting with a
+    # letter. Must not be app, the role Keycloak itself logs in with.
+    name: readonly
+    # present creates or updates the role; absent drops it.
+    ensure: present
+    # Concurrent connections allowed for the role; -1 means unlimited.
+    connectionLimit: 5
+    # Secret holding the password; empty means keycloak-db-<name>, which
+    # needs a name without underscores to be a valid Secret name.
+    passwordSecretName: ""
 
 # Scheduled S3 backup of the Keycloak CNPG database (keycloak-db).
 # Disabled by default; enabling it configures WAL archiving + base backups

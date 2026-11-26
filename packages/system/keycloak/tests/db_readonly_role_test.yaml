@@ -1,0 +1,191 @@
+suite: keycloak-db read-only managed role
+templates:
+  - templates/db.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+set:
+  _cluster:
+    root-host: example.org
+    cluster-domain: cozy.local
+
+tests:
+  - it: manages no roles by default
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.managed
+
+  # The whole role is compared, not field by field: a field-by-field check
+  # keeps passing when a new attribute (superuser, createrole, another
+  # inRoles entry) is added next to the ones it looks at.
+  - it: renders a login role that only inherits pg_read_all_data when enabled
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.managed.roles
+          count: 1
+      - equal:
+          path: spec.managed.roles[0]
+          value:
+            name: readonly
+            ensure: present
+            comment: Read-only access to every table (pg_read_all_data)
+            login: true
+            inherit: true
+            superuser: false
+            createdb: false
+            createrole: false
+            replication: false
+            bypassrls: false
+            connectionLimit: 5
+            inRoles:
+              - pg_read_all_data
+            passwordSecret:
+              name: keycloak-db-readonly
+
+  - it: derives the password Secret from a custom role name
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: support
+          connectionLimit: 2
+    asserts:
+      - equal:
+          path: spec.managed.roles[0].name
+          value: support
+      - equal:
+          path: spec.managed.roles[0].connectionLimit
+          value: 2
+      - equal:
+          path: spec.managed.roles[0].passwordSecret
+          value:
+            name: keycloak-db-support
+
+  - it: references an explicitly named password Secret
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          passwordSecretName: keycloak-readonly-creds
+    asserts:
+      - equal:
+          path: spec.managed.roles[0].passwordSecret
+          value:
+            name: keycloak-readonly-creds
+
+  # Removing a role from spec.managed.roles does not drop it: CNPG stops
+  # managing it and the login keeps working. Revoking takes ensure: absent.
+  - it: drops the role when ensure is absent
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          ensure: absent
+    asserts:
+      - equal:
+          path: spec.managed.roles[0].ensure
+          value: absent
+
+  - it: rejects an ensure value CNPG does not know
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          ensure: disabled
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.readonlyRole.ensure must be present or absent"
+
+  # Keycloak logs in as the initdb owner, app. Managing that role here
+  # would replace its password with the read-only Secret and cut Keycloak
+  # off from its database.
+  - it: rejects the role Keycloak itself logs in with
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: app
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.readonlyRole.name must not be app"
+
+  - it: rejects an empty role name
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.readonlyRole.name must not be empty"
+
+  - it: rejects a role name that is not a plain lowercase identifier
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: Read-Only
+    asserts:
+      - failedTemplate:
+          errorPattern: "database.readonlyRole.name must be lowercase letters, digits and underscores"
+
+  # read_only is a fine role name but not a Secret name, and CloudNativePG
+  # would wait for that Secret forever without a word.
+  - it: rejects a derived Secret name Kubernetes would not accept
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: read_only
+    asserts:
+      - failedTemplate:
+          errorPattern: "keycloak-db-read_only is not a valid Secret name"
+
+  - it: accepts an underscore role name with an explicit Secret name
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          name: read_only
+          passwordSecretName: keycloak-read-only
+    asserts:
+      - equal:
+          path: spec.managed.roles[0].name
+          value: read_only
+      - equal:
+          path: spec.managed.roles[0].passwordSecret.name
+          value: keycloak-read-only
+
+  - it: rejects an explicit Secret name Kubernetes would not accept
+    set:
+      database:
+        readonlyRole:
+          enabled: true
+          passwordSecretName: Keycloak_RO
+    asserts:
+      - failedTemplate:
+          errorPattern: "Keycloak_RO is not a valid Secret name"
