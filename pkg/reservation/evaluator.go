@@ -99,6 +99,13 @@ func Compile(decl *Declaration, schema *structuralschema.Structural) (*Evaluator
 		cel.Function(presetFunc,
 			cel.Overload("preset_string", []*cel.Type{cel.StringType}, cel.MapType(cel.StringType, cel.DynType),
 				cel.LateFunctionBinding())),
+		// fail refuses a spec the kind's chart would refuse to render, with
+		// the declaration's reason, rather than reserving for it.
+		cel.Function("fail",
+			cel.Overload("fail_string", []*cel.Type{cel.StringType}, cel.DynType,
+				cel.UnaryBinding(func(msg ref.Val) ref.Val {
+					return types.NewErr("%s", msg.(types.String))
+				}))),
 		cel.Function("quantity",
 			cel.Overload("quantity_int", []*cel.Type{cel.IntType}, apiservercel.QuantityType,
 				cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -191,9 +198,19 @@ func (e *Evaluator) Evaluate(values map[string]any, env Environment) (ResourceLi
 	if err := checkTypes(defaulted, e.schema, ""); err != nil {
 		return nil, err
 	}
+	// Helm deletes a key its values set to null, the chart's own default
+	// included, so a nulled scalar is kept out after defaulting. A nulled
+	// object or list keeps its default: charts read those through
+	// `default dict` and `default list`, which renders the same as the empty
+	// default the schema puts back.
+	nulled := takeNulls(defaulted, nil)
 	if err := defaulting.Apply(&defaulted, e.schema); err != nil {
 		return nil, fmt.Errorf("default values: %w", err)
 	}
+	for _, path := range nulled {
+		deleteScalarAt(defaulted, path)
+	}
+	dropNulls(defaulted)
 
 	// The environment differs per call, so instanceType and preset are
 	// declared with a late binding and bound here, per program; cel.Functions
@@ -276,7 +293,7 @@ func lookup(resolve func(string) (ResourceList, error), zeroKeys []string) funct
 }
 
 func mulQuantity(q, n ref.Val) ref.Val {
-	qq, ok := q.(apiservercel.Quantity)
+	qq, ok := asQuantity(q)
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(q)
 	}
@@ -285,16 +302,36 @@ func mulQuantity(q, n ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(n)
 	}
 	out := qq.DeepCopy()
-	if !out.Mul(int64(nn)) {
-		return types.NewErr("quantity %s * %d overflows", qq.String(), int64(nn))
-	}
+	// Mul reports whether the product still fits an int64 coefficient, not
+	// whether it is exact: past that it carries on in arbitrary precision,
+	// which a fractional binary quantity such as 20.5Gi reaches at any size
+	// worth reserving.
+	out.Mul(int64(nn))
 	return apiservercel.Quantity{Quantity: &out}
 }
 
-func toQuantity(v ref.Val) (resource.Quantity, error) {
+// asQuantity reads a CEL quantity whichever form it takes: the Kubernetes
+// library returns a pointer from add and sub, and a value from quantity().
+// It matches the types rather than calling Value(), which would first
+// materialize any other result, a list included, outside the cost limit.
+func asQuantity(v ref.Val) (*resource.Quantity, bool) {
 	switch t := v.(type) {
 	case apiservercel.Quantity:
-		return t.DeepCopy(), nil
+		return t.Quantity, t.Quantity != nil
+	case *apiservercel.Quantity:
+		if t == nil || t.Quantity == nil {
+			return nil, false
+		}
+		return t.Quantity, true
+	}
+	return nil, false
+}
+
+func toQuantity(v ref.Val) (resource.Quantity, error) {
+	if q, ok := asQuantity(v); ok {
+		return q.DeepCopy(), nil
+	}
+	switch t := v.(type) {
 	case types.Int:
 		return *resource.NewQuantity(int64(t), resource.DecimalSI), nil
 	case types.Uint:
@@ -449,5 +486,59 @@ func normalizeNumbers(v any) any {
 		return int64(t)
 	default:
 		return v
+	}
+}
+
+// takeNulls removes, in place, every null-valued key of the objects nested in
+// m through objects, and returns their paths.
+func takeNulls(m map[string]any, prefix []string) [][]string {
+	var paths [][]string
+	for k, v := range m {
+		path := append(append([]string(nil), prefix...), k)
+		switch t := v.(type) {
+		case nil:
+			delete(m, k)
+			paths = append(paths, path)
+		case map[string]any:
+			paths = append(paths, takeNulls(t, path)...)
+		}
+	}
+	return paths
+}
+
+// deleteScalarAt removes the key at path when it holds neither an object nor
+// a list, if every object on the way exists.
+func deleteScalarAt(m map[string]any, path []string) {
+	for _, k := range path[:len(path)-1] {
+		next, ok := m[k].(map[string]any)
+		if !ok {
+			return
+		}
+		m = next
+	}
+	last := path[len(path)-1]
+	switch m[last].(type) {
+	case map[string]any, []any:
+		return
+	}
+	delete(m, last)
+}
+
+// dropNulls removes, in place, every null-valued key of m and of the objects
+// nested in it, lists included.
+func dropNulls(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, vv := range t {
+			if vv == nil {
+				delete(t, k)
+				continue
+			}
+			dropNulls(vv)
+		}
+	case []any:
+		for _, vv := range t {
+			dropNulls(vv)
+		}
 	}
 }

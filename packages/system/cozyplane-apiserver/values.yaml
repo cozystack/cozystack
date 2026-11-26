@@ -1,0 +1,14 @@
+cozyplane-apiserver:
+  # The cozyplane release's image by tag and digest, for mirroring and
+  # promotion; the vendored chart pins a digest only.
+  image: ghcr.io/lllamnyp/cozyplane:v0.1.2@sha256:0fbf42fca2f65fc500a0b48738ee321c483246952fc013d249b6bb27445cc19f
+  # The aggregated apiserver backs every tenant's SDN API.
+  replicas: 2
+  etcd:
+    operator:
+      # local, not the chart's replicated default: a 3-member etcd already
+      # replicates at the application level, and the local class exists
+      # before any replication pool is configured. The EtcdCluster's
+      # storageClassName is immutable after creation, so this has to be
+      # right on the first install.
+      storageClass: local

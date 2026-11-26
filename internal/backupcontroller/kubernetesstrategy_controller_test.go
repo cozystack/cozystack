@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -831,6 +832,27 @@ func TestReconcileKubernetesRestoreRecreate(t *testing.T) {
 	}
 	if _, err := dyn.Resource(helmReleaseGVR).Namespace(k8sTestNS).Get(ctx, "kubernetes-nodes-gone-md0", metav1.GetOptions{}); err != nil {
 		t.Fatalf("worker pool not recreated: %v", err)
+	}
+}
+
+func TestKubernetesResourceModifiersAnnotateOnlyDataVolumesForAdoption(t *testing.T) {
+	rj := makeTestRestoreJob(k8sTestNS, "rj-volumes")
+	r := newTestRestoreJobReconciler(t, rj)
+	cm, err := r.kubernetesResourceModifiers(context.Background(), rj, kubernetesPhaseVolumes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mods resourceModifiers
+	if err := yaml.Unmarshal([]byte(cm.Data["resource-modifier-rules.yaml"]), &mods); err != nil {
+		t.Fatal(err)
+	}
+	if len(mods.ResourceModifierRules) != 1 {
+		t.Fatalf("want one rule, for DataVolumes: %+v", mods.ResourceModifierRules)
+	}
+	rule := mods.ResourceModifierRules[0]
+	if rule.Conditions.GroupResource != "datavolumes.cdi.kubevirt.io" || len(rule.MergePatches) != 1 ||
+		!strings.Contains(rule.MergePatches[0].PatchData, cdiAllowClaimAdoption) {
+		t.Fatalf("restored DataVolumes do not allow claim adoption: %+v", rule)
 	}
 }
 

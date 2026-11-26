@@ -17,6 +17,9 @@ spec:
   {{- range .Values.vmagent.remoteWrite.urls }}
   - url: {{ tpl . $ | quote }}
   {{- end }}
+  {{- with .Values.vmagent.extraRemoteWrite }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
 
   scrapeInterval: 30s
   selectAllByDefault: true

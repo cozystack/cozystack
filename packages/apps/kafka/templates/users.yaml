@@ -1,0 +1,30 @@
+{{- /*
+  Each KafkaUser name is also its SCRAM username and the name of the Secret the
+  User Operator writes its generated password into, and the tenant can read
+  that Secret. A dot joins the release and the user because no other Secret in
+  the namespace can take that name: application names are DNS-1035 labels, so
+  no release name holds a dot, and Strimzi names every Secret of a cluster,
+  per-node certificates included, from its cluster name with hyphens only. With
+  a hyphen, a user name could spell another release's CA key or a node's
+  private key, since <release>-<user> and <other-release>-<suffix> overlap.
+*/}}
+{{- range $user, $u := .Values.users }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $user) }}
+{{- fail (printf "invalid Kafka user name %q: it may contain only lowercase letters, digits and \"-\", and must start and end with a letter or a digit (it becomes part of a Kubernetes object name)" $user) }}
+{{- end }}
+{{- if gt (len (printf "%s.%s" $.Release.Name $user)) 253 }}
+{{- fail (printf "Kafka user name %q is too long: %s.%s, its KafkaUser and Secret name, must fit in 253 characters" $user $.Release.Name $user) }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ $.Release.Name }}.{{ $user }}
+  labels:
+    strimzi.io/cluster: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+spec:
+  authentication:
+    type: scram-sha-512
+{{- end }}

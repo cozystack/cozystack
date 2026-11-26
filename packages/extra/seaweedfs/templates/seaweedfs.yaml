@@ -32,9 +32,6 @@
 {{-   if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
 {{-     fail (printf "volume.pools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens, no dots)." $poolName) }}
 {{-   end }}
-{{-   if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) (hasSuffix "-public" $poolName) (eq "public" $poolName) }}
-{{-     fail (printf "volume.pools key '%s' must not be 'public' or end with '-lock', '-readonly' or '-public' (reserved for COSI resources)." $poolName) }}
-{{-   end }}
 {{-   if not $pool.diskType }}
 {{-     fail (printf "volume.pools.%s.diskType is required." $poolName) }}
 {{-   end }}
@@ -51,9 +48,6 @@
 {{-     range $poolName, $pool := (dig "pools" dict $zone) }}
 {{-       if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
 {{-         fail (printf "volume.zones.%s.pools key '%s' must be a valid DNS label." $zoneName $poolName) }}
-{{-       end }}
-{{-       if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) (hasSuffix "-public" $poolName) (eq "public" $poolName) }}
-{{-         fail (printf "volume.zones.%s.pools key '%s' must not be 'public' or end with '-lock', '-readonly' or '-public' (reserved for COSI resources)." $zoneName $poolName) }}
 {{-       end }}
 {{-       if not $pool.diskType }}
 {{-         fail (printf "volume.zones.%s.pools.%s.diskType is required." $zoneName $poolName) }}
@@ -72,6 +66,37 @@
 {{-       if hasKey $.Values.volume.zones $composedName }}
 {{-         fail (printf "Composed volume name '%s' (from zone '%s' and pool '%s') collides with an existing zone name." $composedName $zoneName $poolName) }}
 {{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
+{{- /* No pool name or suffix is reserved: a reserved suffix would refuse
+       names that collide with nothing and block the upgrade of releases
+       already using them each time a class variant is added. Only an
+       actual clash between rendered class names fails, across both pool
+       paths and against the base classes. */ -}}
+{{- if gt (len $allPools) 0 }}
+{{-   $classOwners := dict }}
+{{-   range $suffix := list "" "-lock" "-lock-noretention" }}
+{{-     $_ := set $classOwners (printf "BucketClass %s%s" $.Release.Namespace $suffix) "the base classes" }}
+{{-   end }}
+{{-   range $suffix := list "" "-readonly" "-public" }}
+{{-     $_ := set $classOwners (printf "BucketAccessClass %s%s" $.Release.Namespace $suffix) "the base classes" }}
+{{-   end }}
+{{-   range $poolName, $_ := $allPools }}
+{{-     $owner := printf "storage pool '%s'" $poolName }}
+{{-     $names := list }}
+{{-     range $suffix := list "" "-lock" "-lock-noretention" }}
+{{-       $names = append $names (printf "BucketClass %s-%s%s" $.Release.Namespace $poolName $suffix) }}
+{{-     end }}
+{{-     range $suffix := list "" "-readonly" "-public" }}
+{{-       $names = append $names (printf "BucketAccessClass %s-%s%s" $.Release.Namespace $poolName $suffix) }}
+{{-     end }}
+{{-     range $name := $names }}
+{{-       if hasKey $classOwners $name }}
+{{-         fail (printf "%s renders %s, also rendered by %s; rename the pool." $owner $name (get $classOwners $name)) }}
+{{-       end }}
+{{-       $_ := set $classOwners $name $owner }}
 {{-     end }}
 {{-   end }}
 {{- end }}

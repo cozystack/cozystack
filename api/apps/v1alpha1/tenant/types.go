@@ -32,8 +32,9 @@ type ConfigSpec struct {
 	// Deploy own Ingress Controller.
 	// +kubebuilder:default:=false
 	Ingress bool `json:"ingress"`
-	// Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default) or set to `false`, the tenant does not own a Gateway and instead publishes through the nearest ancestor tenant that owns one, regardless of whether `host` is empty or custom (`false` currently behaves the same as unset and does not opt out of that inheritance). Set to `true` to give the tenant its own Gateway with its own LoadBalancer IP and Certificate. A tenant with a custom (non-derived) `host` that needs its apex publicly reachable must set `true` explicitly, because an ancestor's TLS certificate does not cover a custom apex. Note: leave the key absent (do not write `gateway: null`): the chart distinguishes "unset" via missing-key, not via null value, to satisfy the JSON schema generated from this comment.
-	Gateway bool `json:"gateway,omitempty"`
+	// Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When `false` (the default), the tenant does not own a Gateway and instead publishes through the nearest ancestor tenant that owns one, regardless of whether `host` is empty or custom. Set to `true` to give the tenant its own Gateway with its own LoadBalancer IP and Certificate. A tenant with a custom (non-derived) `host` that needs its apex publicly reachable must set `true` explicitly, because an ancestor's TLS certificate does not cover a custom apex.
+	// +kubebuilder:default:=false
+	Gateway bool `json:"gateway"`
 	// GatewayClass for this tenant's own Gateway. Empty uses the platform default (`gateway.className`). Only the classes the operator lists in the platform's `gateway.tenantSelectableClasses`, plus that default, may be named here — anything else fails this tenant's own gateway release and reaches no other tenant. Read only when this tenant owns a Gateway; an inheriting tenant uses its ancestor's. Whether a class terminates TLS itself or at its provider's edge is declared once per class on the platform, not here.
 	// +kubebuilder:default:=""
 	GatewayClass string `json:"gatewayClass,omitempty"`
@@ -46,6 +47,9 @@ type ConfigSpec struct {
 	// The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
 	// +kubebuilder:default:=""
 	SchedulingClass string `json:"schedulingClass,omitempty"`
+	// SchedulingClasses an application in this tenant may select through its own `schedulingClass`, in place of the tenant's. Empty allows none, so every application runs under the tenant's class. Inherited from the parent tenant, and not settable here, when the parent has a `schedulingClass` or a non-empty list.
+	// +kubebuilder:default:={}
+	AllowedSchedulingClasses []string `json:"allowedSchedulingClasses,omitempty"`
 	// Define resource quotas for the tenant.
 	// +kubebuilder:default:={}
 	ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas,omitempty"`

@@ -55,7 +55,7 @@ global:
       gatewayHost: null
       gatewayPort: null
       additionalLabels: {}
-    # if enabled will use global.seaweedfs.replicationPlacement and override master & filer defaultReplicaPlacement config
+    # if enabled will use global.seaweedfs.replicationPlacement and override master.defaultReplication & filer.defaultReplicaPlacement config
     enableReplication: false
     #  replication type is XYZ:
     # X number of replica in other data centers
@@ -190,6 +190,8 @@ master:
   podLabels: {}
 
   # Annotations to be added to the master pods
+  # The chart sets checksum/master-config on master pods; other checksum/* keys
+  # can be used for custom rollouts.
   podAnnotations: {}
 
   # Annotations to be added to the master resources
@@ -276,6 +278,7 @@ master:
     host: "master.seaweedfs.local"
     path: "/sw-master/?(.*)"
     pathType: ImplementationSpecific
+    labels: {}
     annotations: {}
       # nginx.ingress.kubernetes.io/auth-type: "basic"
       # nginx.ingress.kubernetes.io/auth-secret: "default/ingress-basic-auth-secret"
@@ -600,6 +603,7 @@ volume:
     host: "volume.seaweedfs.local"
     path: "/"
     pathType: Prefix
+    labels: {}
     annotations:
       nginx.ingress.kubernetes.io/app-root: /ui/index.html
       # nginx.ingress.kubernetes.io/use-regex: "true"
@@ -771,6 +775,8 @@ filer:
   podLabels: {}
 
   # Annotations to be added to the filer pods
+  # The chart sets checksum/s3config on filer pods; other checksum/* keys can be
+  # used for custom rollouts.
   podAnnotations: {}
 
   # Annotations to be added to the filer resource
@@ -858,6 +864,7 @@ filer:
       host: "seaweedfs.cluster.local"
       path: "/sw-filer/?(.*)"
       pathType: ImplementationSpecific
+      labels: {}
       annotations: {}
         # nginx.ingress.kubernetes.io/backend-protocol: GRPC
         # nginx.ingress.kubernetes.io/auth-type: "basic"
@@ -884,6 +891,7 @@ filer:
       # whole host, not the HTTP UI's regex path.
       path: "/"
       pathType: Prefix
+      labels: {}
       annotations:
         # Ingress terminates TLS and re-originates gRPC (HTTP/2) to the filer.
         nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
@@ -894,6 +902,24 @@ filer:
         # Passthrough routes by SNI (set `host` above), ignores `path`, and
         # requires ingress-nginx to run with --enable-ssl-passthrough.
       tls: []
+
+  # Gateway API HTTPRoute, an alternative to the ingress above.
+  httpRoute:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Gateways this route attaches to, for example:
+    #   - group: gateway.networking.k8s.io
+    #     kind: Gateway
+    #     name: my-gateway
+    #     namespace: gateway-system
+    #     sectionName: https
+    parentRefs: []
+    hostnames: []
+    # Each rule may set matches, filters, timeouts and backendRefs.
+    # A rule without backendRefs routes to the filer service.
+    # An empty list routes all traffic there.
+    rules: []
 
   # extraEnvVars is a list of extra environment variables to set with the stateful set.
   extraEnvironmentVars:
@@ -1074,6 +1100,8 @@ s3:
   podLabels: {}
 
   # Annotations to be added to the s3 pods
+  # The chart sets checksum/s3config on s3 pods; other checksum/* keys can be
+  # used for custom rollouts.
   podAnnotations: {}
 
   # Annotations to be added to the s3 resources
@@ -1180,9 +1208,31 @@ s3:
     host: "seaweedfs.cluster.local"
     path: "/"
     pathType: Prefix
+    labels: {}
     # additional ingress annotations for the s3 endpoint
     annotations: {}
     tls: []
+
+  # Gateway API HTTPRoute, an alternative to the ingress above.
+  # With global.seaweedfs.enableSecurity and no httpsPort, the standalone s3
+  # gateway (s3.enabled) serves TLS on s3.port, so the Gateway also needs a
+  # BackendTLSPolicy for the s3 Service, which this chart does not render.
+  httpRoute:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Gateways this route attaches to, for example:
+    #   - group: gateway.networking.k8s.io
+    #     kind: Gateway
+    #     name: my-gateway
+    #     namespace: gateway-system
+    #     sectionName: https
+    parentRefs: []
+    hostnames: []
+    # Each rule may set matches, filters, timeouts and backendRefs.
+    # A rule without backendRefs routes to the s3 service.
+    # An empty list routes all traffic there.
+    rules: []
 
   # Service settings
   service:
@@ -1205,6 +1255,7 @@ s3:
     host: "seaweedfs-iceberg.cluster.local"
     path: "/"
     pathType: Prefix
+    labels: {}
     annotations: {}
     tls: []
 
@@ -1214,6 +1265,7 @@ s3:
     host: "seaweedfs-lance.cluster.local"
     path: "/"
     pathType: Prefix
+    labels: {}
     annotations: {}
     tls: []
 
@@ -1321,7 +1373,25 @@ admin:
   replicas: 1
   port: 23646  # Default admin port
   grpcPort: 33646  # Default gRPC port for worker connections
+  # IP address the admin server listens on. Since `weed admin` 4.46 defaults to
+  # loopback (127.0.0.1), the chart must bind a non-loopback address for the
+  # kubelet's httpGet readiness/liveness probes (which dial the pod IP) to ever
+  # succeed. "0.0.0.0" restores the pre-4.46 behaviour of listening on all
+  # interfaces. A non-loopback address requires authentication: set
+  # admin.secret.adminPassword or admin.secret.existingSecret, supply
+  # WEED_ADMIN_PASSWORD via admin.extraEnvironmentVars /
+  # admin.secretExtraEnvironmentVars, or opt out with admin.allowInsecureBind;
+  # otherwise the admin container will exit with a clear error rather than
+  # silently staying unready. The whole
+  # 127.0.0.0/8 range and ::1 are treated as loopback (matching weed admin).
+  # Set to a loopback address only if you also replace the httpGet probes.
+  # Note: the -ip flag requires SeaweedFS 4.46 or newer; pinning
+  # admin.imageOverride to an older image is not supported with this chart.
+  ip: "0.0.0.0"
   loggingOverrideLevel: null
+
+  # INSECURE: allow binding a non-loopback ip without authentication.
+  allowInsecureBind: false
 
   # Admin authentication
   secret:
@@ -1445,6 +1515,7 @@ admin:
     host: "admin.seaweedfs.local"
     path: "/"
     pathType: Prefix
+    labels: {}
     annotations: {}
     tls: []
 
@@ -1766,6 +1837,8 @@ allInOne:
   initContainers: ""  # Init containers
   sidecars: ""  # Sidecar containers
   annotations: {}  # Annotations for the deployment
+  # The chart sets checksum/master-config and checksum/s3config on all-in-one
+  # pods; other checksum/* keys can be used for custom rollouts.
   podAnnotations: {}  # Annotations for the pods
   podLabels: {}  # Labels for the pods
 
@@ -1900,6 +1973,9 @@ certificates:
 # Labels to be added to all the created pods
 podLabels: {}
 # Annotations to be added to all the created pods
+# The chart sets checksum/master-config and checksum/s3config on pods whose
+# rendered ConfigMaps or Secrets should trigger rollouts. Other checksum/* keys
+# can be used for custom rollout annotations.
 podAnnotations: {}
 
 networkPolicy:

@@ -124,6 +124,34 @@ func TestCreateVeleroRestore_VMDiskKeepsStrategySelector(t *testing.T) {
 	}
 }
 
+// Velero fails validation of a Restore whose resource modifier ConfigMap has
+// no rules, and an in-place VMDisk restore has none to apply.
+func TestCreateVeleroRestore_InPlaceVMDiskHasNoResourceModifier(t *testing.T) {
+	s := vmDiskTestScheme()
+	ns := "tenant-root"
+	backup := makeTestBackup(ns, "data", vmDiskAppKind)
+	restoreJob := makeTestRestoreJob(ns, "rj")
+	strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "s"}}
+	c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(backup, restoreJob, strategy).Build()
+	r := &RestoreJobReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.createVeleroRestore(context.Background(), restoreJob, backup, strategy, "velero-bk", makeVMInstanceUR("", "", nil),
+		restoreTarget{Namespace: ns, AppName: "data", AppKind: vmDiskAppKind}, RestoreOptions{}); err != nil {
+		t.Fatalf("createVeleroRestore: %v", err)
+	}
+	restores := &velerov1.RestoreList{}
+	if err := c.List(context.Background(), restores, client.InNamespace(veleroNamespace)); err != nil || len(restores.Items) != 1 {
+		t.Fatalf("list Velero Restores: %v (%d items)", err, len(restores.Items))
+	}
+	if rm := restores.Items[0].Spec.ResourceModifier; rm != nil {
+		t.Errorf("Velero Restore references resource modifier %q, want none", rm.Name)
+	}
+	cms := &corev1.ConfigMapList{}
+	if err := c.List(context.Background(), cms, client.InNamespace(veleroNamespace)); err != nil || len(cms.Items) != 0 {
+		t.Errorf("list ConfigMaps: %v (%d items), want none", err, len(cms.Items))
+	}
+}
+
 // A VMDisk Backup taken before underlying resources were recorded still
 // restores its disk prepared, and the in-use refusal still applies to it.
 func TestPrepareForRestore_VMDiskBackupWithoutUnderlyingResources(t *testing.T) {

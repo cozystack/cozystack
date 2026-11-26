@@ -41,9 +41,16 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
+	// Dedicated etcd for this cluster's control plane, rendered with the cluster and deleted with it. Clusters that already run on their tenant's shared etcd keep it, and this section does not apply to them.
+	// +kubebuilder:default:={}
+	Etcd Etcd `json:"etcd"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=63
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type APIServer struct {
@@ -152,6 +159,14 @@ type CoreDNSAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type Etcd struct {
+	// Number of etcd members: `3` keeps quorum through the loss of one member, `1` runs a single member with no failover. Only `1` and `3` are accepted. The StorageClass is picked by the platform for each of the two shapes and fixed when the etcd is first created, so changing the count later keeps the class it started with. For that reason going from 3 members to 1 is refused when the etcd is on the class the platform names for 3 members, or off the class it names for 1: a single member would then hold the only copy of the control-plane state on storage that does not replicate it.
+	// +kubebuilder:default:=3
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3
+	Replicas int `json:"replicas"`
 }
 
 type GPUOperatorAddon struct {

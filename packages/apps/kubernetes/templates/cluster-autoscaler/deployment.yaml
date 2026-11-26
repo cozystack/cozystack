@@ -1,14 +1,3 @@
-{{- /*
-  Gate the control-plane-side workloads on the parent tenant having an etcd
-  DataStore. Without it no KamajiControlPlane is ever created, Kamaji never
-  provisions -admin-kubeconfig, and rendering these Deployments would cause
-  the wait-for-kubeconfig init to CrashLoopBackOff indefinitely, consuming
-  the parent HelmRelease install timeout and triggering the very uninstall
-  remediation cycle this chart is supposed to avoid. Rendering them only
-  when $etcd is set keeps the HelmRelease Ready while flux retries on its
-  interval and picks up the DataStore as soon as the Tenant chart finishes.
-*/}}
-{{- if .Values._namespace.etcd }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -46,6 +35,15 @@ spec:
           requests:
             cpu: 125m
             memory: 128Mi
+        {{- /* Without CAPI_VERSION the autoscaler reads the newest Cluster API
+              version the management cluster serves, which is v1beta2 from
+              Cluster API v1.11. The 1.32 build lacks the fixes for reading
+              v1beta2 (kubernetes/autoscaler#8410 for scale from zero, #9458
+              for infrastructure references), so it stays on v1beta1, served
+              until Cluster API v1.16, until the image moves past them. */}}
+        env:
+        - name: CAPI_VERSION
+          value: v1beta1
         command:
         - /cluster-autoscaler
         args:
@@ -118,4 +116,3 @@ rules:
     - list
     - update
     - watch
-{{- end }}

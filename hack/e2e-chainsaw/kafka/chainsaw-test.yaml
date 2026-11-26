@@ -3,7 +3,8 @@
 # The chart deploys Kafka in KRaft mode (no ZooKeeper): a combined-free layout
 # of separate broker + controller KafkaNodePools. This test asserts the KRaft
 # topology renders and converges (both node pools present, the Strimzi Kafka CR
-# is Ready) and that no ZooKeeper resources remain.
+# is Ready) and that no ZooKeeper resources remain, and that a tenant sees a
+# user's password and the two CA certificates but no Strimzi private key.
 # The last step deletes the app itself and checks that no node pool or Strimzi
 # pod of this cluster survives the uninstall.
 apiVersion: chainsaw.kyverno.io/v1alpha1
@@ -135,6 +136,79 @@ spec:
           metadata:
             name: kafka-test-kafka-bootstrap
           (subsets[0].addresses[0].ip != null): true
+
+  # A tenant reads the Secrets the lineage webhook stamped tenantresource=true
+  # from the kafka ApplicationDefinition's selectors. Strimzi writes every
+  # Secret of this cluster, so what it labels them with only exists here.
+  - name: verify-tenant-secrets
+    try:
+    # Positive controls first: the private-key check below is also satisfied
+    # by a webhook that stamped nothing at all.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: kafka.strimzi.io/v1
+          kind: KafkaUser
+          metadata:
+            name: kafka-test.e2e
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kafka-test.e2e
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kafka-test-clients-ca-cert
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kafka-test-cluster-ca-cert
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    # Strimzi writes every private key under a data key ending in .key: the
+    # CA keys and one key-bearing Secret per node, named after the node pools.
+    # No Secret of this cluster holding one may be tenant-visible, whatever
+    # Strimzi names it. Which certificate Secrets are labelled is left open.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          data_keys() {
+            kubectl -n "$NAMESPACE" --request-timeout=15s get secret -l "$1" \
+              -o go-template='{{range .items}}{{$n := .metadata.name}}{{range $k, $v := .data}}{{$n}} {{$k}}{{"\n"}}{{end}}{{end}}'
+          }
+          all=$(data_keys strimzi.io/cluster=kafka-test)
+          # Positive control for the predicate: without it, a Strimzi that
+          # stopped naming keys *.key would pass the check below vacuously.
+          if ! printf '%s\n' "$all" | grep -q '\.key$'; then
+            echo "no Secret of kafka-test holds a *.key entry; the private-key predicate no longer matches what Strimzi writes" >&2
+            exit 1
+          fi
+          visible=$(data_keys strimzi.io/cluster=kafka-test,internal.cozystack.io/tenantresource=true)
+          leaked=$(printf '%s\n' "$visible" | grep '\.key$' || true)
+          if [ -n "$leaked" ]; then
+            echo "tenant-visible Secrets of kafka-test hold private keys:" >&2
+            printf '%s\n' "$leaked" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
 
   # The node pools are created by the migration hook, outside the release
   # manifest, and each owns the StrimziPodSet running its brokers, so only the

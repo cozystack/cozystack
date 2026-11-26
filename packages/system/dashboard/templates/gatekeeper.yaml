@@ -1,5 +1,6 @@
 {{- $host := index .Values._cluster "root-host" }}
 {{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" }}
+{{- $keycloakHost := index .Values._cluster "keycloak-host" | default (printf "keycloak.%s" $host) }}
 {{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 {{- $oidcInsecureSkipVerify := index .Values._cluster "oidc-insecure-skip-verify" }}
 {{- $keycloakInternalUrl := index .Values._cluster "keycloak-internal-url" | default "" }}
@@ -61,7 +62,7 @@ spec:
           args:
             - --alpha-config=/etc/oauth2-proxy/config/alpha-config.yaml
             - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
-            - --whitelist-domain=keycloak.{{ $host }}
+            - --whitelist-domain={{ $keycloakHost }}
             - --email-domain=*
             - --api-route=^/api(/|$)
             - --api-route=^/apis(/|$)

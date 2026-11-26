@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 62
+  targetVersion: 64
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -38,6 +38,20 @@ bundles:
   system:
     enabled: false
     variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "isp-slim", "isp-slim-generic", "isp-hosted-slim"
+    # CNI/networking selector for the "isp-full" (Talos) variant:
+    #   "kubeovn-cilium" — KubeOVN fabric + Cilium (default)
+    #   "cozyplane"      — cozyplane eBPF CNI + cozyplane-kpr socket-LB KPR
+    #                      (no Cilium, no kube-proxy). EXPERIMENTAL: no e2e
+    #                      coverage, not for production clusters.
+    # On "cozyplane", CiliumNetworkPolicy objects apply but are NOT ENFORCED
+    # (the CRDs ship inert so stock charts install): tenant network isolation
+    # on the default network, the Cilium host firewall, and the platform
+    # components' own Cilium policies (ingressDeny rules included) are not in
+    # effect.
+    # cozystack-api's SecurityGroup — a restricted interface over
+    # CiliumNetworkPolicy — is not served either; cozyplane's own SecurityGroup
+    # polices traffic inside and across VPCs instead.
+    networkingVariant: "kubeovn-cilium"
   iaas:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
@@ -91,6 +105,10 @@ networking:
   podCIDR: "10.244.0.0/16"
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
+  # Cluster DNS ClusterIP, used by the cozyplane networking variant (the one
+  # cluster-internal door a VPC gateway opens). Empty derives the kubeadm
+  # convention, the service CIDR's .10.
+  clusterDNS: ""
   joinCIDR: "100.64.0.0/16"
   # KubeOVN master nodes override (optional)
   # By default, KubeOVN helm chart uses `lookup` to find control-plane nodes
@@ -528,6 +546,27 @@ authentication:
     # it here would put the platform clients, the cluster-admin roles and every
     # end user inside it.
     realmName: "cozy"
+    # Public hostname Keycloak is served on, without scheme or path. Empty means
+    # keycloak.<publishing.host>. It is the host of the OIDC issuer
+    # (https://<keycloakHost>/realms/<realmName>), so the Keycloak Ingress and
+    # KC_HOSTNAME, the dashboard and linstor-gui gatekeepers, Grafana SSO, the
+    # info kubeconfig and tenant Kubernetes clusters in oidc.mode System all
+    # follow it. As with realmName, the apiserver OIDC issuer is set out-of-band
+    # via talm oidcIssuerUrl and must name the same host.
+    #
+    # Changing it on a running cluster changes the issuer of every token minted
+    # afterwards: sessions and refresh tokens issued under the old host stop
+    # being accepted, and the apiserver must trust the new issuer first.
+    #
+    # Certificates that cover the whole apex do not stretch to a host outside
+    # it. In wildcard mode (publishing.certificates.wildcard or
+    # wildcardSecretName) the Keycloak Ingress relies on the wildcard
+    # certificate, which covers *.<publishing.host> only; on the Gateway path
+    # the dns01, existingSecret and edge cert modes render listeners for the
+    # apex alone, so the Keycloak HTTPRoute finds no listener. Pick a host one
+    # label under publishing.host, or provide a certificate and listener that
+    # cover it.
+    keycloakHost: ""
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.
@@ -770,6 +809,15 @@ backupStrategyController: {}
 # worker pools are not on `replicated` must move the golden onto their class).
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
+# StorageClasses for the etcd each tenant Kubernetes cluster runs for its control
+# plane, chosen by its member count. Three members already replicate through
+# Raft, so a node-local class avoids replicating the data a second time; a single
+# member has nothing but its volume, so a replicated class lets it outlive its
+# node. Empty leaves the namespace default StorageClass. A cluster's etcd reads
+# this once, when it is created: the class of an existing etcd cannot change.
+kubernetesEtcd:
+  storageClassLocal: ""
+  storageClassReplicated: ""
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

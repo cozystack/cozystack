@@ -1,0 +1,10 @@
+cozyplane:
+  # 00- sorts before any co-installed CNI's conflist, so the kubelet keeps
+  # cozyplane as the primary CNI.
+  cniConfName: "00-cozyplane.conflist"
+  # With no kube-proxy, the kubernetes.default ClusterIP is unserved until
+  # cozyplane-kpr runs, and kpr needs the agent; the agent and the resolver
+  # bootstrap against Talos's KubePrism instead.
+  kubeApiServer:
+    host: "localhost"
+    port: "7445"

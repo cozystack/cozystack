@@ -1,0 +1,21 @@
+{{- /*
+  extraOutputs is appended by a hook inside the outputs string, because the
+  vendored fluent-bit chart builds fluent-bit.conf from outputs alone and
+  make update re-pulls it unpatched. An outputs override without a working
+  hook would accept extraOutputs and drop it in silence, so refuse the render.
+
+  outputs is rendered here the way the subchart renders it, and the check is
+  that extraOutputs comes out of it starting on a line of its own: a hook
+  commented out, or one that trims the newline before it, fails too. The
+  render only runs when extraOutputs is set, so the lookup in the default
+  outputs is not doubled otherwise. packages/apps/kubernetes carries an
+  earlier, textual check for tenant clusters.
+*/}}
+{{- $fluentBit := index .Values "fluent-bit" }}
+{{- $config := $fluentBit.config | default dict }}
+{{- if $config.extraOutputs }}
+{{- $rendered := tpl ($config.outputs | default "") (dict "Values" $fluentBit "Release" .Release "Chart" .Chart "Capabilities" .Capabilities "Template" .Template "Files" .Files) }}
+{{- if not (contains (printf "\n%s" (trim $config.extraOutputs)) (printf "\n%s" $rendered)) }}
+{{- fail "fluent-bit.config.extraOutputs is set but fluent-bit.config.outputs does not emit it on a line of its own, so the extra destinations would be dropped. Keep the hook from the default outputs at the end of yours, each part on a line of its own: {{- with .Values.config.extraOutputs }}, then {{ . }}, then {{- end }}. Or move the destinations into outputs and unset extraOutputs." }}
+{{- end }}
+{{- end }}

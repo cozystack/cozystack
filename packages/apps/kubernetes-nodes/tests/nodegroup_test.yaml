@@ -72,7 +72,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0-ffdbe1
+          value: kubernetes-myk8s-md0-a9467e
       - matchRegex:
           path: spec.template.spec.bootstrap.configRef.name
           pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
@@ -95,7 +95,7 @@ tests:
       # Same literal as the paired test in talos_reconcile_job_test.yaml.
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0-0f8081
+          value: kubernetes-myk8s-md0-069deb
 
   - it: names the KubevirtMachineTemplate with the parent cluster prefix and a content hash
     documentSelector:
@@ -115,8 +115,35 @@ tests:
           path: spec.type
           value: worker
       - equal:
-          path: spec.selector["cluster.x-k8s.io/cluster-name"]
-          value: kubernetes-myk8s
+          path: spec.selector
+          value:
+            cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+            cluster.x-k8s.io/role: worker
+
+  # CDI copies the DataVolume's labels onto the PVC it creates, and CAPK does
+  # not label dataVolumeTemplates, so the worker disk only joins the
+  # WorkloadMonitor above if the template carries its whole selector.
+  - it: labels the worker disk with the WorkloadMonitor selector
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.labels
+          value:
+            cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+            cluster.x-k8s.io/role: worker
+
+  # The Kubernetes backup strategy selects DataVolumes and PVCs by
+  # cluster-name, so carrying it would back up every worker root disk and make
+  # an in-place restore delete and restore it as cluster data.
+  - it: keeps cluster-name off the worker disk
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.labels["cluster.x-k8s.io/cluster-name"]
 ---
 suite: worker node pool validation
 templates:

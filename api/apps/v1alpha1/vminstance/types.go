@@ -41,12 +41,17 @@ type ConfigSpec struct {
 	// List of disks to attach.
 	// +kubebuilder:default:={}
 	Disks []Disk `json:"disks,omitempty"`
-	// Networks to attach the VM to.
+	// Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).
 	// +kubebuilder:default:={}
 	Networks []Network `json:"networks,omitempty"`
 	// Deprecated: use networks instead.
 	// +kubebuilder:default:={}
 	Subnets []Network `json:"subnets,omitempty"`
+	// Name of a cozyplane RouteTable in the VM's namespace that routes the VM's traffic. Empty uses the VPC's default table. Requires the cozyplane networking variant and a VPC in `networks`.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
+	RouteTable string `json:"routeTable"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`
@@ -71,6 +76,10 @@ type ConfigSpec struct {
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=63
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Disk struct {

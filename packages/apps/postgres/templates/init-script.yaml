@@ -591,6 +591,255 @@ stringData:
     EOT
     {{- end }}
     {{- end }}
+    {{- /*
+      An operand image built on another Debian release ships another glibc and
+      ICU, and an index ordered by a collation of either library is then
+      ordered by rules the server no longer applies: lookups miss rows and a
+      unique index stops seeing duplicates. PostgreSQL records the library
+      version each collation was created with, so a collation whose recorded
+      version differs from the one the server reports marks the indexes to
+      rebuild. The C and POSIX collations carry no version and never qualify,
+      which is every index of a database this chart created with its defaults.
+
+      PostgreSQL records a collation for an index only where it orders a key.
+      A collation can also decide what an index holds without ordering it, in
+      a predicate or inside an expression, and for those the catalog names
+      the columns the index reads and nothing else. The collations of those
+      columns therefore count as well. That rebuilds an index or two that did
+      not need it, and still misses a collation that an expression applies to
+      a column of another one.
+
+      This pass comes after the ones that manage roles and databases, so
+      that a rebuild that fails, or does not finish before the Job deadline,
+      costs none of them. Only the record of an adopted restore follows it:
+      that record must not be written by a run that failed.
+
+      Helm runs this hook as soon as the Cluster is patched, while CNPG is
+      still rolling the instances, so the primary may answer from the previous
+      image for minutes. The Job runs the image the Cluster is moving to, so
+      the server is on it once both report the same PostgreSQL version and
+      the same Debian release. The rebuild counter that follows them is left
+      out: a tag is rebuilt in place, so the Job and an instance can run
+      different rebuilds of one release for good. Waiting is only worth its
+      time when an index depends on a versioned collation. The wait ends 120
+      seconds before the Job's deadline, which is what a first run keeps for
+      rebuilding.
+
+      Rebuilds survive a retry: REINDEX CONCURRENTLY gives the index a new
+      OID, so the highest OID seen when the repair began separates the
+      indexes still to rebuild from the ones already done. That mark is kept
+      as a setting of the database, next to a fingerprint of the stale
+      collations and their new versions, so another library change starts a
+      new repair. An exclusion constraint's index cannot be rebuilt
+      concurrently: its table is neither read nor written while it is rebuilt
+      in place, and it keeps its OID. The same setting therefore records each
+      attempt at one together with the index's storage file: a file that has
+      changed since means the index was rebuilt, by a run or by hand, and two
+      attempts on the same file mean two runs did not finish, after which the
+      index is left to an operator. The rebuild is given what is left of the
+      Job and no more, so that the table is not kept locked by a backend the
+      Job no longer waits for.
+
+      A transaction that stays open on the table makes a rebuild wait for a
+      lock. That wait is bounded by what is left of the Job as well, so that
+      no backend is left waiting for a lock after the Job is gone. A
+      concurrent rebuild that is already running is not cut short: it blocks
+      nobody, and the index it finishes counts as done. Both bounds keep a
+      minute in reserve: the deadline counts from the start of the Job,
+      $SECONDS from the start of this script.
+
+      One index must be rebuilt within one run of the Job, and a retry would
+      otherwise start a rebuild that cannot finish over and over. An
+      interrupted or failed REINDEX CONCURRENTLY leaves an invalid index with
+      a _ccnew suffix on the table, so two of those mean two runs already
+      failed there: the pass then leaves the table's stale indexes alone
+      until an operator has dropped the leftovers. A rebuild that succeeds
+      drops them itself. A failed or
+      skipped rebuild does not stop the others: the pass reports them and
+      exits non-zero at the end, with the recorded versions of that database
+      left as they are.
+
+      A collation that a range partition key depends on is never refreshed:
+      rebuilding an index does not move a row to the partition the new
+      ordering assigns it, and the version mismatch PostgreSQL keeps logging
+      is the only lasting sign of that. Its indexes are still rebuilt, and
+      again only when another collation of the database goes stale.
+      Before PostgreSQL 15 the server records no version for a database's
+      default collation. The version recorded for the libc collation of the
+      same locale stands in for it there, and is refreshed in its place; the
+      two are matched as glibc matches them, without regard to the case of
+      the codeset or a hyphen in it. A locale with no such collation cannot
+      be checked, which a run that saw the image change says in a warning.
+
+      Every session of the pass pins search_path to pg_catalog: the Job
+      connects as the superuser, and a function or operator a tenant defined
+      in public would otherwise be picked wherever its argument types match
+      a call more exactly than the built-in does.
+    */}}
+
+    echo "== refresh collation versions"
+    collation_sql() {
+    cat <<\EOT
+    SET client_min_messages = error;
+    SET search_path = pg_catalog, pg_temp;
+    SELECT current_setting('server_version_num')::int >= 150000 AS tracks_database \gset
+    \if :tracks_database
+    SELECT datcollversion IS NOT NULL AS db_versioned, coalesce(pg_database_collation_actual_version(oid), '') AS db_actual, datcollversion IS NOT NULL AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid) AS db_stale, false AS db_unmatched FROM pg_database WHERE datname = current_database() \gset
+    \else
+    SELECT d.datcollate NOT IN ('C', 'POSIX') AS db_versioned,
+           coalesce(max(pg_collation_actual_version(c.oid)), '') AS db_actual,
+           coalesce(bool_or(c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)), false) AS db_stale,
+           d.datcollate NOT IN ('C', 'POSIX') AND count(c.oid) = 0 AS db_unmatched
+    FROM pg_database d
+    LEFT JOIN pg_collation c ON c.collprovider = 'c' AND lower(replace(c.collcollate, '-', '')) = lower(replace(d.datcollate, '-', '')) AND c.collversion IS NOT NULL AND c.collencoding IN (-1, d.encoding)
+    WHERE d.datname = current_database()
+    GROUP BY d.datcollate \gset
+    \endif
+    CREATE TEMP TABLE cozystack_collation AS
+    SELECT v.oid, v.actual, v.stale,
+           EXISTS (SELECT FROM pg_partitioned_table p WHERE p.partstrat = 'r' AND v.oid = ANY (p.partcollation::oid[])) AS held
+    FROM (
+        SELECT c.oid, coalesce(pg_collation_actual_version(c.oid), '') AS actual, c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid) AS stale
+        FROM pg_collation c
+        WHERE c.collversion IS NOT NULL
+          AND c.collencoding IN (-1, (SELECT encoding FROM pg_database WHERE datname = current_database()))
+        UNION ALL
+        SELECT 100, :'db_actual', :'db_stale'::boolean WHERE :'db_versioned'::boolean
+    ) v;
+    CREATE TEMP TABLE cozystack_collation_index AS
+    SELECT i.indexrelid AS index, bool_or(c.stale) AS stale
+    FROM (
+        SELECT x.indexrelid, k.used FROM pg_index x, unnest(x.indcollation::oid[]) AS k(used)
+        UNION
+        SELECT d.objid, d.refobjid FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_collation'::regclass
+        UNION
+        SELECT d.objid, a.attcollation FROM pg_depend d JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+        WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0 AND a.attcollation <> 0
+    ) u
+    JOIN cozystack_collation c ON c.oid = u.used
+    JOIN pg_index i ON i.indexrelid = u.indexrelid
+    JOIN pg_class r ON r.oid = i.indexrelid
+    WHERE r.relkind = 'i' AND r.relpersistence <> 't' AND i.indisvalid
+    GROUP BY 1;
+    EOT
+    }
+    collation_run() {
+    { collation_sql; cat; } | psql -v ON_ERROR_STOP=1 -q -t -A --dbname "$1" -v moved="$IMAGE_MOVED"
+    }
+    IMAGE_MOVED=false
+    pg_release() {
+    sed -E 's/^([0-9.]+) \(Debian [^)]*(pgdg[0-9]+)\+[0-9]+\)$/\1 \2/'
+    }
+    server_release() {
+    psql -t -A -c 'SHOW server_version' 2>/dev/null | pg_release
+    }
+    JOB_RELEASE=$(psql -V | sed 's/^psql (PostgreSQL) //' | pg_release)
+    COLLATION_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
+    if [ "$(server_release)" != "$JOB_RELEASE" ]; then
+    IMAGE_MOVED=true
+    DEPENDENT=""
+    for db in $COLLATION_DBS; do
+    DEPENDENT="$DEPENDENT$(collation_run "$db" <<\EOT
+    SELECT index FROM cozystack_collation_index;
+    EOT
+    )"
+    done
+    if [ -n "$DEPENDENT" ]; then
+    echo "indexes depend on a versioned collation; waiting for the server to run PostgreSQL $JOB_RELEASE"
+    until [ "$(server_release)" = "$JOB_RELEASE" ]; do
+      if [ "$SECONDS" -ge $((JOB_DEADLINE - 120)) ]; then
+        echo "the server did not move to PostgreSQL $JOB_RELEASE in time (check the rollout of the cnpg.io/Cluster); indexes that depend on a versioned collation are not rebuilt yet - failing the init-job, the next run of it rebuilds them" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+    fi
+    fi
+    COLLATION_FAILED=""
+    for db in $COLLATION_DBS; do
+    PLAN=$(collation_run "$db" <<\EOT
+    SELECT coalesce(md5(string_agg(oid || '=' || actual, ',' ORDER BY oid)), '') AS fingerprint FROM cozystack_collation WHERE stale \gset
+    SELECT coalesce(current_setting('cozystack.collation_repair', true), '') AS recorded \gset
+    SELECT :'fingerprint' <> '' AND split_part(:'recorded', ':', 1) = :'fingerprint' AS resumed \gset
+    \if :resumed
+    SELECT split_part(:'recorded', ':', 2) AS mark, split_part(:'recorded', ':', 3) AS inplace \gset
+    \else
+    SELECT max(oid)::bigint AS mark, '' AS inplace FROM pg_class \gset
+    SELECT format('ALTER DATABASE %I SET cozystack.collation_repair = %L', current_database(), :'fingerprint' || ':' || :'mark') WHERE :'fingerprint' <> '' \gexec
+    \endif
+    SELECT index::bigint FROM cozystack_collation_index WHERE stale AND index::bigint <= :'mark'::bigint AND NOT EXISTS (SELECT FROM unnest(string_to_array(:'inplace', ',')) AS e JOIN pg_class r ON r.oid = index WHERE split_part(e, '/', 1) = index::text AND split_part(e, '/', 2) <> r.relfilenode::text) ORDER BY pg_relation_size(index);
+    EOT
+    )
+    DB_FAILED=""
+    for index in $PLAN; do
+    LEFT=$((JOB_DEADLINE - SECONDS - 60))
+    if [ "$LEFT" -lt 10 ]; then
+    echo "index $index in database $db was not rebuilt: the init-job is out of time, the next run of it carries on" >&2
+    DB_FAILED=yes
+    continue
+    fi
+    if ! psql -v ON_ERROR_STOP=1 -q -t -A --dbname "$db" -v index="$index" -v lock_wait="${LEFT}s" <<\EOT
+    SET client_min_messages = error;
+    SET search_path = pg_catalog, pg_temp;
+    SET lock_timeout = :'lock_wait';
+    SELECT count(*) = 1 AS present FROM pg_index WHERE indexrelid = :'index'::oid \gset
+    \if :present
+    SELECT coalesce(current_setting('cozystack.collation_repair', true), '') AS recorded \gset
+    SELECT i.indrelid AS relation, i.indisexclusion AS exclusion, i.indexrelid::regclass AS name, :'index' || '/' || r.relfilenode AS attempt,
+           (SELECT count(*) FROM pg_index l JOIN pg_class n ON n.oid = l.indexrelid WHERE l.indrelid = i.indrelid AND NOT l.indisvalid AND n.relname ~ '_ccnew[0-9]*$') >= 2 AS abandoned,
+           (SELECT count(*) FROM unnest(string_to_array(split_part(:'recorded', ':', 3), ',')) AS e WHERE e = :'index' || '/' || r.relfilenode) >= 2 AS abandoned_in_place
+    FROM pg_index i JOIN pg_class r ON r.oid = i.indexrelid WHERE i.indexrelid = :'index'::oid \gset
+    \if :abandoned
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs failed to rebuild an index of its table, and each left an invalid _ccnew index there. Fix what made them fail, then drop those _ccnew indexes; the next run of the init-job rebuilds this one', :'name', current_database()))) \gexec
+    \endif
+    \if :exclusion
+    \if :abandoned_in_place
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs began rebuilding it in place and did not finish. Rebuild it by hand with REINDEX INDEX, which blocks its table meanwhile; the next run of the init-job sees that it was rebuilt', :'name', current_database()))) \gexec
+    \endif
+    SELECT format('rebuilding index %s in database %s in place: its collation changed version', :'name', current_database());
+    SELECT format('ALTER DATABASE %I SET cozystack.collation_repair = %L', current_database(), split_part(:'recorded', ':', 1) || ':' || split_part(:'recorded', ':', 2) || ':' || concat_ws(',', nullif(split_part(:'recorded', ':', 3), ''), :'attempt')) WHERE :'recorded' <> '' \gexec
+    SET statement_timeout = :'lock_wait';
+    SELECT format('REINDEX INDEX %s', :'name') \gexec
+    RESET statement_timeout;
+    \else
+    SELECT format('rebuilding index %s in database %s: its collation changed version', :'name', current_database());
+    SELECT format('REINDEX INDEX CONCURRENTLY %s', :'name') \gexec
+    \endif
+    SELECT format('DROP INDEX CONCURRENTLY IF EXISTS %s', l.indexrelid::regclass) FROM pg_index l JOIN pg_class n ON n.oid = l.indexrelid WHERE l.indrelid = :'relation'::oid AND NOT l.indisvalid AND n.relname ~ '_ccnew[0-9]*$' \gexec
+    \endif
+    EOT
+    then
+    DB_FAILED=yes
+    fi
+    done
+    if [ -n "$DB_FAILED" ]; then
+    COLLATION_FAILED="$COLLATION_FAILED $db"
+    else
+    collation_run "$db" <<\EOT
+    SELECT format('WARNING: database %s uses the locale %s, for which this PostgreSQL major records no collation version and the catalog has no collation to stand in; the indexes on its default collation were not checked. If this upgrade moved the image to another Debian release, rebuild them with REINDEX DATABASE', datname, datcollate) FROM pg_database WHERE datname = current_database() AND :'db_unmatched'::boolean AND :'moved'::boolean;
+    SELECT format('WARNING: %s in database %s is range-partitioned on a key whose collation changed version; rows stored before the change may now belong to another partition, and the collation version is left as recorded until that is checked', p.partrelid::regclass, current_database()) FROM pg_partitioned_table p WHERE p.partstrat = 'r' AND EXISTS (SELECT FROM cozystack_collation c WHERE c.stale AND c.oid = ANY (p.partcollation::oid[]));
+    DO $$
+    DECLARE
+        entry record;
+    BEGIN
+        FOR entry IN SELECT c.oid::regcollation AS name FROM cozystack_collation c WHERE c.stale AND NOT c.held AND c.oid <> 100
+            AND NOT (current_setting('server_version_num')::int < 150000
+                     AND EXISTS (SELECT FROM cozystack_collation d WHERE d.oid = 100 AND d.held)
+                     AND c.oid IN (SELECT n.oid FROM pg_collation n JOIN pg_database d ON d.datname = current_database() WHERE n.collprovider = 'c' AND lower(replace(n.collcollate, '-', '')) = lower(replace(d.datcollate, '-', '')))) LOOP
+            EXECUTE format('ALTER COLLATION %s REFRESH VERSION', entry.name);
+        END LOOP;
+    END$$;
+    SELECT format('ALTER DATABASE %I REFRESH COLLATION VERSION', current_database()) FROM cozystack_collation WHERE oid = 100 AND stale AND NOT held AND current_setting('server_version_num')::int >= 150000 \gexec
+    SELECT coalesce(md5(string_agg(oid || '=' || actual, ',' ORDER BY oid)), '') AS remaining FROM cozystack_collation WHERE stale AND held \gset
+    SELECT CASE WHEN :'remaining' = '' THEN '' ELSE :'remaining' || ':0' END AS settled \gset
+    SELECT CASE WHEN :'settled' = '' THEN format('ALTER DATABASE %I RESET cozystack.collation_repair', current_database()) ELSE format('ALTER DATABASE %I SET cozystack.collation_repair = %L', current_database(), :'settled') END WHERE coalesce(current_setting('cozystack.collation_repair', true), '') <> :'settled' \gexec
+    EOT
+    fi
+    done
+    if [ -n "$COLLATION_FAILED" ]; then
+      echo "index rebuilds failed in:$COLLATION_FAILED (the errors are above); the other indexes were rebuilt. A unique index cannot be rebuilt over rows that the previous ordering kept apart and the new one treats as equal, so remove such duplicates. The next run of the init-job tries again, except for an index an error above reports as left alone" >&2
+      exit 1
+    fi
     {{- if .Values.bootstrap.newServerName }}
 
     echo "== record the adopted restore"
@@ -598,4 +847,16 @@ stringData:
     ALTER DATABASE postgres SET cozystack.adopted_restore = :'mark';
     EOT
     {{- end }}
+{{- end }}
+{{- if hasKey (.Values.users | default dict) "app" }}
+---
+{{- /* The bootstrap secret db.yaml gives CNPG for its "app" owner; see there. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-app-owner
+type: kubernetes.io/basic-auth
+stringData:
+  username: app
+  password: {{ quote (index $passwords "app") }}
 {{- end }}

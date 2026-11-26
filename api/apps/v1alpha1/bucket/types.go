@@ -19,6 +19,9 @@ type ConfigSpec struct {
 	// Provisions bucket from the `-lock` BucketClass (with object lock enabled).
 	// +kubebuilder:default:=false
 	Locking bool `json:"locking"`
+	// With `locking`, keeps the default retention of the `-lock` BucketClass (COMPLIANCE, 365 days). Set to `false` to provision from the `-lock-noretention` BucketClass instead: Object Lock is enabled with no default retention, and retention is then set on the bucket or per object through the S3 API. Read at creation only.
+	// +kubebuilder:default:=true
+	LockingDefaultRetention bool `json:"lockingDefaultRetention"`
 	// Selects a specific BucketClass by storage pool name.
 	// +kubebuilder:default:=""
 	StoragePool string `json:"storagePool,omitempty"`
@@ -31,6 +34,10 @@ type ConfigSpec struct {
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=63
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type User struct {

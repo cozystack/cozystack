@@ -342,6 +342,15 @@ controlPlane:
   kubelet:
     preferredAddressTypes: []
 
+## @typedef {struct} Etcd - etcd that holds this cluster's control-plane state.
+## @field {int} replicas=3 - Number of etcd members: `3` keeps quorum through the loss of one member, `1` runs a single member with no failover. Only `1` and `3` are accepted. The StorageClass is picked by the platform for each of the two shapes and fixed when the etcd is first created, so changing the count later keeps the class it started with. For that reason going from 3 members to 1 is refused when the etcd is on the class the platform names for 3 members, or off the class it names for 1: a single member would then hold the only copy of the control-plane state on storage that does not replicate it.
+## @minimum 1
+## @maximum 3
+
+## @param {Etcd} etcd - Dedicated etcd for this cluster's control plane, rendered with the cluster and deleted with it. Clusters that already run on their tenant's shared etcd keep it, and this section does not apply to them.
+etcd:
+  replicas: 3
+
 ##
 ## @section OIDC
 ##
@@ -379,3 +388,9 @@ oidc:
     secretRef:
       name: ""
   users: []
+
+## @section Scheduling parameters
+
+## @param {string} schedulingClass - Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.
+## @maxLength 63
+schedulingClass: ""

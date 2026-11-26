@@ -28,3 +28,26 @@ spec:
           install:
             namespace: cozy-system
             releaseName: virtualprivatecloud-rd
+    # The cozyplane networking variant's VPC: the same VirtualPrivateCloud
+    # catalog kind, backed by sdn.cozystack.io resources instead of
+    # kube-ovn/multus. No multus edge — this variant creates no
+    # NetworkAttachmentDefinitions.
+    - name: cozyplane
+      dependsOn:
+        - cozystack.networking
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
+        # The aggregated apiserver serves sdn.cozystack.io; until it lands the
+        # group is not served and a tenant VPC release cannot apply.
+        - cozystack.cozyplane-apiserver
+      components:
+        - name: virtualprivatecloud
+          path: apps/vpc-cozyplane
+        - name: virtualprivatecloud-rd
+          path: system/virtualprivatecloud-rd
+          valuesFiles:
+            - values.yaml
+            - values-cozyplane.yaml
+          install:
+            namespace: cozy-system
+            releaseName: virtualprivatecloud-rd

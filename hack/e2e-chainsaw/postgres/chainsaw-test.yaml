@@ -249,6 +249,123 @@ spec:
           fi
         check:
           ($error == null): true
+
+  # The init Job rebuilds an index whose collation changed library version.
+  # The pass is SQL run by a Helm hook, so only a real server can say whether
+  # it works. A collation created with an explicit version reads as stale
+  # without swapping the operand image, which makes one more upgrade of the
+  # release enough to run the pass over it.
+  - name: rebuild-index-after-collation-version-change
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- \
+            psql -U postgres -d testdb -v ON_ERROR_STOP=1 <<'EOF'
+          CREATE COLLATION stale_icu (provider = icu, locale = 'en', version = '0');
+          CREATE TABLE collation_probe (s text COLLATE stale_icu);
+          INSERT INTO collation_probe SELECT 'v' || g FROM generate_series(1, 1000) g;
+          CREATE UNIQUE INDEX collation_probe_s ON collation_probe (s);
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE TABLE collation_probe_excl (s text COLLATE stale_icu, EXCLUDE USING gist (s WITH =));
+          INSERT INTO collation_probe_excl SELECT 'k' || g FROM generate_series(1, 200) g;
+          CREATE TABLE collation_probe_before AS
+            SELECT 'collation_probe_s'::regclass::oid AS index,
+                   (SELECT relfilenode FROM pg_class WHERE oid = 'collation_probe_excl_s_excl'::regclass) AS in_place_file;
+          EOF
+        check:
+          ($error == null): true
+    # A declared user is the smallest change that makes Helm upgrade the
+    # release, and so run the hook, without restarting PostgreSQL.
+    - patch:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Postgres
+          metadata:
+            name: test
+          spec:
+            users:
+              collationprobe: {}
+    # 11m: above the 600s upgrade timeout cozystack-api gives this release.
+    # The step above that waited for this Job deleted it, so the Job found
+    # here is the one the upgrade created.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-test-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          q() {
+            kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+              psql -U postgres -d testdb -v ON_ERROR_STOP=1 -tAc "$1"
+          }
+          refreshed=$(q "SELECT collversion = pg_collation_actual_version(oid) FROM pg_collation WHERE collname = 'stale_icu'")
+          if [ "$refreshed" != t ]; then
+            echo "the init Job left the collation version stale" >&2
+            exit 1
+          fi
+          # REINDEX CONCURRENTLY gives the index a new OID, so an unchanged
+          # one means the version was refreshed over an index nobody rebuilt.
+          rebuilt=$(q "SELECT 'collation_probe_s'::regclass::oid <> index FROM collation_probe_before")
+          if [ "$rebuilt" != t ]; then
+            echo "the init Job refreshed the collation version without rebuilding the index" >&2
+            exit 1
+          fi
+          q "CREATE EXTENSION IF NOT EXISTS amcheck"
+          q "SELECT bt_index_check('collation_probe_s', true)"
+          # An exclusion constraint's index is rebuilt in place: it keeps its
+          # OID and gets a new storage file.
+          rebuilt_in_place=$(q "SELECT c.relfilenode <> b.in_place_file FROM pg_class c, collation_probe_before b WHERE c.oid = 'collation_probe_excl_s_excl'::regclass")
+          if [ "$rebuilt_in_place" != t ]; then
+            echo "the init Job did not rebuild the exclusion constraint's index" >&2
+            exit 1
+          fi
+          # The pass keeps its progress in a setting of the database and
+          # removes it once nothing is left to repair.
+          progress=$(q "SELECT count(*) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase, unnest(s.setconfig) AS c WHERE d.datname = current_database() AND c LIKE 'cozystack.collation_repair=%'")
+          if [ "$progress" != 0 ]; then
+            echo "the init Job left its repair setting on a database it finished repairing" >&2
+            exit 1
+          fi
+          leftovers=$(q "SELECT count(*) FROM pg_index WHERE NOT indisvalid")
+          if [ "$leftovers" != 0 ]; then
+            echo "the rebuild left $leftovers invalid index(es) behind" >&2
+            exit 1
+          fi
+          # The Job above also completes on a retry, so a hook that failed
+          # first would pass unseen without this.
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/remediation-guard.sh
+          statuses=$(kubectl -n "$NAMESPACE" get helmrelease postgres-test \
+            -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")
+          printf 'HelmRelease postgres-test history statuses:\n%s\n' "${statuses:-<empty>}"
+          if helmrelease_has_remediation_cycle "$statuses"; then
+            echo "HelmRelease postgres-test failed an action while the index was rebuilt" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+    finally:
+    - delete:
+        ref:
+          apiVersion: batch/v1
+          kind: Job
+          name: postgres-test-init-job
 # The Postgres CR itself was applied by chainsaw and is deleted (and waited
 # on) automatically during cleanup — no explicit teardown step needed.
 ---
@@ -312,8 +429,10 @@ spec:
   steps:
   - name: run
     try:
-    # The 66m budget is the whole documented flow: bucket provisioning, a
-    # 2-replica source Postgres, the plugin base backup to S3, an empty target
+    # The 76m budget is the whole documented flow: bucket provisioning, a
+    # 2-replica source Postgres, the plugin base backup to S3, a second backup
+    # held pending on the fenced Cluster until the fence is lifted (step 26,
+    # which waits for the Cluster to come back healthy), an empty target
     # app, and THREE sequential purge + re-bootstrap restores against it - the
     # latest-point to-copy restore, the point-in-time restore (step 45), and
     # the negative unreachable-target restore (step 46, which sets a short
@@ -326,7 +445,7 @@ spec:
     # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
     # HelmReleases rather than polling out the budget.
     - script:
-        timeout: 66m
+        timeout: 76m
         content: |
           set -eu
           cd ../../..

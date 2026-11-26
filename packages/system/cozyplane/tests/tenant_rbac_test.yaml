@@ -1,0 +1,61 @@
+suite: tenants get the cozyplane tenant API through the cozy:tenant tiers
+# Cozystack tenants are bound only to cozy:tenant*, whose aggregation selects
+# rbac.cozystack.io labels; the cozyplane chart's own tenant roles carry the
+# built-in admin/edit/view labels, which no tenant holds.
+templates:
+  - templates/tenant-rbac.yaml
+  - charts/cozyplane/templates/tenant-rbac.yaml
+release:
+  name: cozyplane
+  namespace: cozy-cozyplane
+tests:
+  # cozy:tenant is the tenant ServiceAccount's role (the identity Flux applies
+  # tenant releases as); admin is the human tier that manages VPCs.
+  - it: carries the chart's edit role into the tenant and admin tiers
+    template: templates/tenant-rbac.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:cozyplane-edit
+    asserts:
+      - equal:
+          path: metadata.labels
+          value:
+            rbac.cozystack.io/aggregate-to-tenant: "true"
+            rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+      - equal:
+          path: aggregationRule.clusterRoleSelectors
+          value:
+            - matchLabels:
+                app.kubernetes.io/part-of: cozyplane
+                rbac.authorization.k8s.io/aggregate-to-edit: "true"
+
+  - it: carries the chart's view role into the view tier
+    template: templates/tenant-rbac.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:cozyplane-view
+    asserts:
+      - equal:
+          path: metadata.labels
+          value:
+            rbac.cozystack.io/aggregate-to-tenant-view: "true"
+      - equal:
+          path: aggregationRule.clusterRoleSelectors
+          value:
+            - matchLabels:
+                app.kubernetes.io/part-of: cozyplane
+                rbac.authorization.k8s.io/aggregate-to-view: "true"
+
+  # The selectors must match the chart's roles, or the aggregation is empty.
+  - it: matches the labels the chart's tenant roles actually carry
+    template: charts/cozyplane/templates/tenant-rbac.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozyplane-tenant-edit
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/part-of"]
+          value: cozyplane
+      - equal:
+          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-edit"]
+          value: "true"

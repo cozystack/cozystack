@@ -116,15 +116,15 @@ tests:
       - equal:
           path: metadata.labels['apps.cozystack.io/application.name']
           value: computeplane-cluster-md0
+      # The pool's size is left to the pool's own schema defaults, which
+      # stay its single source.
       - equal:
-          path: spec.values.cluster
-          value: computeplane-cluster
-      - equal:
-          path: spec.values.clusterReleaseName
-          value: computeplane-cluster
-      - equal:
-          path: spec.values.roles[0]
-          value: ingress-nginx
+          path: spec.values
+          value:
+            cluster: computeplane-cluster
+            clusterReleaseName: computeplane-cluster
+            roles: [ingress-nginx]
+            minReplicas: 0
       # canonical KubernetesNodes pool shape (mirrors rest.go): RetryOnFailure
       # strategy + disableWait, not the parent module's remediation style.
       - equal:

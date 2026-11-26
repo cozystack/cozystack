@@ -1,0 +1,52 @@
+suite: the platform's networking facts reach the agent and the controller
+# The platform threads networking.podCIDR, serviceCIDR and clusterDNS into
+# cozyplane.egress. These args carry the masquerade and the VPCs' internal
+# denies; a template that drops one still renders, with the wrong egress.
+# Non-default values, so a chart default cannot stand in for a lost one.
+templates:
+  - charts/cozyplane/templates/agent.yaml
+  - charts/cozyplane/templates/controller.yaml
+release:
+  name: cozyplane
+  namespace: cozy-cozyplane
+set:
+  cozyplane:
+    mtu: 1400
+    egress:
+      clusterCIDR: 192.168.0.0/17
+      serviceCIDR: 172.20.0.0/16
+      clusterDNS: 172.20.0.10
+      internalCIDRs:
+        - 10.8.0.0/24
+tests:
+  - it: gives the agent the pod supernet, the masquerade and every internal range
+    template: charts/cozyplane/templates/agent.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--cluster-cidr=192.168.0.0/17"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--masquerade=bpf"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--internal-cidrs=192.168.0.0/17,172.20.0.0/16,10.8.0.0/24"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--mtu=1400"
+
+  - it: gives the controller the internal ranges and the cluster DNS
+    template: charts/cozyplane/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--internal-cidrs=192.168.0.0/17,172.20.0.0/16,10.8.0.0/24"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--cluster-dns=172.20.0.10"

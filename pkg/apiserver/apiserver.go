@@ -47,6 +47,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	credentialstorage "github.com/cozystack/cozystack/pkg/registry/core/credential"
 	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
 	tapstorage "github.com/cozystack/cozystack/pkg/registry/core/tap"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
@@ -115,6 +116,7 @@ func init() {
 type Config struct {
 	GenericConfig  *genericapiserver.RecommendedConfig
 	ResourceConfig *config.ResourceConfig
+	ServeSDN       bool
 }
 
 // CozyServer holds the state for the Kubernetes master/api server.
@@ -125,6 +127,7 @@ type CozyServer struct {
 type completedConfig struct {
 	GenericConfig  genericapiserver.CompletedConfig
 	ResourceConfig *config.ResourceConfig
+	ServeSDN       bool
 }
 
 // CompletedConfig embeds a private pointer that cannot be created outside of this package.
@@ -137,6 +140,7 @@ func (cfg *Config) Complete() CompletedConfig {
 	c := completedConfig{
 		cfg.GenericConfig.Complete(),
 		cfg.ResourceConfig,
+		cfg.ServeSDN,
 	}
 
 	return CompletedConfig{&c}
@@ -213,6 +217,29 @@ func (c completedConfig) New() (*CozyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dynamic client: %w", err)
 	}
+	if err := InstallStaticAPIGroups(s.GenericAPIServer, cli, watchCli, dyn, c.ServeSDN); err != nil {
+		return nil, err
+	}
+
+	// --- dynamically-configured, per-tenant resources ---
+	appsV1alpha1Storage := map[string]rest.Storage{}
+	for _, resConfig := range c.ResourceConfig.Resources {
+		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	}
+	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+// InstallStaticAPIGroups registers core.cozystack.io and, when serveSDN is
+// set, sdn.cozystack.io. Removing only the sdn APIService is not enough where
+// another server owns the group: kube-aggregator still merges this server's
+// /openapi/v3 index, so both backends list the group-version and fetching its
+// OpenAPI fails on a redirect whenever the two disagree on the hash.
+func InstallStaticAPIGroups(server *genericapiserver.GenericAPIServer, cli client.Client, watchCli client.WithWatch, dyn dynamic.Interface, serveSDN bool) error {
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
@@ -233,11 +260,19 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
 		tapstorage.NewREST(dyn),
 	)
+	credentials := credentialstorage.NewREST(cli, watchCli)
+	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
+	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
+	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
-	if err := s.GenericAPIServer.InstallAPIGroup(&coreApiGroupInfo); err != nil {
-		return nil, err
+	if err := server.InstallAPIGroup(&coreApiGroupInfo); err != nil {
+		return err
+	}
+
+	if !serveSDN {
+		return nil
 	}
 
 	// --- static, namespaced resource for sdn group ---
@@ -248,21 +283,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 
 	sdnApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(sdn.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	sdnApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = sdnV1alpha1Storage
-	if err := s.GenericAPIServer.InstallAPIGroup(&sdnApiGroupInfo); err != nil {
-		return nil, err
-	}
-
-	// --- dynamically-configured, per-tenant resources ---
-	appsV1alpha1Storage := map[string]rest.Storage{}
-	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
-		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
-	}
-	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	return server.InstallAPIGroup(&sdnApiGroupInfo)
 }
 
 // InstallAppsAPIGroup registers the apps.cozystack.io API group on the given

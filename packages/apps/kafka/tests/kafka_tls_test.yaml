@@ -23,6 +23,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: true
+            authentication:
+              type: scram-sha-512
 
   # Case 2: external=false, tls.enabled unset → no external listener at all
   - it: does not create external listener when external is false and tls.enabled is unset
@@ -52,6 +54,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: false
+            authentication:
+              type: scram-sha-512
 
   # Case 4: external=true, tls.enabled=true → explicit TLS on listener
   - it: enables TLS on external listener when tls.enabled is explicitly true
@@ -69,6 +73,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: true
+            authentication:
+              type: scram-sha-512
 
   # Case 5b: external=false, tls.enabled=false → no external listener (both explicitly false)
   - it: does not create external listener when both external and tls.enabled are explicitly false
@@ -116,6 +122,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: true
+            authentication:
+              type: scram-sha-512
 
   # J-2: external=true, tls.enabled=false → explicit override wins: TLS is off
   - it: "kindIs-guard: explicit tls.enabled=false overrides external=true"
@@ -133,6 +141,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: false
+            authentication:
+              type: scram-sha-512
 
   # J-3: external=false, tls.enabled=true → external gate wins: no listener rendered
   - it: "kindIs-guard: external gate suppresses listener even when tls.enabled=true"

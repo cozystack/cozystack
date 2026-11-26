@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "snapshot-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "snapshot-controller.labels" . | nindent 4 }}
 spec:

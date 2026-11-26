@@ -1048,7 +1048,8 @@ func kubernetesVeleroRestoreSpec(strategy *strategyv1alpha1.Kubernetes, backup *
 // kubernetesResourceModifiers creates the ConfigMap of resource modifiers for
 // a phase. Restored Secrets drop their ownerReferences, which point at
 // objects of the deleted cluster and would let the garbage collector delete
-// them again; restored PVCs and DataVolumes let CDI adopt the restored claim.
+// them again; restored DataVolumes let CDI adopt the restored claim, which
+// CDI allows only through an annotation on the DataVolume.
 func (r *RestoreJobReconciler) kubernetesResourceModifiers(ctx context.Context, rj *backupsv1alpha1.RestoreJob, phase string, labels map[string]string) (*corev1.ConfigMap, error) {
 	var rules []resourceModifierRule
 	switch phase {
@@ -1066,12 +1067,10 @@ func (r *RestoreJobReconciler) kubernetesResourceModifiers(ctx context.Context, 
 		if err != nil {
 			return nil, err
 		}
-		for _, gr := range []string{"persistentvolumeclaims", "datavolumes.cdi.kubevirt.io"} {
-			rules = append(rules, resourceModifierRule{
-				Conditions:   resourceModifierConditions{GroupResource: gr, ResourceNameRegex: ".*", Namespaces: []string{rj.Namespace}},
-				MergePatches: []mergePatch{{PatchData: patch}},
-			})
-		}
+		rules = append(rules, resourceModifierRule{
+			Conditions:   resourceModifierConditions{GroupResource: "datavolumes.cdi.kubevirt.io", ResourceNameRegex: ".*", Namespaces: []string{rj.Namespace}},
+			MergePatches: []mergePatch{{PatchData: patch}},
+		})
 	}
 	data, err := yaml.Marshal(resourceModifiers{Version: "v1", ResourceModifierRules: rules})
 	if err != nil {

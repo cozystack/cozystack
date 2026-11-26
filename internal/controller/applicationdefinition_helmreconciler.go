@@ -8,6 +8,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/account"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	corev1 "k8s.io/api/core/v1"
@@ -210,8 +211,15 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 		updated = true
 	}
 
-	// Check and update valuesFrom configuration
+	// Check and update valuesFrom configuration. The entries that carry an
+	// account's stored value into the chart belong to the CredentialTemplate
+	// controller, so they are kept as they are.
 	expected := expectedValuesFrom()
+	for _, ref := range hrCopy.Spec.ValuesFrom {
+		if account.IsAccountValuesFrom(ref) {
+			expected = append(expected, ref)
+		}
+	}
 	if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
 		logger.V(4).Info("Updating HelmRelease valuesFrom", "name", hr.Name, "namespace", hr.Namespace)
 		hrCopy.Spec.ValuesFrom = expected

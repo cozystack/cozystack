@@ -74,7 +74,7 @@ kubernetesProvider:
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
       metadata:
-        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.12
         namespace: cozy-public
       spec:
         storage:
@@ -90,7 +90,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
-          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.12
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
       # The same resolved name reaches the disk, so the class the render picked and
       # the class the disk binds on cannot diverge. Concatenation would surface here
