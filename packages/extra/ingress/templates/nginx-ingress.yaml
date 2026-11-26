@@ -138,9 +138,9 @@ spec:
             }
             geo $cozy_cf_source $cozy_cf_trusted {
                 default 0;
-            {{ range $cidr := splitList "," (include "ingress.cloudflare-ips" .) }}
+            {{- range $cidr := splitList "," (include "ingress.cloudflare-ips" .) }}
                 {{ $cidr }} 1;
-            {{ end }}
+            {{- end }}
             }
             map "$cozy_cf_trusted:$http_cf_connecting_ip" $cozy_cf_reject {
                 default 0;
