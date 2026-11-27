@@ -2,6 +2,6 @@
 # default keeps the chart renderable on its own, outside a cluster.
 _cluster: {}
 console:
-  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.7.2@sha256:ac447c5fc2cfc54bea87b80286f35dbb5c765fb6c35d797de5bf7ce597f9c4ff
+  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.7.3-rc.2@sha256:048d084204fe2a0a6aabb9ea861e98f32e5e77962c524aa25c753686a3c361d3
 tokenProxy:
-  image: ghcr.io/cozystack/cozystack/token-proxy:v1.7.2@sha256:a75cdb89614e3f2fcc1fd56dfce9fd7aecce6722390dd7e60fc0d3d48e8da088
+  image: ghcr.io/cozystack/cozystack/token-proxy:v1.7.3-rc.2@sha256:3bd2abfe51382ca9473131957aecfcd8fb07b9286ab1b5d0fabb51cda8a9ce46
