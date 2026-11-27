@@ -19,7 +19,7 @@ COMPONENT_VERSION = v$(OTELCOL_VERSION)-cozystack.$(COZYSTACK_REV)
 # Alerta is versioned by the upstream release it respins, pinned in the
 # Containerfile; bump ALERTA_COZYSTACK_REV for a respin on the same release.
 ALERTA_VERSION = $(shell awk -F= '/^ARG VERSION=/{print $$2}' images/alerta/Containerfile)
-ALERTA_COZYSTACK_REV = 0
+ALERTA_COZYSTACK_REV = 1
 ALERTA_COMPONENT_VERSION = v$(ALERTA_VERSION)-cozystack.$(ALERTA_COZYSTACK_REV)
 
 image: image-otelcol-tracing image-alerta
