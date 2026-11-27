@@ -82,6 +82,25 @@ func TestBackupClassProviderIsClusterScoped(t *testing.T) {
 	}
 }
 
+func TestBackupClassProviderOmitsFragments(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "backups.cozystack.io", Version: "v1alpha1", Kind: "BackupClass"}
+	fragment := newObj(gvk, "", "cozy-default-widget", nil)
+	fragment.SetLabels(map[string]string{"backups.cozystack.io/class": "cozy-default"})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		newObj(gvk, "", "cozy-default", nil),
+		fragment,
+	)
+
+	items, err := DefaultProviders(dyn)["backupclass"](context.Background(), "tenant-foo")
+	if err != nil {
+		t.Fatalf("backupclass provider: %v", err)
+	}
+	if got := values(items); len(got) != 1 || got[0] != "cozy-default" {
+		want := []string{"cozy-default"}
+		t.Fatalf("backupclass: got %v want %v", got, want)
+	}
+}
+
 func TestPlanProviderIsNamespaced(t *testing.T) {
 	gvk := gvrPlans.GroupVersion().WithKind("Plan")
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),

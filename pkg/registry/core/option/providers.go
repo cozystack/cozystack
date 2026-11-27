@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -74,7 +75,7 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 		"image":           imageProvider(dyn),
 		"storagepool":     storagePoolProvider(dyn),
 		"storageclass":    storageClassProvider(dyn),
-		"backupclass":     nameListProvider(dyn, gvrBackupClass),
+		"backupclass":     backupClassProvider(dyn),
 		"vmdisk":          vmDiskProvider(dyn),
 		"plan":            nameListNamespacedProvider(dyn, gvrPlans),
 		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
@@ -237,6 +238,26 @@ func nameListProvider(dyn dynamic.Interface, gvr schema.GroupVersionResource) pr
 		if err != nil {
 			return nil, err
 		}
+		return itemsFromNames(list), nil
+	}
+}
+
+// backupClassProvider offers the BackupClasses a Plan or a BackupJob can name.
+// A fragment only contributes bindings to the class its label names, so
+// offering it next to that class would present one choice as several.
+func backupClassProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrBackupClass).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		classes := list.Items[:0]
+		for _, class := range list.Items {
+			if _, fragment := class.GetLabels()[backupsv1alpha1.BackupClassFragmentLabel]; !fragment {
+				classes = append(classes, class)
+			}
+		}
+		list.Items = classes
 		return itemsFromNames(list), nil
 	}
 }
