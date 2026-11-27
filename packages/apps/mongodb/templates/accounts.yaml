@@ -1,0 +1,23 @@
+{{- /*
+  One CredentialTemplate per user: the account the Cozystack credentials API
+  mints and revokes through. cozystack-controller keeps its account Secret,
+  <release>.<account>.account, which spec.users[].passwordSecretRef names in
+  mongodb.yaml. MongoDB computes its SCRAM credentials from the plaintext, so
+  the Secret stores the password itself. The Percona operator re-reads it on
+  every reconcile, every five seconds while the cluster is ready, and runs
+  updateUser when its digest differs from the one the operator annotated, so
+  the Secret needs no label. The chart renders no password: a user exists in
+  the database once its Secret does, and nobody can log in until a mint.
+*/ -}}
+{{- include "mongodb.accountsGuard" $ }}
+{{- range $user, $_ := .Values.users }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: CredentialTemplate
+metadata:
+  name: {{ printf "%s.%s" $.Release.Name (include "mongodb.accountName" $user) | quote }}
+spec:
+  username: {{ $user | quote }}
+  format:
+    name: plaintext
+{{- end }}

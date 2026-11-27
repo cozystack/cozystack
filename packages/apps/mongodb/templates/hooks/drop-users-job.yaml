@@ -1,0 +1,141 @@
+{{- /*
+  Drops the users this chart created that values no longer declare. The
+  Percona operator creates and updates the users in spec.users but never drops
+  one that leaves it, so a removed user would keep its last password in
+  MongoDB after its CredentialTemplate and account Secret are gone, with no
+  Credential left to revoke it through.
+
+  A user is dropped only when it holds the marker role, which only the
+  operator grants and only to the users in spec.users (mongodb.yaml), is not
+  declared, and is not a system user. A user without the marker, created by
+  hand or by an earlier chart, is never touched. The Job logs in as the
+  userAdmin system user, a platform account, never as a tenant user.
+
+  post-upgrade only: on install nothing carries the marker yet. Skipped while
+  the chart restores from a backup, where the cluster is busy and the restored
+  users are not this release's to judge until the restore is done. A failure
+  fails the upgrade, so a user that should be gone is reported, and the next
+  upgrade retries.
+*/}}
+{{- if not .Values.bootstrap.enabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $usersSecret := printf "%s-percona-server-mongodb-users" .Release.Name }}
+{{- $uri := printf "mongodb://%s-rs0.%s.svc.%s:27017/admin?replicaSet=rs0" .Release.Name .Release.Namespace $clusterDomain }}
+{{- if .Values.sharding }}
+{{- $uri = printf "mongodb://%s-mongos.%s.svc.%s:27017/admin" .Release.Name .Release.Namespace $clusterDomain }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-drop-users
+  annotations:
+    "helm.sh/hook": post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  {{- /* Under the platform's 10m hook budget, so the Job's own deadline names the failure. */}}
+  activeDeadlineSeconds: 540
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: drop-users
+        image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
+        command:
+        - sh
+        - -ec
+        - |
+          # The password stays out of the pod spec: it reaches mongosh from
+          # the environment, inside the container only.
+          sh_mongo() {
+            mongosh "$MONGO_URI" --quiet --norc \
+              --username "$MONGO_USER" --password "$MONGO_PASSWORD" \
+              --authenticationDatabase admin "$@"
+          }
+          # An upgrade may roll the pods; wait for a primary rather than fail
+          # on the first refused connection.
+          i=0
+          until sh_mongo --eval 'db.hello().isWritablePrimary || db.hello().msg === "isdbgrid" || quit(1)' >/dev/null 2>&1; do
+            i=$((i + 1))
+            if [ "$i" -ge 60 ]; then
+              echo "MongoDB did not accept the userAdmin login with a writable primary in 5 minutes" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          sh_mongo --eval "$DROP_JS"
+        env:
+        - name: HOME
+          value: /tmp
+        - name: MONGO_URI
+          value: {{ $uri | quote }}
+        - name: MONGO_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ $usersSecret }}
+              key: MONGODB_USER_ADMIN_USER
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ $usersSecret }}
+              key: MONGODB_USER_ADMIN_PASSWORD
+        {{- range $key := list "MONGODB_BACKUP_USER" "MONGODB_CLUSTER_ADMIN_USER" "MONGODB_CLUSTER_MONITOR_USER" "MONGODB_DATABASE_ADMIN_USER" "MONGODB_USER_ADMIN_USER" }}
+        - name: SYS_{{ $key }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ $usersSecret }}
+              key: {{ $key }}
+              optional: true
+        {{- end }}
+        - name: DECLARED_USERS
+          value: {{ keys (.Values.users | default dict) | sortAlpha | toJson | quote }}
+        - name: DEFAULT_SYSTEM_USERS
+          value: {{ include "mongodb.systemUserNames" . | quote }}
+        - name: MANAGED_ROLE
+          value: {{ include "mongodb.managedRole" . | quote }}
+        - name: DROP_JS
+          value: |
+            const env = process.env;
+            const declared = new Set(JSON.parse(env.DECLARED_USERS));
+            const system = new Set(JSON.parse(env.DEFAULT_SYSTEM_USERS));
+            for (const [k, v] of Object.entries(env)) {
+              if (k.startsWith("SYS_") && v) system.add(v);
+            }
+            const admin = db.getSiblingDB("admin");
+            const res = admin.runCommand({ usersInfo: 1 });
+            if (res.ok !== 1) throw new Error("usersInfo failed: " + tojson(res));
+            for (const u of res.users) {
+              const marked = (u.roles || []).some(r => r.role === env.MANAGED_ROLE && r.db === "admin");
+              if (u.db !== "admin" || !marked || declared.has(u.user) || system.has(u.user)) continue;
+              const out = admin.runCommand({ dropUser: u.user });
+              if (out.ok !== 1) throw new Error("dropUser " + u.user + " failed: " + tojson(out));
+              print("dropped user " + u.user + ", no longer declared");
+            }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: tmp
+        emptyDir: {}
+{{- end }}

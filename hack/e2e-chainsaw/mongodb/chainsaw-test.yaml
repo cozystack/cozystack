@@ -157,10 +157,11 @@ spec:
           kind: Role
           metadata:
             name: mongodb-test-dashboard-resources
-          (length(rules)): 3
-          (length(rules[?contains(resources, 'secrets')])): 1
-          (rules[?contains(resources, 'secrets')].resourceNames[]):
-          - mongodb-test-credentials
+          # No Secret is granted at all since tenant users became
+          # Credentials and <release>-credentials a platform account.
+          (length(rules)): 2
+          (length(rules[?contains(resources, 'secrets')])): 0
+          (length(rules[?contains(resources, '*')])): 0
           # The Role is read-only by intent; verbs is the fourth RBAC axis and
           # widening it is the same class as widening the other three.
           (length(rules[?verbs != ['get', 'list', 'watch']])): 0
@@ -187,11 +188,19 @@ spec:
     # the mechanism is live, all three would pass while asserting nothing about
     # the CA private key.
     #
-    # The credentials Secret is the right witness: the chart renders it, it
-    # traces to the MongoDB CR, and the ApplicationDefinition grants it by name
-    # — so it MUST be stamped. This also catches the regression the exclude
-    # list makes newly possible, since exclude is evaluated before include and
-    # would silently revoke the tenant's own connection string.
+    # The tenant-ca projection is the witness: the ApplicationDefinition
+    # selects it by label, so the lineage webhook MUST stamp it. The
+    # credentials Secret no longer qualifies: it holds the databaseAdmin
+    # platform account and must stay hidden, which the second assert checks.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenantresource: "true"
     - assert:
         timeout: 2m
         resource:
@@ -200,7 +209,7 @@ spec:
           metadata:
             name: mongodb-test-credentials
             labels:
-              internal.cozystack.io/tenantresource: "true"
+              internal.cozystack.io/tenantresource: "false"
     - assert:
         timeout: 2m
         resource:

@@ -72,23 +72,25 @@ const (
 // options is the kind's credentials block and the migration's identity, as
 // the hook and the Job pass them.
 type options struct {
-	migration      int
-	kind           string
-	formatName     string
-	accountsPath   string
-	refuseFlags    stringFlags
-	reservedUsers  stringFlags
-	skipAccounts   stringFlags
-	labels         labelFlags
-	valuesPath     string
-	sourceSuffix   string
-	platformKeys   stringFlags
-	rotateKeys     stringFlags
-	stateNamespace string
-	actor          string
-	timeout        time.Duration
-	holdRollouts   stringFlags
-	holdTimeout    time.Duration
+	migration        int
+	kind             string
+	formatName       string
+	accountsPath     string
+	refuseFlags      stringFlags
+	reservedUsers    stringFlags
+	skipAccounts     stringFlags
+	labels           labelFlags
+	valuesPath       string
+	sourceSuffix     string
+	sourceKey        string
+	sourcePerAccount bool
+	platformKeys     stringFlags
+	rotateKeys       stringFlags
+	stateNamespace   string
+	actor            string
+	timeout          time.Duration
+	holdRollouts     stringFlags
+	holdTimeout      time.Duration
 }
 
 type labelFlags map[string]string
@@ -156,6 +158,8 @@ func run(args []string) error {
 	fs.Var(o.labels, "label", "label every account Secret carries, key=value; repeatable")
 	fs.StringVar(&o.valuesPath, "values-path", "", "the kind's CredentialTemplate valuesPath: the hook adds the valuesFrom entry of every account to the release, so the first render of the converted chart already carries the stored values")
 	fs.StringVar(&o.sourceSuffix, "source-suffix", "-credentials", "suffix of the chart-generated Secret holding the plaintext passwords, after the release name")
+	fs.StringVar(&o.sourceKey, "source-key", "", "key of the source Secret holding an account's password; empty means the user name")
+	fs.BoolVar(&o.sourcePerAccount, "source-per-account", false, "the chart kept one source Secret per account, named <release><source-suffix><user>, with the password under --source-key")
 	fs.Var(&o.platformKeys, "platform-key", "key of the source Secret that belongs to a platform account and stays; repeatable")
 	fs.Var(&o.rotateKeys, "rotate-key", "finish: platform key of the source Secret to replace with a new random password once, followed by a forced upgrade of the release; repeatable")
 	fs.StringVar(&o.stateNamespace, "state-namespace", "cozy-system", "namespace of the state ConfigMap")
@@ -168,6 +172,9 @@ func run(args []string) error {
 	}
 	if o.migration == 0 || o.kind == "" || !format.Known(o.formatName) {
 		return errors.New("--migration, --kind and a built-in --format are required")
+	}
+	if o.sourcePerAccount && o.sourceKey == "" {
+		return errors.New("--source-per-account needs --source-key: a per-account Secret is not keyed by user name")
 	}
 	for _, k := range o.rotateKeys {
 		if !slices.Contains(o.platformKeys, k) {
@@ -378,14 +385,17 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnresolvable, err)
 	}
-	source := &corev1.Secret{}
-	if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name + m.o.sourceSuffix}, source); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-		if len(accounts) > 0 {
-			fmt.Printf("%s/%s: %s%s is gone; its accounts get a Secret at their first mint\n", hr.Namespace, hr.Name, hr.Name, m.o.sourceSuffix)
-			return nil
+	var source *corev1.Secret
+	if !m.o.sourcePerAccount {
+		source = &corev1.Secret{}
+		if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name + m.o.sourceSuffix}, source); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+			if len(accounts) > 0 {
+				fmt.Printf("%s/%s: %s%s is gone; its accounts get a Secret at their first mint\n", hr.Namespace, hr.Name, hr.Name, m.o.sourceSuffix)
+				return nil
+			}
 		}
 	}
 	now := metav1.NewTime(m.now())
@@ -411,9 +421,12 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 		case !apierrors.IsNotFound(err):
 			return err
 		}
-		plaintext, ok := source.Data[acc.Username]
+		plaintext, from, ok, err := m.plaintext(ctx, hr, source, acc.Username)
+		if err != nil {
+			return err
+		}
 		if !ok {
-			fmt.Printf("%s/%s: no password for %q in %s%s; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix)
+			fmt.Printf("%s/%s: no password for %q in %s; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, from)
 			complete = false
 			continue
 		}
@@ -421,7 +434,7 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 			// A verifier built from this password would not authenticate it
 			// after the engine's login-time normalization, so the account is
 			// re-minted instead of carried over with a Secret nobody can use.
-			fmt.Printf("%s/%s: the password for %q in %s%s does not carry into a %s verifier unchanged; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix, m.o.formatName)
+			fmt.Printf("%s/%s: the password for %q in %s does not carry into a %s verifier unchanged; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, from, m.o.formatName)
 			complete = false
 			continue
 		}
@@ -496,6 +509,37 @@ func (m *migrator) addValuesFrom(ctx context.Context, hr *helmv2.HelmRelease, ac
 	patch := client.MergeFrom(hr.DeepCopy())
 	hr.Spec.ValuesFrom = want
 	return m.c.Patch(ctx, hr, patch)
+}
+
+// plaintext returns the chart-generated password of one account and the name
+// of the Secret it was looked up in: the release's single source Secret or,
+// with --source-per-account, the account's own Secret
+// <release><source-suffix><user>, as charts that render one Secret per user
+// keep it. The password is under --source-key, or under the user name when
+// that is empty. A missing Secret or key is reported as not found.
+func (m *migrator) plaintext(ctx context.Context, hr *helmv2.HelmRelease, source *corev1.Secret, user string) ([]byte, string, bool, error) {
+	key := m.o.sourceKey
+	if key == "" {
+		key = user
+	}
+	if !m.o.sourcePerAccount {
+		v, ok := source.Data[key]
+		return v, source.Name, ok, nil
+	}
+	name := m.perAccountSource(hr, user)
+	sec := &corev1.Secret{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: name}, sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, name, false, nil
+		}
+		return nil, name, false, err
+	}
+	v, ok := sec.Data[key]
+	return v, name, ok, nil
+}
+
+func (m *migrator) perAccountSource(hr *helmv2.HelmRelease, user string) string {
+	return hr.Name + m.o.sourceSuffix + user
 }
 
 // resolveAccounts returns the accounts the release declares: the keys of its
@@ -601,6 +645,9 @@ func (m *migrator) stripPasswords(ctx context.Context, hr *helmv2.HelmRelease) e
 // stay in its data otherwise, and the Secret itself when no platform key
 // remains.
 func (m *migrator) retireSource(ctx context.Context, hr *helmv2.HelmRelease) error {
+	if m.o.sourcePerAccount {
+		return m.retirePerAccountSources(ctx, hr)
+	}
 	source := &corev1.Secret{}
 	if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name + m.o.sourceSuffix}, source); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -724,6 +771,31 @@ func (m *migrator) rotatePlatformKeys(ctx context.Context, hr *helmv2.HelmReleas
 	source.Annotations[ForcedAnnotation] = source.Annotations[RotatedAnnotation]
 	if err := m.c.Patch(ctx, source, forced); err != nil {
 		return fmt.Errorf("record the forced upgrade on %s: %w", source.Name, err)
+	}
+	return nil
+}
+
+// retirePerAccountSources deletes the per-account source Secrets of the
+// declared accounts. The converted chart no longer renders them, so Helm has
+// usually pruned them at the switch; this removes one Helm left behind.
+func (m *migrator) retirePerAccountSources(ctx context.Context, hr *helmv2.HelmRelease) error {
+	accounts, err := m.o.resolveAccounts(hr)
+	if err != nil {
+		return err
+	}
+	for _, acc := range accounts {
+		sec := &corev1.Secret{}
+		name := m.perAccountSource(hr, acc.Username)
+		if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: name}, sec); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		if err := m.c.Delete(ctx, sec, client.Preconditions{UID: &sec.UID}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		fmt.Printf("%s/%s: deleted %s\n", hr.Namespace, hr.Name, name)
 	}
 	return nil
 }

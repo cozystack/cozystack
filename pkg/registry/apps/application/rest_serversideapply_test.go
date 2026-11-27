@@ -53,7 +53,7 @@ func TestConvertApplicationToHelmRelease_ServerSideApplyOverride(t *testing.T) {
 	cases := []struct {
 		name        string
 		ssa         *bool
-		wantInstall *bool                     // Install.ServerSideApply
+		wantInstall *bool                      // Install.ServerSideApply
 		wantUpgrade helmv2.ServerSideApplyMode // Upgrade.ServerSideApply
 	}{
 		{
