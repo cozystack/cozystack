@@ -1,0 +1,119 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-68-rabbitmq-credentials.bats, modelled on
+# hack/testdata/migration-58-http-cache/kubectl. It serves only the calls
+# migration 68 and lib/cozystack-version.sh make, and logs each one to
+# $FAKE_CMDLOG.
+#
+# Migration 68 reads its own pod's image, applies the finish Job (with its
+# ServiceAccount and ClusterRoleBinding), and stamps the version. The Job
+# manifest and the version stamp both arrive as `apply --filename -`, so this
+# fake reads stdin and branches on the manifest's kind.
+#
+#   FAKE_CMDLOG       file to append a one-line record of each call to
+#   FAKE_IMAGE        image the `get pod` call returns (default a test ref)
+#   FAKE_IMAGE_EMPTY  non-empty => `get pod` returns an empty image
+#   FAKE_GETPOD_FAIL  non-empty => `get pod` exits 1 with this stderr
+#   FAKE_APPLY_FAIL   non-empty => applying the Job exits 1 with this stderr
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+IMAGE="${FAKE_IMAGE:-registry.example.org/cozystack/cozystack:v1.7.0}"
+
+case "$args" in
+  *"get pod"*jsonpath*)
+    if [ -n "${FAKE_GETPOD_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_GETPOD_FAIL" >&2
+      exit 1
+    fi
+    [ -n "${FAKE_IMAGE_EMPTY:-}" ] || printf '%s' "$IMAGE"
+    exit 0
+    ;;
+
+  *"delete job cozystack-credentials-migration-68"*)
+    # The hook deletes a Job left by an earlier run before recreating it.
+    log "DELETE-JOB"
+    exit 0
+    ;;
+
+  *"delete serviceaccount cozystack-credentials-migration-68"*)
+    # The hook deletes a ServiceAccount left owned by the Job it just deleted,
+    # so the apply recreates a fresh, owner-less one.
+    log "DELETE-SA"
+    exit 0
+    ;;
+
+  *"get job cozystack-credentials-migration-68"*jsonpath*)
+    # The hook reads the Job's uid to own its ServiceAccount.
+    if [ -n "${FAKE_GETJOB_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_GETJOB_FAIL" >&2
+      exit 1
+    fi
+    [ -n "${FAKE_JOBUID_EMPTY:-}" ] || printf '%s' "11111111-2222-3333-4444-555555555555"
+    exit 0
+    ;;
+
+  *"patch serviceaccount cozystack-credentials-migration-68"*)
+    # The ownerReference tying the ServiceAccount to the Job.
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_PATCH_FAIL" >&2
+      exit 1
+    fi
+    owner=$(printf '%s' "$args" | grep -c 'cozystack-credentials-migration-68')
+    log "PATCH-SA-OWNER owner=$owner"
+    exit 0
+    ;;
+
+  *"apply --filename -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        exit 0
+        ;;
+      *"kind: Job"*)
+        if [ -n "${FAKE_APPLY_FAIL:-}" ]; then
+          printf '%s\n' "$FAKE_APPLY_FAIL" >&2
+          exit 1
+        fi
+        # Record the fields the Job must carry, so a copy that drops the
+        # ServiceAccount, names the wrong migration, or renders the wrong image
+        # is caught.
+        role=$(printf '%s\n' "$manifest" | grep -c '^kind: ClusterRole$')
+        sa=$(printf '%s\n' "$manifest" | grep -c '^kind: ServiceAccount$')
+        crb=$(printf '%s\n' "$manifest" | grep -c '^kind: ClusterRoleBinding$')
+        # The binding must grant the least-privilege role, never cluster-admin.
+        admin=$(printf '%s\n' "$manifest" | grep -c 'cluster-admin')
+        # The ServiceAccount, ClusterRole and binding share the Job's name, so
+        # count the name inside the Job document only.
+        jobname=$(printf '%s\n' "$manifest" | awk '/^kind: Job$/ { j = 1 } j && /^  name: cozystack-credentials-migration-68$/ { c++ } END { print c + 0 }')
+        mig=$(printf '%s\n' "$manifest" | grep -c -- '--migration=68')
+        img=$(printf '%s\n' "$manifest" | grep -c "^          image: ${IMAGE}$")
+        sacc=$(printf '%s\n' "$manifest" | grep -c '^      serviceAccountName: cozystack-credentials-migration-68$')
+        # RabbitMQ finish reads the per-user sources by label, hides the
+        # operator's administrator Secret, and needs list on Secrets for it.
+        selector=$(printf '%s\n' "$manifest" | grep -c -- '--source-selector=apps.cozystack.io/user-secret=true')
+        key=$(printf '%s\n' "$manifest" | grep -c -- '--source-key=password')
+        hide=$(printf '%s\n' "$manifest" | grep -c -- '--hide-secret-suffix=-default-user')
+        list=$(printf '%s\n' "$manifest" | grep -c 'verbs: \["get", "list", "create", "patch", "delete"\]')
+        log "APPLY-RABBITMQ selector=$selector key=$key hide=$hide list=$list"
+        # It reads the definitions to hide -default-user only once they do.
+        appdefs=$(printf '%s\n' "$manifest" | grep -c '^    resources: \["applicationdefinitions"\]$')
+        log "APPLY-FINISH role=$role sa=$sa crb=$crb admin=$admin jobname=$jobname migration=$mig image=$img serviceaccount=$sacc appdefs=$appdefs"
+        exit 0
+        ;;
+      *)
+        log "APPLY-UNKNOWN"
+        printf 'fake kubectl: unmodelled apply\n' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

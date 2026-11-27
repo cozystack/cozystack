@@ -129,44 +129,24 @@ spec:
     {{- end }}
     storage: {{ .Values.size }}
 
-{{- range $user, $u := .Values.users }}
-
-{{- $password := $u.password }}
-{{- if not $password }}
-{{- with (dig "data" "password" "" (lookup "v1" "Secret" $.Release.Namespace (printf "%s-%s-credentials" $.Release.Name (kebabcase $user)))) }}
-{{- $password = b64dec . }}
-{{- end }}
-{{- end }}
-{{- if not $password }}
-{{- $password = (randAlphaNum 16) }}
-{{- end }}
-
+{{- /* The User object keeps its pre-conversion name: renaming it would make
+     the operator delete the broker user and create it again. Its password
+     comes from the account Secret of credentials.yaml, which the operator
+     re-imports on every change. Until the Secret exists the operator's
+     admission webhook refuses the User, so a release that adds a user
+     converges on the retry after cozystack-controller has seeded it. */}}
+{{- include "rabbitmq.accountsGuard" $ }}
+{{- range $user, $_ := .Values.users }}
 ---
 apiVersion: rabbitmq.com/v1beta1
 kind: User
 metadata:
   name: {{ $.Release.Name }}-{{ kebabcase $user }}
-  annotations:
-    config: '{{ printf "%s %s" $user $password | sha256sum }}'
 spec:
   importCredentialsSecret:
-    name: {{ $.Release.Name }}-{{ kebabcase $user }}-credentials
+    name: {{ include "rabbitmq.accountSecret" (list $ $user) | quote }}
   rabbitmqClusterReference:
     name: {{ $.Release.Name }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $.Release.Name }}-{{ kebabcase $user }}-credentials
-  labels:
-    apps.cozystack.io/user-secret: "true"
-    # Topology Operator >= 1.20 caches only Secrets carrying this label, and its User
-    # admission webhook rejects an importCredentialsSecret that lacks it.
-    rabbitmq.com/topology-operator: "true"
-type: Opaque
-stringData:
-  username: {{ $user }}
-  password: {{ $password }}
 {{- end }}
 
 {{- range $host, $h := .Values.vhosts }}

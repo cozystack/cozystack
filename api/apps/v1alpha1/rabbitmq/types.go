@@ -46,7 +46,7 @@ type ConfigSpec struct {
 	// RabbitMQ major.minor version to deploy
 	// +kubebuilder:default:="v4.2"
 	Version Version `json:"version"`
-	// Users configuration map.
+	// Users configuration map. Each user is a RabbitMQ user that messaging-topology-operator keeps from an account Secret the platform holds. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once, and a revoke retires the password without issuing one. The operator applies either to the broker within seconds. A `password` key here is ignored. The administrator in `<release>-default-user` belongs to the platform and is not shown to tenants.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Virtual hosts configuration map.
@@ -80,8 +80,6 @@ type TLS struct {
 }
 
 type User struct {
-	// Password for the user.
-	Password string `json:"password,omitempty"`
 }
 
 type Vhost struct {

@@ -2349,6 +2349,7 @@ var removedUserPasswordKinds = map[string]string{
 	mariadbKind:    mintedPasswordWarning,
 	clickhouseKind: mintedPasswordWarning,
 	mongodbKind:    mintedPasswordWarning,
+	rabbitmqKind:   mintedPasswordWarning,
 }
 
 // mintedPasswordWarning is the warning of a kind whose user passwords the
@@ -2359,6 +2360,7 @@ const mintedPasswordWarning = "spec.users[%q].password is ignored: passwords are
 const (
 	clickhouseKind = "ClickHouse"
 	mongodbKind    = "MongoDB"
+	rabbitmqKind   = "RabbitMQ"
 	postgresKind   = "Postgres"
 	mariadbKind    = "MariaDB"
 )

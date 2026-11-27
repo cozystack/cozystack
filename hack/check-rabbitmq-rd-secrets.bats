@@ -37,12 +37,16 @@ CHART="$REPO_ROOT/packages/apps/rabbitmq"
 # label whitelist alone passes an added name. Either dimension reaches a
 # key-bearing Secret -- controller.cert-manager.io/fao is stamped on both the CA
 # and the leaf, so a selector on it is a one-line grant of the CA private key.
-EXPECTED_RD_INCLUDE='[{"resourceNames":["rabbitmq-{{ .name }}-default-user"]},{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}},{"matchLabels":{"apps.cozystack.io/user-secret":"true"}}]'
+#
+# Since the credentials conversion the trust anchor is the only Secret a tenant
+# reads here: -default-user is the platform administrator, and the tenant
+# accounts live in account Secrets no definition selects.
+EXPECTED_RD_INCLUDE='[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]'
 
 # exclude is evaluated before include and wins, so it is the structural backstop
 # against a mis-stamped label on a key-bearing object. Asserted whole for the same
 # reason as the include: dropping one entry is the edit that has to be caught.
-EXPECTED_RD_EXCLUDE='[{"resourceNames":["rabbitmq-{{ .name }}-ca","rabbitmq-{{ .name }}-tls","rabbitmq-{{ .name }}-erlang-cookie"]}]'
+EXPECTED_RD_EXCLUDE='[{"resourceNames":["rabbitmq-{{ .name }}-ca","rabbitmq-{{ .name }}-tls","rabbitmq-{{ .name }}-erlang-cookie","rabbitmq-{{ .name }}-default-user"]}]'
 
 # The dashboard template's entire RBAC output: every rule of the Role, and the
 # kinds it renders. Asserted whole rather than filtered down to the rules that
@@ -51,12 +55,12 @@ EXPECTED_RD_EXCLUDE='[{"resourceNames":["rabbitmq-{{ .name }}-ca","rabbitmq-{{ .
 # no resource, and a ClusterRole is not a Role. Each of those reaches both
 # key-bearing Secrets, and one comparison against the whole output needs no filter.
 EXPECTED_RBAC_KINDS='["Role","RoleBinding"]'
-EXPECTED_ROLE_RULES='[{"apiGroups":[""],"resources":["secrets"],"resourceNames":["rabbitmq-test-default-user"],"verbs":["get","list","watch"]},{"apiGroups":[""],"resources":["services"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]},{"apiGroups":["cozystack.io"],"resources":["workloadmonitors"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]}]'
+EXPECTED_ROLE_RULES='[{"apiGroups":[""],"resources":["services"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]},{"apiGroups":["cozystack.io"],"resources":["workloadmonitors"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]}]'
 
-# The secrets rule is the one place in this Role that grows from values, so the
-# whole-value assertion above only covers it while users is empty. This pins what
-# a declared user is allowed to add: its own credentials Secret and nothing else.
-EXPECTED_ROLE_RULES_WITH_USER='[{"apiGroups":[""],"resources":["secrets"],"resourceNames":["rabbitmq-test-default-user","rabbitmq-test-alice-credentials"],"verbs":["get","list","watch"]},{"apiGroups":[""],"resources":["services"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]},{"apiGroups":["cozystack.io"],"resources":["workloadmonitors"],"resourceNames":["rabbitmq-test"],"verbs":["get","list","watch"]}]'
+# A declared user adds nothing to the Role: its password is shown once, in the
+# response of the mint that issued it, and its account Secret is granted to no
+# one. Before the conversion each user added its credentials Secret here.
+EXPECTED_ROLE_RULES_WITH_USER="$EXPECTED_ROLE_RULES"
 
 render_rbac() {
   # stderr is deliberately not discarded: when the render breaks, helm's own
@@ -89,7 +93,7 @@ render_rbac() {
   fi
 }
 
-@test "rabbitmq-rd cozyrds grants nothing beyond the default user, the trust anchor and user credentials" {
+@test "rabbitmq-rd cozyrds grants nothing beyond the trust anchor" {
   if [ ! -f "$COZYRDS" ]; then
     echo "ResourceDefinition not found at $COZYRDS -- did it move?" >&2
     exit 1
@@ -165,13 +169,13 @@ render_rbac() {
   fi
 }
 
-@test "a declared rabbitmq user adds only its own credentials Secret to the Role" {
+@test "a declared rabbitmq user adds nothing to the Role" {
   if [ ! -d "$CHART" ]; then
     echo "Chart not found at $CHART -- did it move?" >&2
     exit 1
   fi
 
-  rendered=$(render_rbac --set 'users.alice.password=placeholder') || {
+  rendered=$(render_rbac --set 'users.alice.placeholder=true') || {
     echo "helm template failed for $CHART" >&2
     exit 1
   }
@@ -182,8 +186,8 @@ render_rbac() {
   if [ "$rules" != "$EXPECTED_ROLE_RULES_WITH_USER" ]; then
     echo "Unexpected rules with one declared user: $rules" >&2
     echo "Expected exactly: $EXPECTED_ROLE_RULES_WITH_USER" >&2
-    echo "The secrets rule is the only part of this Role that grows from values," >&2
-    echo "so a name reaching it from the users loop is granted to the tenant." >&2
+    echo "A name reaching the Role from the users loop is granted to the tenant;" >&2
+    echo "tenant passwords are shown only by a mint." >&2
     exit 1
   fi
 }
