@@ -284,7 +284,7 @@ func TestCreateCNPGBackupArtifact_SizeBytes(t *testing.T) {
 	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "srv", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestCreateCNPGBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
 	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
 
-	if _, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant")); err != nil {
+	if _, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant")); err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
 	if l.calls != 0 {
@@ -331,7 +331,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *testi
 	store := newCNPGStrategyTestClient(t, backup)
 	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: notFoundOnce(t, store)}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil || got == nil || got.Name != "bj-race" {
 		t.Fatalf("createCNPGBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
@@ -349,7 +349,7 @@ func TestCreateCNPGBackupArtifact_UnreadableExistingBackupIsRetried(t *testing.T
 	store := newCNPGStrategyTestClient(t, backup)
 	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: failingReads(t, store)}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
-	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
+	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if !errors.Is(err, errBackupNotReadBack) {
 		t.Errorf("err = %v, want errBackupNotReadBack", err)
 	}
@@ -409,7 +409,7 @@ func TestCreateCNPGBackupArtifact_FailedExistenceCheckSkipsProbe(t *testing.T) {
 	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil || got == nil {
 		t.Fatalf("createCNPGBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
 	}
@@ -471,7 +471,7 @@ func TestCreateCNPGBackupArtifact_SizeProbeReadsTheRecordedDestination(t *testin
 	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", oldCreds))
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", written, rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestCreateCNPGBackupArtifact_SizeProbeSkipsARecordWithoutCredentials(t *tes
 	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", written, rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -534,7 +534,7 @@ func probeRecordedBackup(t *testing.T, rendered *strategyv1alpha1.CNPGTemplate, 
 	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, recordedSecret)
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", written, rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}

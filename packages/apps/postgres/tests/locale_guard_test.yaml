@@ -1,0 +1,526 @@
+suite: keep a bullseye cluster on its image until a clean locale check
+release:
+  name: pg-test
+  namespace: tenant-test
+  upgrade: true
+set:
+  _cluster:
+    scheduling: {}
+kubernetesProvider:
+  scheme:
+    "postgresql.cnpg.io/v1/Cluster":
+      gvr:
+        group: postgresql.cnpg.io
+        version: v1
+        resource: clusters
+      namespaced: true
+  objects:
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-test
+        namespace: tenant-test
+        annotations:
+          postgres.cozystack.io/locale-data: affected
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-clean
+        namespace: tenant-test
+        annotations:
+          postgres.cozystack.io/locale-data: clean
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-unchecked
+        namespace: tenant-test
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-unknown
+        namespace: tenant-test
+        annotations:
+          postgres.cozystack.io/locale-data: unknown
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-trixie
+        namespace: tenant-test
+        annotations:
+          postgres.cozystack.io/locale-data: affected
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1-standard-trixie
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: pg-restored
+        namespace: tenant-test
+      spec:
+        imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+        bootstrap:
+          recovery:
+            source: pg-gone
+tests:
+  - it: keeps a cluster the check found affected on its image
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: runs the init Job from the held image
+    templates:
+      - templates/init-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: keeps a cluster that was never checked on its image
+    release:
+      name: pg-unchecked
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: keeps a cluster the check could not finish on on its image
+    release:
+      name: pg-unknown
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: moves a cluster the check found clean
+    release:
+      name: pg-clean
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: moves an affected cluster once the change is allowed
+    set:
+      allowCollationChange: true
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: does not hold a cluster already on trixie
+    release:
+      name: pg-trixie
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: refuses a version change while held
+    set:
+      version: v17
+    templates:
+      - templates/locale-check-hook.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "version v17 cannot be applied: the cluster stays on ghcr.io/cloudnative-pg/postgresql:18.1"
+
+  - it: allows a version change once the collation change is allowed
+    set:
+      version: v17
+      allowCollationChange: true
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:17\\.[0-9]+-standard-trixie$"
+
+  - it: restores a backup taken on a bullseye image onto that image
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        newServerName: pg-new-restore-0123456789abcdef
+        sourceImageName: ghcr.io/cloudnative-pg/postgresql:18.1
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: restores a backup taken on trixie onto the current image
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        newServerName: pg-new-restore-0123456789abcdef
+        sourceImageName: ghcr.io/cloudnative-pg/postgresql:18.1-standard-trixie
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: never renders an image of another registry from bootstrap.sourceImageName
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        sourceImageName: "docker.io/attacker/payload:18"
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: never renders a bare tag this chart never shipped from bootstrap.sourceImageName
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        sourceImageName: "ghcr.io/cloudnative-pg/postgresql:18.0"
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: never renders a digest-pinned tag from bootstrap.sourceImageName
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        sourceImageName: "ghcr.io/cloudnative-pg/postgresql:18.1@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: keeps a Cluster a recovery created on its image until it is checked
+    release:
+      name: pg-restored
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-gone
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: reads a live Cluster no recovery created on its own, whatever the bootstrap values say
+    release:
+      name: pg-clean
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        sourceImageName: ghcr.io/cloudnative-pg/postgresql:18.1
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: restores a hand-set recovery onto the image of its source Cluster
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-trixie
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: holds a hand-set recovery of a bullseye source Cluster
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-clean
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: does not read a Cluster named like the server name of a RestoreJob
+    release:
+      name: pg-new
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        newServerName: pg-new-restore-0123456789abcdef
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: ignores a bootstrap.sourceImageName left over once the recovery is done
+    release:
+      name: pg-trixie
+    set:
+      bootstrap:
+        enabled: false
+        sourceImageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgresql:18\\.[0-9]+-standard-trixie$"
+
+  - it: never holds a postgis cluster on a postgresql image
+    release:
+      name: pg-new
+    set:
+      flavor: postgis
+      version: v17
+      bootstrap:
+        enabled: true
+        oldName: postgres-pg-0f1e2d3c
+        sourceImageName: ghcr.io/cloudnative-pg/postgresql:17.7
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: "^ghcr\\.io/cloudnative-pg/postgis:"
+
+  - it: checks a bullseye cluster from its own image
+    release:
+      name: pg-unchecked
+    templates:
+      - templates/locale-check-hook.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: rechecks a held cluster from its held image
+    templates:
+      - templates/locale-check-hook.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  - it: skips the check once the change is allowed
+    set:
+      allowCollationChange: true
+    templates:
+      - templates/locale-check-hook.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: skips the check for a cluster already on trixie
+    release:
+      name: pg-trixie
+    templates:
+      - templates/locale-check-hook.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: skips the check for a new cluster
+    release:
+      name: pg-new
+    templates:
+      - templates/locale-check-hook.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not check a cluster while its restore is in progress
+    release:
+      name: pg-unchecked
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    templates:
+      - templates/locale-check-hook.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names the hook resources so that they cannot take the names CNPG gives another cluster
+    release:
+      name: pg-unchecked
+    templates:
+      - templates/locale-check-hook.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: ^locale-check-pg-unchecked-[0-9a-f]{8}$
+
+  - it: lets the role patch only its own Cluster
+    release:
+      name: pg-unchecked
+    templates:
+      - templates/locale-check-hook.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["postgresql.cnpg.io"]
+              resources: ["clusters"]
+              resourceNames: ["pg-unchecked"]
+              verbs: ["get", "patch"]

@@ -1,0 +1,263 @@
+{{- /*
+  Runs before every upgrade of a cluster still on Debian bullseye, from the
+  image the cluster runs now. It looks for anything stored that depends on a
+  collation other than C, POSIX or builtin and records the answer on the
+  Cluster as the postgres.cozystack.io/locale-data annotation: clean,
+  affected, or unknown when the check could not finish. postgres.heldImageName
+  reads it, and only clean lets the cluster move. Helm renders the manifests
+  before this hook runs, so when the answer disagrees with what this attempt
+  rendered, the hook fails the attempt before the Cluster is patched and the
+  retry renders according to the new answer.
+*/ -}}
+{{- $liveImage := include "postgres.localeCheckImage" . }}
+{{- if $liveImage }}
+{{- $held := include "postgres.heldImageName" . }}
+{{- /* Prefixed, not suffixed: CNPG names its ServiceAccount and Role after the
+       Cluster, and before-hook-creation would delete those of a release named
+       <this release>-locale-check. */}}
+{{- $name := printf "locale-check-%s-%s" (.Release.Name | trunc 40 | trimSuffix "-") (.Release.Name | sha256sum | trunc 8) }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  resourceNames: [{{ .Release.Name | quote }}]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+stringData:
+  {{- /*
+    Anything found is an answer, even when another database could not be
+    checked. The session settings override what a database owner may have set
+    with ALTER DATABASE, and the time budget ends the check before the Job
+    deadline, so that a slow check records unknown, which holds the cluster,
+    rather than failing every retry of the upgrade.
+  */}}
+  check.sh: |
+    set -u
+    export PGOPTIONS="-c default_transaction_read_only=off -c statement_timeout=60s -c lock_timeout=10s"
+    export PGCONNECT_TIMEOUT=10
+    echo unknown > /work/verdict
+    : > /work/found
+    until pg_isready -q; do
+      if [ "$SECONDS" -ge 60 ]; then
+        echo "the server did not answer within 60s; the locale data of its databases is not checked" >&2
+        exit 0
+      fi
+      sleep 2
+    done
+    psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn" > /work/databases || exit 0
+    INCOMPLETE=""
+    CLOSED=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT string_agg(datname, ', ') FROM pg_database WHERE NOT datallowconn AND datname <> 'template0'") || exit 0
+    if [ -n "$CLOSED" ]; then
+      echo "databases that accept no connections are not checked: $CLOSED" >&2
+      INCOMPLETE=yes
+    fi
+    while IFS= read -r db; do
+      if [ "$SECONDS" -ge 180 ]; then
+        echo "out of time before database $db was checked" >&2
+        INCOMPLETE=yes
+        break
+      fi
+      PGDATABASE="$db" psql -v ON_ERROR_STOP=1 -q -t -A -f /scripts/check.sql >> /work/found || INCOMPLETE=yes
+    done < /work/databases
+    if [ -s /work/found ]; then
+      head -n 50 /work/found
+      echo affected > /work/verdict
+    elif [ -z "$INCOMPLETE" ]; then
+      echo clean > /work/verdict
+    fi
+  {{- /*
+    A collation is safe when its order and character classes cannot change
+    with the C library or ICU: C and POSIX, the builtin provider of PostgreSQL
+    17, and the database default when that is one of them. C.UTF-8 is not:
+    Debian bullseye patches its order, glibc 2.35 and later sort by code point.
+    Objects below the first normal OID belong to the system catalogs, which
+    use C.
+  */}}
+  check.sql: |
+    SET search_path = pg_catalog, pg_temp;
+    SELECT current_setting('server_version_num')::int >= 150000 AS has_provider \gset
+    \if :has_provider
+    SELECT datlocprovider = 'b' OR (datlocprovider = 'c' AND datcollate IN ('C', 'POSIX') AND datctype IN ('C', 'POSIX')) AS default_safe FROM pg_database WHERE datname = current_database() \gset
+    \else
+    SELECT datcollate IN ('C', 'POSIX') AND datctype IN ('C', 'POSIX') AS default_safe FROM pg_database WHERE datname = current_database() \gset
+    \endif
+    WITH unsafe AS (
+        SELECT c.oid FROM pg_collation c
+        WHERE NOT (c.collprovider = 'b'
+                   OR (c.collprovider = 'c' AND c.collcollate IN ('C', 'POSIX') AND c.collctype IN ('C', 'POSIX'))
+                   OR (c.collprovider = 'd' AND :'default_safe'::boolean))
+    )
+    SELECT DISTINCT format('%s: %s uses collation %s', current_database(),
+                           pg_describe_object('pg_class'::regclass, a.attrelid, a.attnum), u.oid::regcollation)
+    FROM pg_attribute a
+    JOIN pg_class r ON r.oid = a.attrelid
+    JOIN unsafe u ON u.oid = a.attcollation
+    WHERE r.oid >= 16384 AND r.relkind IN ('r', 'p', 'm', 'i', 'c') AND r.relpersistence <> 't'
+      AND a.attnum > 0 AND NOT a.attisdropped
+    UNION
+    SELECT format('%s: %s depends on collation %s', current_database(),
+                  pg_describe_object(d.classid, d.objid, d.objsubid), u.oid::regcollation)
+    FROM pg_depend d
+    JOIN unsafe u ON u.oid = d.refobjid
+    WHERE d.refclassid = 'pg_collation'::regclass AND d.objid >= 16384
+    UNION
+    SELECT format('%s: range type %s uses collation %s', current_database(),
+                  g.rngtypid::regtype, u.oid::regcollation)
+    FROM pg_range g
+    JOIN unsafe u ON u.oid = g.rngcollation
+    WHERE g.rngtypid >= 16384
+    UNION
+    SELECT format('%s: %s orders jsonb strings by the database collation', current_database(),
+                  pg_describe_object('pg_class'::regclass, a.attrelid, a.attnum))
+    FROM pg_attribute a
+    JOIN pg_class r ON r.oid = a.attrelid
+    WHERE NOT :'default_safe'::boolean AND r.oid >= 16384 AND r.relkind = 'i'
+      AND a.attnum > 0 AND a.atttypid = 'jsonb'::regtype;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "2"
+    {{- /* A failed Job stays, with its pod log, until the next attempt. */}}
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  activeDeadlineSeconds: 420
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 26
+        runAsGroup: 26
+        runAsNonRoot: true
+        runAsUser: 26
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: check
+        image: {{ $liveImage }}
+        command: [bash, /scripts/check.sh]
+        env:
+        - name: PGUSER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-superuser
+              key: username
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-superuser
+              key: password
+        - name: PGHOST
+          value: {{ .Release.Name }}-rw
+        - name: PGPORT
+          value: "5432"
+        - name: PGDATABASE
+          value: postgres
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        volumeMounts:
+        - mountPath: /scripts
+          name: scripts
+        - mountPath: /work
+          name: work
+        {{- include "postgresjobs.resources" . | nindent 8 }}
+      containers:
+      - name: record
+        image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
+        command: [sh, -ec]
+        args:
+        - |
+          verdict=$(cat /work/verdict)
+          case "$verdict" in
+            affected) set -- "postgres.cozystack.io/locale-data-objects=$(head -n 20 /work/found | tr '\n' ';' | cut -c 1-4000)" ;;
+            clean) set -- "postgres.cozystack.io/locale-data-objects-" ;;
+            *) set -- ;;
+          esac
+          kubectl annotate --overwrite cluster.postgresql.cnpg.io/{{ .Release.Name }} postgres.cozystack.io/locale-data="$verdict" "$@"
+          {{- if not $held }}
+          if [ "$verdict" != clean ]; then
+            echo "postgres {{ .Release.Name }} stays on {{ $liveImage }}: the check found data that depends on a collation sorting differently on the new image, or could not finish (the check container log says which). The next attempt of this upgrade keeps the current image. Set allowCollationChange: true to move it, with the index rebuild, in a maintenance window." >&2
+            exit 1
+          fi
+          {{- else }}
+          if [ "$verdict" = clean ]; then
+            echo "postgres {{ .Release.Name }}: nothing in it depends on a changing collation any more, but this attempt was rendered with the held image {{ $liveImage }}; failing it so that the next attempt moves the cluster to the new image." >&2
+            exit 1
+          fi
+          {{- end }}
+        env:
+        - name: HOME
+          value: /work
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        volumeMounts:
+        - mountPath: /work
+          name: work
+        {{- include "postgresjobs.resources" . | nindent 8 }}
+      volumes:
+      - name: scripts
+        secret:
+          secretName: {{ $name }}
+      - name: work
+        emptyDir: {}
+{{- end }}

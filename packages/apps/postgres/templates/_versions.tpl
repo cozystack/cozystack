@@ -26,10 +26,100 @@
   flavor is on it already, so both image families share one Debian release.
 */}}
 {{- define "postgres.imageName" -}}
+{{- include "postgres.heldImageName" . | default (include "postgres.targetImageName" .) -}}
+{{- end -}}
+
+{{- define "postgres.targetImageName" -}}
 {{- if eq (default "postgresql" .Values.flavor) "postgis" -}}
 ghcr.io/cloudnative-pg/postgis:{{ include "postgres.postgisVersionMap" . | trim }}
 {{- else -}}
 ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" . | trim | trimPrefix "v" }}-standard-trixie
+{{- end -}}
+{{- end -}}
+
+{{/*
+  The image a cluster on Debian bullseye keeps, or nothing. Clusters created
+  before the move to trixie run one of the bare tags postgres.bullseyeImage
+  lists, and moving them changes glibc and ICU under an initialised data
+  directory. Such a cluster stays on its image until the pre-upgrade locale
+  check has recorded "clean" on its Cluster, or until allowCollationChange is
+  set: a cluster not checked yet, one the check could not finish on and one
+  it found affected all stay. New majors are built only on the new images, so
+  a held cluster refuses a change of version instead of dropping it.
+*/}}
+{{- define "postgres.heldImageName" -}}
+{{- if and (ne (default "postgresql" .Values.flavor) "postgis") (not .Values.allowCollationChange) -}}
+{{- $hold := include "postgres.localeHold" . | fromJson -}}
+{{- if and $hold.image (ne $hold.verdict "clean") -}}
+{{- $heldMajor := regexFind "^[0-9]+" (last (splitList ":" $hold.image)) -}}
+{{- $wantMajor := trimPrefix "v" .Values.version -}}
+{{- if ne $heldMajor $wantMajor -}}
+{{- fail (printf "postgres: version %s cannot be applied: the cluster stays on %s until the pre-upgrade check finds nothing in it that depends on a collation sorting differently on the images PostgreSQL %s is built on (the postgres.cozystack.io/locale-data annotation of the cnpg.io Cluster). Keep version v%s, or set allowCollationChange: true and rebuild the affected indexes in a maintenance window." .Values.version $hold.image $wantMajor $heldMajor) -}}
+{{- end -}}
+{{- $hold.image -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  The bullseye image that applies to this cluster and its check result, as
+  JSON; the image is empty when the cluster runs any other one. The result is
+  the postgres.cozystack.io/locale-data annotation the pre-upgrade check
+  writes on the live Cluster. A physical recovery with no live Cluster yet
+  (the CNPG backup driver deletes it before the recovery renders) restores
+  onto the image the backup was taken on, so that the data keeps the library
+  that built it: bootstrap.sourceImageName, which the driver copies from the
+  source Cluster, or for a recovery set up by hand the bootstrap.oldName
+  Cluster while it exists. A recovery has no result of its own and is held
+  until the first upgrade after it checks the restored data.
+
+  bootstrap.sourceImageName is in the application spec, so anyone who may
+  edit the application may set it; it only ever selects one of the images
+  postgres.bullseyeImage lists.
+*/}}
+{{- define "postgres.localeHold" -}}
+{{- $live := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Release.Name -}}
+{{- $image := dig "spec" "imageName" "" $live -}}
+{{- $verdict := dig "metadata" "annotations" "postgres.cozystack.io/locale-data" "" $live -}}
+{{- if and .Values.bootstrap.enabled (not $image) -}}
+{{- $image = .Values.bootstrap.sourceImageName | default (dig "spec" "imageName" "" (include "postgres.recoverySource" . | fromJson)) -}}
+{{- $verdict = "" -}}
+{{- end -}}
+{{- if ne (include "postgres.bullseyeImage" $image) "true" -}}
+{{- $image = "" -}}
+{{- end -}}
+{{- dict "image" $image "verdict" $verdict | toJson -}}
+{{- end -}}
+
+{{- define "postgres.recoverySource" -}}
+{{- if and .Values.bootstrap.enabled .Values.bootstrap.oldName (not .Values.bootstrap.newServerName) -}}
+{{- lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Values.bootstrap.oldName | toJson -}}
+{{- else -}}
+{}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  The images this chart ran clusters on before the move to trixie: the bare
+  version tags of the CloudNativePG image, which are its system variant on
+  Debian bullseye, as files/versions.yaml listed them in every release before
+  standard-trixie. Exact on purpose: a held image reaches spec.imageName.
+*/}}
+{{- define "postgres.bullseyeImage" -}}
+{{- has . (list "ghcr.io/cloudnative-pg/postgresql:13.22" "ghcr.io/cloudnative-pg/postgresql:14.20" "ghcr.io/cloudnative-pg/postgresql:15.15" "ghcr.io/cloudnative-pg/postgresql:16.11" "ghcr.io/cloudnative-pg/postgresql:17.7" "ghcr.io/cloudnative-pg/postgresql:18.1") -}}
+{{- end -}}
+
+{{/*
+  The live image of a cluster still on bullseye whose owner has not allowed
+  the collation change, or nothing. The pre-upgrade locale check runs only
+  then, from that image, against the server it is checking.
+*/}}
+{{- define "postgres.localeCheckImage" -}}
+{{- if and (ne (default "postgresql" .Values.flavor) "postgis") (not .Values.allowCollationChange) (not .Values.bootstrap.enabled) -}}
+{{- $live := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Release.Name -}}
+{{- if and $live $live.spec $live.spec.imageName (eq (include "postgres.bullseyeImage" $live.spec.imageName) "true") -}}
+{{- $live.spec.imageName -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

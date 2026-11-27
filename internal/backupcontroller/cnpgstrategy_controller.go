@@ -700,7 +700,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		if destination.ServerName != "" {
 			serverName = destination.ServerName
 		}
-		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, destination, rendered, app)
+		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, attachment.imageName, destination, rendered, app)
 		if err != nil {
 			return r.failBackupArtifact(ctx, j, err)
 		}
@@ -1099,6 +1099,7 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 	attachment := cnpgPluginAttachment{
 		serverName:    serverName,
 		flavor:        cnpgImageFlavor(existing.Spec.ImageName),
+		imageName:     existing.Spec.ImageName,
 		clusterStatus: existing.Status,
 	}
 	attachment.attachedAt = existing.Annotations[cnpgPluginAttachedAtAnnotation]
@@ -1258,6 +1259,9 @@ type cnpgPluginAttachment struct {
 	serverName string
 	// flavor is the image flavor the live Cluster runs.
 	flavor string
+	// imageName is the live Cluster's spec.imageName, see
+	// cnpgBackupSnapshot.ImageName.
+	imageName string
 	// missing reports a Cluster that carried no barman-cloud plugin.
 	missing bool
 	// attachedAt is the cnpgPluginAttachedAtAnnotation the Cluster carried,
@@ -1767,7 +1771,7 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
 	cnpgBackup *cnpgtypes.Backup,
-	clusterName, serverName, flavor string,
+	clusterName, serverName, flavor, imageName string,
 	destination cnpgDestination,
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
@@ -1804,7 +1808,7 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 		driverMD[cnpgMajorVersionKey] = strconv.Itoa(cnpgBackup.Status.MajorVersion)
 	}
 
-	underlyingResources, err := marshalCNPGBackupSnapshot(sourceApp, resolved.Parameters, flavor)
+	underlyingResources, err := marshalCNPGBackupSnapshot(sourceApp, resolved.Parameters, flavor, imageName)
 	if err != nil {
 		return nil, fmt.Errorf("encode source snapshot for Backup.status.underlyingResources: %w", err)
 	}
@@ -2025,6 +2029,12 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if backupMajor == 0 {
+			// The chart restores a backup taken on a held bullseye image onto
+			// that image and refuses one of another major than spec.version,
+			// which would wedge the restore after the purge.
+			backupMajor = cnpgImageMajor(snapshot.ImageName)
+		}
 		targetMajor := postgresAppMajorVersion(targetApp.Spec.Version)
 		switch {
 		case backupMajor == 0 || targetMajor == 0:
@@ -2157,7 +2167,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restored WAL-archive serverName collided with the recovery source",
 				"cluster", clusterName, "serverName", newServerName)
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, sourceCredentials, sourceEndpointCA, sourceDatabases, sourceUsers); err != nil {
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, sourceCredentials, sourceEndpointCA, sourceDatabases, sourceUsers, snapshot.ImageName); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -2468,8 +2478,9 @@ func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
+	sourceImageName string,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID, credsRef, caRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID, credsRef, caRef, sourceDatabases, sourceUsers, sourceImageName)
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -2496,6 +2507,9 @@ func (r *RestoreJobReconciler) disablePostgresAppBootstrap(ctx context.Context, 
 	}
 	patched := app.DeepCopy()
 	patched.Spec.Bootstrap.Enabled = false
+	// The restored Cluster runs that image from here on; left in the spec, the
+	// value would outlive the Cluster's own image once it moves.
+	patched.Spec.Bootstrap.SourceImageName = ""
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -2530,6 +2544,7 @@ func buildPostgresAppRestorePatch(
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
+	sourceImageName string,
 ) *postgresapp.Postgres {
 	patched := app.DeepCopy()
 	patched.Spec.Bootstrap.Enabled = true
@@ -2540,6 +2555,9 @@ func buildPostgresAppRestorePatch(
 	patched.Spec.Bootstrap.NewServerName = newServerName
 	patched.Spec.Bootstrap.RecoveryTime = recoveryTime
 	patched.Spec.Bootstrap.BackupID = backupID
+	// Set or cleared on every restore: a value left by an earlier restore of
+	// another backup would name an image this one was not taken on.
+	patched.Spec.Bootstrap.SourceImageName = sourceImageName
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
@@ -2607,6 +2625,10 @@ func buildPostgresAppRestorePatch(
 // safely onto the same family: the two ship different glibc versions, which
 // invalidates collatable indexes, and postgis objects need the postgis
 // libraries.
+//
+// ImageName is the source Cluster's spec.imageName, handed to the chart on
+// restore as bootstrap.sourceImageName: the chart decides whether recovered
+// data has to stay on the image that built it.
 type cnpgBackupSnapshot struct {
 	Kind       string                          `json:"kind"`
 	APIVersion string                          `json:"apiVersion"`
@@ -2614,6 +2636,31 @@ type cnpgBackupSnapshot struct {
 	Users      map[string]postgresapp.User     `json:"users,omitempty"`
 	Parameters map[string]string               `json:"parameters,omitempty"`
 	Flavor     string                          `json:"flavor,omitempty"`
+	ImageName  string                          `json:"imageName,omitempty"`
+}
+
+// cnpgImageMajor reads the PostgreSQL major from a CloudNativePG operand
+// image, whose tags all start with it (17.7, 17.12-standard-trixie,
+// 17-3.6.1-standard-trixie); 0 when the tag does not.
+func cnpgImageMajor(image string) int {
+	name := image[strings.LastIndex(image, "/")+1:]
+	if i := strings.Index(name, "@"); i >= 0 {
+		name = name[:i]
+	}
+	i := strings.Index(name, ":")
+	if i < 0 {
+		return 0
+	}
+	tag := name[i+1:]
+	end := strings.IndexFunc(tag, func(r rune) bool { return r < '0' || r > '9' })
+	if end < 0 {
+		end = len(tag)
+	}
+	major, err := strconv.Atoi(tag[:end])
+	if err != nil {
+		return 0
+	}
+	return major
 }
 
 const cnpgBackupSnapshotKind = "CNPGBackupSnapshot"
@@ -2628,7 +2675,7 @@ var cnpgBackupSnapshotAPIVersion = backupsv1alpha1.GroupVersion.String()
 // runtime.RawExtension suitable for Backup.Status.UnderlyingResources.
 // flavor is the live Cluster's, not app.Spec.Flavor: the chart refuses a
 // flavor change, but the app keeps the refused value.
-func marshalCNPGBackupSnapshot(app *postgresapp.Postgres, parameters map[string]string, flavor string) (*runtime.RawExtension, error) {
+func marshalCNPGBackupSnapshot(app *postgresapp.Postgres, parameters map[string]string, flavor, imageName string) (*runtime.RawExtension, error) {
 	if app == nil {
 		return nil, nil
 	}
@@ -2639,6 +2686,7 @@ func marshalCNPGBackupSnapshot(app *postgresapp.Postgres, parameters map[string]
 		Users:      app.Spec.Users,
 		Parameters: parameters,
 		Flavor:     flavor,
+		ImageName:  imageName,
 	}
 	raw, err := json.Marshal(snap)
 	if err != nil {

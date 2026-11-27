@@ -230,7 +230,7 @@ func TestRenderCNPGTemplate_RoundTripsParametersThroughSnapshot(t *testing.T) {
 	}
 
 	// Round-trip parameters through Backup.status.underlyingResources.
-	raw, err := marshalCNPGBackupSnapshot(app, parameters, "")
+	raw, err := marshalCNPGBackupSnapshot(app, parameters, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -535,6 +535,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsSecretRef_NotCleartext(t *testing.
 		creds,
 		nil,
 		nil, nil,
+		"",
 	)
 
 	if got := patched.Spec.Backup.S3CredentialsSecret.Name; got != "pg-target-cnpg-backup-creds" {
@@ -562,7 +563,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 		SecretAccessKeyKey: "SECRET_KEY",
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", creds, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", creds, nil, nil, nil, "")
 
 	want := postgresapp.S3CredentialsSecret{
 		Name:               "creds",
@@ -580,7 +581,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 // Secret name and helm install would fail.
 func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 	app := newPostgresApp("pg", "tenant")
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil, "")
 	if got := patched.Spec.Backup.S3CredentialsSecret; got != (postgresapp.S3CredentialsSecret{}) {
 		t.Errorf("spec.backup.s3CredentialsSecret must be zero when credsRef is nil; got %#v", got)
 	}
@@ -778,7 +779,7 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 		"appdb": {Extensions: []string{"hstore"}},
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, sourceDatabases, sourceUsers, "")
 
 	if _, ok := patched.Spec.Users["stale-target-user"]; ok {
 		t.Errorf("stale target user survived restore; replace semantics regressed")
@@ -815,7 +816,7 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 
 	// Restore with no recoveryTime, no endpointURL, no creds, no CA -
 	// everything stale on the target must be wiped.
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil, "")
 
 	if got := patched.Spec.Bootstrap.RecoveryTime; got != "" {
 		t.Errorf("stale recoveryTime survived; got %q", got)
@@ -854,7 +855,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsEndpointCA(t *testing.T) {
 		SecretRef: corev1.LocalObjectReference{Name: "pg-cnpg-backup-ca"},
 		Key:       "ca.crt",
 	}
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, caRef, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, caRef, nil, nil, "")
 
 	want := postgresapp.EndpointCA{Name: "pg-cnpg-backup-ca", Key: "ca.crt"}
 	if got := patched.Spec.Backup.EndpointCA; got != want {
@@ -870,7 +871,7 @@ func TestBuildPostgresAppRestorePatch_ArchiveServerNameDiffersFromSource(t *test
 	// An in-place restore is the worst case: source serverName equals the
 	// target cluster's own name.
 	const source = "postgres-pg"
-	patched := buildPostgresAppRestorePatch(app, source, "postgres-pg-restore-deadbeef", "s3://b/", "", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, source, "postgres-pg-restore-deadbeef", "s3://b/", "", "", "", nil, nil, nil, nil, "")
 
 	if got := patched.Spec.Bootstrap.ServerName; got != source {
 		t.Errorf("recovery serverName must stay the source; got %q want %q", got, source)
@@ -925,7 +926,7 @@ func TestMarshalUnmarshalCNPGBackupSnapshot(t *testing.T) {
 		"region":      "eu-west-1",
 	}
 
-	raw, err := marshalCNPGBackupSnapshot(src, parameters, "")
+	raw, err := marshalCNPGBackupSnapshot(src, parameters, "", "")
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -1077,7 +1078,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 	}
 
 	sourceApp := newPostgresApp("pg", "tenant")
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", cnpgDestinationOf(rendered), rendered, sourceApp)
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", "", cnpgDestinationOf(rendered), rendered, sourceApp)
 	if err != nil {
 		t.Fatalf("expected AlreadyExists to be swallowed, got error %v", err)
 	}
@@ -4786,7 +4787,7 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 
 	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
 		t.Helper()
-		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
@@ -5048,16 +5049,20 @@ func TestReconcileCNPGRestore_RefusesCrossFlavorRestore(t *testing.T) {
 		name          string
 		sourceFlavor  string
 		targetFlavor  string
+		targetVersion string
+		sourceImage   string
 		wantFailed    bool
 		wantInMessage string
 	}{
 		{name: "postgis backup into a postgresql app", sourceFlavor: "postgis", targetFlavor: "", wantFailed: true, wantInMessage: "taken from a postgis cluster"},
+		{name: "backup hands its source image to the app", sourceImage: "ghcr.io/cloudnative-pg/postgresql:17.7", wantFailed: false},
+		{name: "bullseye backup into another major", sourceImage: "ghcr.io/cloudnative-pg/postgresql:17.7", targetVersion: "v18", wantFailed: true, wantInMessage: "taken on PostgreSQL 17"},
 		{name: "pre-flavor backup into a postgis app", sourceFlavor: "", targetFlavor: "postgis", wantFailed: true, wantInMessage: "taken from a postgresql cluster"},
 		{name: "postgis backup into a postgis app", sourceFlavor: "postgis", targetFlavor: "postgis", wantFailed: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, tc.sourceFlavor)
+			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, tc.sourceFlavor, tc.sourceImage)
 			if err != nil {
 				t.Fatalf("marshal snapshot: %v", err)
 			}
@@ -5076,6 +5081,7 @@ func TestReconcileCNPGRestore_RefusesCrossFlavorRestore(t *testing.T) {
 			}
 			target := newPostgresApp(appName, ns)
 			target.Spec.Flavor = tc.targetFlavor
+			target.Spec.Version = tc.targetVersion
 			sa := startedAt
 			restoreJob := &backupsv1alpha1.RestoreJob{
 				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
@@ -5116,12 +5122,15 @@ func TestReconcileCNPGRestore_RefusesCrossFlavorRestore(t *testing.T) {
 				if !apierrors.IsNotFound(clusterErr) {
 					t.Fatalf("same-flavor restore must purge the target Cluster, got err=%v", clusterErr)
 				}
+				if app.Spec.Bootstrap.SourceImageName != tc.sourceImage {
+					t.Fatalf("bootstrap.sourceImageName = %q, want %q", app.Spec.Bootstrap.SourceImageName, tc.sourceImage)
+				}
 				return
 			}
 			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 				t.Fatalf("cross-flavor restore must fail, got phase %q", got.Status.Phase)
 			}
-			if !strings.Contains(got.Status.Message, tc.wantInMessage) || !strings.Contains(got.Status.Message, "pg_dump") {
+			if !strings.Contains(got.Status.Message, tc.wantInMessage) || (tc.targetVersion == "" && !strings.Contains(got.Status.Message, "pg_dump")) {
 				t.Errorf("failure message must name the source flavor and point to a logical dump, got %q", got.Status.Message)
 			}
 			if clusterErr != nil {
@@ -5157,7 +5166,7 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	ctx := context.Background()
 	startedAt := metav1.NewTime(time.Now())
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5276,7 +5285,7 @@ func TestReconcileCNPGRestore_HealthyDisablesBootstrap(t *testing.T) {
 	ctx := context.Background()
 	startedAt := metav1.NewTime(time.Now().Add(-time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5365,7 +5374,7 @@ func TestReconcileCNPGRestore_BootstrapDisableFailsPastDeadline(t *testing.T) {
 	// Well past the 30m default deadline.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5478,7 +5487,7 @@ func TestReconcileCNPGRestore_BootstrapDisableTransientErrorRequeues(t *testing.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 	convergedAt := metav1.Now()
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5605,7 +5614,7 @@ func TestReconcileCNPGRestore_BootstrapDisableShortTimeoutHonorsGraceFloor(t *te
 	// within the 5m post-convergence floor.
 	convergedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5717,7 +5726,7 @@ func TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds(t *testing.T) {
 	// Far past the 30m default deadline: this is the reconcile-gap case.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -5813,7 +5822,7 @@ func TestReconcileCNPGRestore_DeadlineClassifiesRecoveryTargetUnreachable(t *tes
 	// enters the deadline-classification branch.
 	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
 
-	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
@@ -6125,10 +6134,10 @@ func TestBuildPostgresAppRestorePatch_ReplacesBackupID(t *testing.T) {
 	app := newPostgresApp("pg", "tenant")
 	app.Spec.Bootstrap.BackupID = "20260101T000000"
 
-	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "20260921T062713", nil, nil, nil, nil).Spec.Bootstrap.BackupID; got != "20260921T062713" {
+	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "20260921T062713", nil, nil, nil, nil, "").Spec.Bootstrap.BackupID; got != "20260921T062713" {
 		t.Errorf("bootstrap.backupID: got %q want %q", got, "20260921T062713")
 	}
-	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil).Spec.Bootstrap.BackupID; got != "" {
+	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil, "").Spec.Bootstrap.BackupID; got != "" {
 		t.Errorf("bootstrap.backupID from a previous restore must be cleared; got %q", got)
 	}
 }
@@ -6155,7 +6164,7 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 
 	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
 		t.Helper()
-		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
@@ -6293,7 +6302,7 @@ func TestCreateCNPGBackupArtifact_RecordsMajorVersion(t *testing.T) {
 			rendered := &strategyv1alpha1.CNPGTemplate{
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"},
 			}
-			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
+			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", "", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 			if err != nil {
 				t.Fatalf("createCNPGBackupArtifact: %v", err)
 			}
@@ -6356,7 +6365,7 @@ func TestReconcileCNPGRestore_RefusesCrossMajorRestore(t *testing.T) {
 			}
 			targetCluster := cnpgClusterNameForApp(targetApp)
 
-			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(sourceApp, ns), nil, "")
+			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(sourceApp, ns), nil, "", "")
 			if err != nil {
 				t.Fatalf("marshal snapshot: %v", err)
 			}
