@@ -1,0 +1,7 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VirtualPrivateCloud
+metadata:
+  name: ea-vpc
+spec:
+  cidrs:
+  - 10.77.0.0/24

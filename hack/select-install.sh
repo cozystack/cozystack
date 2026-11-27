@@ -128,6 +128,9 @@ suite_to_source() {
       echo "cozystack.vm-instance-application cozystack.vm-disk-application"
       return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
+    # The address substrate is what this suite draws every address from, and
+    # no other suite installs it.
+    endpointattachment) echo "cozystack.address-controller cozystack.metallb-iad" ; return ;;
     kafka-metadata) echo cozystack.kafka-application ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
@@ -144,6 +147,8 @@ suite_runtime_sources() {
     clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis|valkey|vminstance)
       echo cozystack.backupstrategy-controller ;;
     gateway) echo cozystack.kubeovn-webhook ;;
+    endpointattachment)
+      echo "cozystack.postgres-application cozystack.vm-instance-application cozystack.vm-disk-application cozystack.cozy-proxy" ;;
   esac
 }
 

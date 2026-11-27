@@ -1,0 +1,13 @@
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: EndpointAttachment
+metadata:
+  name: ea-vpc-portlist
+spec:
+  applicationRef:
+    kind: VMInstance
+    name: ea-vpc-vm
+  endpoint:
+    serviceName: vm-instance-ea-vpc-vm
+  loadBalancer:
+    method: PortList
+    ports: [22]

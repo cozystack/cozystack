@@ -270,6 +270,9 @@ src_to_suites() {
     # create KubernetesNodes natively.
     kubernetes-nodes-application) echo "kubernetes-latest kubernetes-previous computeplane" ;;
     securitygroup-controller) echo securitygroup ;;
+    # endpointattachment is the only suite that installs the address
+    # substrate, so it is the one that covers both packages.
+    address-controller|metallb-iad) echo endpointattachment ;;
     # The kafka app source covers both the app suite and the metadata-backup
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
     # reaches this source) selects both.

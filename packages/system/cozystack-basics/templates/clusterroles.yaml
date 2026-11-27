@@ -36,6 +36,9 @@ rules:
 - apiGroups: ["sdn.cozystack.io"]
   resources: ["securitygroups"]
   verbs: ['*']
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["endpointattachments"]
+  verbs: ['*']
 - apiGroups:
   - cozystack.io
   resources:
@@ -144,6 +147,11 @@ rules:
   resources:
   - workloadmonitors
   - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
+  - endpointattachments
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - core.cozystack.io
@@ -329,6 +337,14 @@ rules:
   - credentials/revoke
   verbs:
   - create
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources:
+  - endpointattachments
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
 ---
 # == super admin cluster role ==
 # Aggregates admin + all roles labeled for super-admin access

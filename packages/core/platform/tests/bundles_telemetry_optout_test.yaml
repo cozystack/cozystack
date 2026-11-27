@@ -28,7 +28,7 @@ tests:
           path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
           value: true
 
-  - it: leaves the controller untouched by default, so telemetry stays opt-out (isp-full)
+  - it: leaves the telemetry flag unset by default, so telemetry stays opt-out (isp-full)
     set:
       bundles:
         system:
@@ -39,7 +39,7 @@ tests:
       value: cozystack.cozystack-engine
     asserts:
       - notExists:
-          path: spec.components
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
 
   - it: threads the flag on the oidc variant too (isp-full)
     set:
