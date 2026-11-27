@@ -1,0 +1,47 @@
+suite: MariaDB my.cnf server options
+
+# Every shipped server version logs a "MySQL 5.6 / 5.7 compatible option"
+# warning for the three MySQL-only options below. innodb_flush_method stays
+# on every version, including 11.8 where it is deprecated, so the existing
+# O_DIRECT_NO_FSYNC behaviour does not change.
+
+templates:
+  - templates/config.yaml
+
+tests:
+  - it: omits MySQL-only options on every version
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - notMatchRegex:
+          path: data["my.cnf"]
+          pattern: default_authentication_plugin
+      - notMatchRegex:
+          path: data["my.cnf"]
+          pattern: master_info_repository
+      - notMatchRegex:
+          path: data["my.cnf"]
+          pattern: relay_log_info_repository
+
+  - it: keeps the flush method on v11.8
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      version: v11.8
+    asserts:
+      - matchRegex:
+          path: data["my.cnf"]
+          pattern: (?m)^innodb_flush_method=O_DIRECT_NO_FSYNC$
+
+  - it: keeps the flush method on v10.6
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      version: v10.6
+    asserts:
+      - matchRegex:
+          path: data["my.cnf"]
+          pattern: (?m)^innodb_flush_method=O_DIRECT_NO_FSYNC$
