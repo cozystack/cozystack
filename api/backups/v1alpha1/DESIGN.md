@@ -159,12 +159,14 @@ Core Plan controller:
 1. **Read schedule** from `spec.schedule` and compute the next fire time.
 2. When due:
 
-   * Create a `BackupJob` in the same namespace:
+   * If a `BackupJob` the `Plan` controls has not reached `Succeeded` or `Failed`, hold the run, as a CronJob with `concurrencyPolicy: Forbid` does: set the `RunSkipped` condition (reason `PreviousRunActive`) naming the oldest such `BackupJob`, and recheck. The run starts if no `BackupJob` the `Plan` controls is unfinished by the starting deadline (300 seconds after the tick) and is skipped otherwise, so a `BackupJob` that never finishes holds the schedule until it is deleted.
+   * Otherwise, create a `BackupJob` in the same namespace:
 
      * `spec.planRef.name = plan.Name`
      * `spec.applicationRef = plan.spec.applicationRef` (normalized with default apiGroup if not specified)
      * `spec.backupClassName = plan.spec.backupClassName`
-   * Set `ownerReferences` so the `BackupJob` is owned by the `Plan`.
+   * Set a controller `ownerReference` so the `BackupJob` is owned by the `Plan`; only `BackupJob`s the `Plan` controls hold its schedule.
+   * Remove `RunSkipped` once the run for a due tick exists.
 
 **Note:** The `BackupJob` controller resolves the `BackupClass` to determine the appropriate strategy and parameters, based on the `ApplicationRef`. The strategy template is processed with a context containing the `Application` object and `Parameters` from the `BackupClass`.
 
