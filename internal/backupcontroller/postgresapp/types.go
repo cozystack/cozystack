@@ -81,12 +81,13 @@ type Bootstrap struct {
 	// recovery converges, and a bool+omitempty would drop false from the patch
 	// (it deletes the key instead), leaving the server to fall back to a default
 	// rather than being explicitly cleared. Same rule as Backup.UseSystemBucket.
-	Enabled       bool   `json:"enabled"`
-	OldName       string `json:"oldName,omitempty"`
-	ServerName    string `json:"serverName,omitempty"`
-	NewServerName string `json:"newServerName,omitempty"`
-	RecoveryTime  string `json:"recoveryTime,omitempty"`
-	BackupID      string `json:"backupID,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	OldName         string `json:"oldName,omitempty"`
+	ServerName      string `json:"serverName,omitempty"`
+	NewServerName   string `json:"newServerName,omitempty"`
+	RecoveryTime    string `json:"recoveryTime,omitempty"`
+	BackupID        string `json:"backupID,omitempty"`
+	SourceImageName string `json:"sourceImageName,omitempty"`
 }
 
 type Backup struct {

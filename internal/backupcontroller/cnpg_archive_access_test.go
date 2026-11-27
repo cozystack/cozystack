@@ -81,7 +81,7 @@ func artifactDriverMetadata(t *testing.T, store strategyv1alpha1.BarmanObjectSto
 		},
 	}
 	r := &BackupJobReconciler{Client: newCNPGStrategyTestClient(t)}
-	artifact, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", destination, moved, newPostgresApp("pg", "tenant"))
+	artifact, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", "", destination, moved, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestCreateCNPGBackupArtifact_RecordWithoutAccessRecordsNone(t *testing.T) {
 	written := cnpgDestination{DestinationPath: "s3://bkt-a/tenant/pg/", S3SecretRef: &secret}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: archiveStoreB()}
 	r := &BackupJobReconciler{Client: newCNPGStrategyTestClient(t)}
-	artifact, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	artifact, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", "", written, rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 	}
 	restore := func(t *testing.T, md map[string]string, getErr error, objs ...client.Object) outcome {
 		t.Helper()
-		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "")
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil, "", "")
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
