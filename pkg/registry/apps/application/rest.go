@@ -2345,8 +2345,9 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 // change it. Warn so an operator editing it is told it has no effect instead of
 // getting a silent 200, and where the password comes from now.
 var removedUserPasswordKinds = map[string]string{
-	postgresKind: mintedPasswordWarning,
-	mariadbKind:  "spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.",
+	postgresKind:   mintedPasswordWarning,
+	mariadbKind:    "spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.",
+	clickhouseKind: mintedPasswordWarning,
 }
 
 // mintedPasswordWarning is the warning of a kind whose user passwords the
@@ -2355,8 +2356,9 @@ var removedUserPasswordKinds = map[string]string{
 const mintedPasswordWarning = "spec.users[%q].password is ignored: passwords are issued through the credentials API and cannot be set from values. Mint a new password on the user's Credential (credentials.core.cozystack.io, mint subresource); editing this field has no effect."
 
 const (
-	postgresKind = "Postgres"
-	mariadbKind  = "MariaDB"
+	clickhouseKind = "ClickHouse"
+	postgresKind   = "Postgres"
+	mariadbKind    = "MariaDB"
 )
 
 // warnRemovedUserPasswords emits a client-facing admission warning for every

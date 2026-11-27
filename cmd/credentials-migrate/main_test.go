@@ -10,6 +10,7 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,9 @@ func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Obje
 	if err := helmv2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&helmv2.HelmRelease{})
 	if funcs != nil {
 		b = b.WithInterceptorFuncs(*funcs)
@@ -49,7 +53,7 @@ func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Obje
 	o := &options{
 		migration: 64, kind: "Postgres", formatName: format.ScramSHA256, accountsPath: "users",
 		labels: labelFlags{"cnpg.io/reload": "true"}, sourceSuffix: "-credentials",
-		stateNamespace: "cozy-system", actor: "migration", timeout: -time.Second,
+		stateNamespace: "cozy-system", actor: "migration", timeout: -time.Second, holdTimeout: -time.Second,
 	}
 	return &migrator{c: c, o: o, now: func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }}
 }
@@ -454,5 +458,203 @@ func TestSeedLeavesOutAReleaseWithARefusedFlag(t *testing.T) {
 	}
 	if _, ok := m.secret(t, "postgres-orders.web.account"); ok {
 		t.Fatal("a release the converted chart refuses must not be converted in part")
+	}
+}
+
+func TestSeedLeavesOutAReleaseWithAReservedUser(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{},"backup":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2", "backup": "platform"}))
+	m.o.reservedUsers = stringFlags{"backup", "default"}
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err := m.loadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why, left := st.Skipped["tenant-foo/postgres-orders"]; !left || !strings.Contains(why, "reserves") {
+		t.Fatalf("state = %+v, want the release left out for the reserved name", st)
+	}
+	for _, name := range []string{"postgres-orders.web.account", "postgres-orders.backup.account"} {
+		if _, ok := m.secret(t, name); ok {
+			t.Fatalf("%s: a release the converted chart refuses must not be converted in part", name)
+		}
+	}
+}
+
+// With a values path, the hook gives the release the controller's valuesFrom
+// entries ahead of the switch, so the converted chart's first render already
+// carries every stored value; other entries keep their place.
+func TestSeedAddsTheAccountValuesFrom(t *testing.T) {
+	ctx := context.Background()
+	hr := release(`{"users":{"web":{},"Api.1":{}}}`, "0.1.0", true)
+	hr.Spec.ValuesFrom = []helmv2.ValuesReference{
+		{Kind: "Secret", Name: "cozystack-values"},
+		account.ValuesFrom("postgres-orders.gone.account", "_accounts", "gone"),
+	}
+	m := newMigrator(t, hr, sourceSecret(map[string]string{"web": "hunter2", "Api.1": "secret"}))
+	m.o.valuesPath = "_accounts"
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	want := []helmv2.ValuesReference{
+		{Kind: "Secret", Name: "cozystack-values"},
+		account.ValuesFrom("postgres-orders.api-1.account", "_accounts", "Api.1"),
+		account.ValuesFrom("postgres-orders.web.account", "_accounts", "web"),
+	}
+	if len(cur.Spec.ValuesFrom) != len(want) {
+		t.Fatalf("valuesFrom = %+v", cur.Spec.ValuesFrom)
+	}
+	for i := range want {
+		if cur.Spec.ValuesFrom[i] != want[i] {
+			t.Fatalf("valuesFrom[%d] = %+v, want %+v", i, cur.Spec.ValuesFrom[i], want[i])
+		}
+	}
+	if !strings.HasPrefix(want[2].TargetPath, "_accounts.u") || !want[2].Optional {
+		t.Fatalf("entry = %+v", want[2])
+	}
+
+	// Without a values path the release's valuesFrom is left as it is.
+	hr2 := release(`{"users":{"web":{}}}`, "0.1.0", true)
+	m = newMigrator(t, hr2, sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr2), cur); err != nil {
+		t.Fatal(err)
+	}
+	if len(cur.Spec.ValuesFrom) != 0 {
+		t.Fatalf("valuesFrom = %+v, want none", cur.Spec.ValuesFrom)
+	}
+}
+
+func rotationFixture(t *testing.T, suspended bool, annotations map[string]string) (*migrator, *helmv2.HelmRelease) {
+	t.Helper()
+	hr := release(`{"users":{"web":{}}}`, "0.2.0", true)
+	hr.Spec.Suspend = suspended
+	hr.Annotations = annotations
+	m := newMigrator(t, hr, sourceSecret(map[string]string{"backup": "tenant-readable"}))
+	m.o.platformKeys = stringFlags{"backup"}
+	m.o.rotateKeys = stringFlags{"backup"}
+	return m, hr
+}
+
+func TestRotatePlatformKeysOnceAndForcesAnUpgrade(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, false, nil)
+	if err := m.rotatePlatformKeys(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := m.secret(t, "postgres-orders-credentials")
+	first := string(sec.Data["backup"])
+	if first == "tenant-readable" || len(first) != 32 || sec.Annotations[RotatedAnnotation] == "" {
+		t.Fatalf("source = %v %v", sec.Annotations, len(first))
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Spec.Suspend || cur.Annotations[SuspendedByAnnotation] != "" {
+		t.Fatalf("the suspension the rotation set must be lifted: %+v", cur.Annotations)
+	}
+	if at := cur.Annotations["reconcile.fluxcd.io/forceAt"]; at == "" || at != cur.Annotations["reconcile.fluxcd.io/requestedAt"] {
+		t.Fatalf("want a forced upgrade, annotations = %v", cur.Annotations)
+	}
+
+	// A rerun does not rotate twice.
+	if err := m.rotatePlatformKeys(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ = m.secret(t, "postgres-orders-credentials")
+	if string(sec.Data["backup"]) != first {
+		t.Fatal("a rerun must not rotate again")
+	}
+}
+
+// A run stopped between the suspension and the Secret write is finished by
+// the next one, which also lifts the suspension it left.
+func TestRotatePlatformKeysRecoversAnInterruptedRun(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, true, map[string]string{SuspendedByAnnotation: "64"})
+	if err := m.rotatePlatformKeys(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := m.secret(t, "postgres-orders-credentials")
+	if string(sec.Data["backup"]) == "tenant-readable" {
+		t.Fatal("the rotation must complete")
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Spec.Suspend {
+		t.Fatal("the suspension an earlier run set must be lifted")
+	}
+}
+
+// A release someone else suspended stays suspended and is left out with no
+// force request, which helm-controller would spend while it is suspended; the
+// rerun after the resume forces the upgrade, once.
+func TestRotatePlatformKeysKeepsAForeignSuspension(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, true, nil)
+	if err := m.rotatePlatformKeys(ctx, hr); err == nil || !strings.Contains(err.Error(), "suspended by someone else") {
+		t.Fatalf("err = %v", err)
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Spec.Suspend || cur.Annotations["reconcile.fluxcd.io/forceAt"] != "" || cur.Annotations["reconcile.fluxcd.io/requestedAt"] != "" {
+		t.Fatalf("suspend = %v, annotations = %v", cur.Spec.Suspend, cur.Annotations)
+	}
+	sec, _ := m.secret(t, "postgres-orders-credentials")
+	rotated := string(sec.Data["backup"])
+	if rotated == "tenant-readable" || sec.Annotations[ForcedAnnotation] != "" {
+		t.Fatalf("source = %v", sec.Annotations)
+	}
+
+	// Resumed: the rerun forces the upgrade without rotating again.
+	patch := client.MergeFrom(cur.DeepCopy())
+	cur.Spec.Suspend = false
+	if err := m.c.Patch(ctx, cur, patch); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.rotatePlatformKeys(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	forceAt := cur.Annotations["reconcile.fluxcd.io/forceAt"]
+	if forceAt == "" || forceAt != cur.Annotations["reconcile.fluxcd.io/requestedAt"] {
+		t.Fatalf("want a forced upgrade, annotations = %v", cur.Annotations)
+	}
+	sec, _ = m.secret(t, "postgres-orders-credentials")
+	if string(sec.Data["backup"]) != rotated || sec.Annotations[ForcedAnnotation] != sec.Annotations[RotatedAnnotation] {
+		t.Fatalf("source = %v", sec.Annotations)
+	}
+
+	// Forced once: a further rerun leaves the request alone.
+	m.now = func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) }
+	if err := m.rotatePlatformKeys(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Annotations["reconcile.fluxcd.io/forceAt"] != forceAt {
+		t.Fatal("a rerun after the forced upgrade must not force again")
+	}
+}
+
+func TestRunRefusesARotateKeyThatIsNotAPlatformKey(t *testing.T) {
+	err := run([]string{"finish", "--migration=65", "--kind=ClickHouse", "--format=sha256", "--rotate-key=backup"})
+	if err == nil || !strings.Contains(err.Error(), "not a --platform-key") {
+		t.Fatalf("err = %v", err)
 	}
 }

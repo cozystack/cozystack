@@ -15,12 +15,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,6 +57,18 @@ const (
 	incompleteLabel = "credentials.cozystack.io/incomplete"
 )
 
+const (
+	// RotatedAnnotation on the source Secret records when finish rotated its
+	// platform passwords.
+	RotatedAnnotation = "credentials.cozystack.io/rotated"
+	// ForcedAnnotation on the source Secret holds the RotatedAnnotation
+	// value of the rotation a forced upgrade was requested for.
+	ForcedAnnotation = "credentials.cozystack.io/forced"
+	// SuspendedByAnnotation on a HelmRelease names the migration that
+	// suspended it for a rotation, so only that suspension is lifted.
+	SuspendedByAnnotation = "credentials.cozystack.io/suspended-by-migration"
+)
+
 // options is the kind's credentials block and the migration's identity, as
 // the hook and the Job pass them.
 type options struct {
@@ -60,12 +77,17 @@ type options struct {
 	formatName     string
 	accountsPath   string
 	refuseFlags    stringFlags
+	reservedUsers  stringFlags
 	labels         labelFlags
+	valuesPath     string
 	sourceSuffix   string
 	platformKeys   stringFlags
+	rotateKeys     stringFlags
 	stateNamespace string
 	actor          string
 	timeout        time.Duration
+	holdRollouts   stringFlags
+	holdTimeout    time.Duration
 }
 
 type labelFlags map[string]string
@@ -97,6 +119,9 @@ type state struct {
 	// Skipped maps namespace/name to the reason and time it was left out on
 	// the last run. A release leaves the map once a later run finishes it.
 	Skipped map[string]string `json:"skipped,omitempty"`
+	// Rollouts maps namespace/name of each Deployment the held releases wait
+	// for to the images it ran when the hook recorded it.
+	Rollouts map[string]string `json:"rollouts,omitempty"`
 }
 
 type releaseState struct {
@@ -125,17 +150,32 @@ func run(args []string) error {
 	fs.StringVar(&o.formatName, "format", "", "password format of the kind's credentials block")
 	fs.StringVar(&o.accountsPath, "accounts-path", "users", "values map whose keys are the tenant accounts")
 	fs.Var(&o.refuseFlags, "refuse-flag", "user field that leaves a release out when it is true, because the converted chart refuses it; repeatable")
+	fs.Var(&o.reservedUsers, "reserved-user", "user name that leaves a release out, because the converted chart refuses it as a platform or engine account; repeatable")
 	fs.Var(o.labels, "label", "label every account Secret carries, key=value; repeatable")
+	fs.StringVar(&o.valuesPath, "values-path", "", "the kind's CredentialTemplate valuesPath: the hook adds the valuesFrom entry of every account to the release, so the first render of the converted chart already carries the stored values")
 	fs.StringVar(&o.sourceSuffix, "source-suffix", "-credentials", "suffix of the chart-generated Secret holding the plaintext passwords, after the release name")
 	fs.Var(&o.platformKeys, "platform-key", "key of the source Secret that belongs to a platform account and stays; repeatable")
+	fs.Var(&o.rotateKeys, "rotate-key", "finish: platform key of the source Secret to replace with a new random password once, followed by a forced upgrade of the release; repeatable")
 	fs.StringVar(&o.stateNamespace, "state-namespace", "cozy-system", "namespace of the state ConfigMap")
 	fs.StringVar(&o.actor, "actor", envOr("CREDENTIALS_MIGRATE_ACTOR", defaultActor), "who the record names for the migrated password")
 	fs.DurationVar(&o.timeout, "timeout", 10*time.Minute, "finish: how long to wait per release for the switched chart to be Ready")
+	fs.Var(&o.holdRollouts, "hold-until-rollout", "seed: Deployment, namespace/name, whose new revision the converted chart needs; the hook suspends every release of the kind and the finish Job resumes them once each such Deployment runs images other than the ones recorded now; repeatable")
+	fs.DurationVar(&o.holdTimeout, "hold-timeout", time.Hour, "finish: how long to wait for the --hold-until-rollout Deployments before reporting the held releases left out")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if o.migration == 0 || o.kind == "" || !format.Known(o.formatName) {
 		return errors.New("--migration, --kind and a built-in --format are required")
+	}
+	for _, k := range o.rotateKeys {
+		if !slices.Contains(o.platformKeys, k) {
+			return fmt.Errorf("--rotate-key %q is not a --platform-key, and finish would delete it from the source Secret", k)
+		}
+	}
+	for _, d := range o.holdRollouts {
+		if _, err := parseObjectKey(d); err != nil {
+			return fmt.Errorf("--hold-until-rollout: %w", err)
+		}
 	}
 
 	scheme := runtime.NewScheme()
@@ -143,6 +183,9 @@ func run(args []string) error {
 		return err
 	}
 	if err := helmv2.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
 		return err
 	}
 	c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
@@ -187,6 +230,16 @@ func (m *migrator) seed(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(releases) > 0 {
+		// Saved before any release is held, so the finish Job always knows
+		// what it waits for before it resumes them.
+		if err := m.recordRollouts(ctx, st); err != nil {
+			return err
+		}
+		if err := m.saveState(ctx, st); err != nil {
+			return err
+		}
+	}
 	for i := range releases {
 		hr := &releases[i]
 		key := hr.Namespace + "/" + hr.Name
@@ -203,10 +256,13 @@ func (m *migrator) seed(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", key, err)
 			}
 			m.skip(ctx, st, hr, err)
-			continue
+		} else {
+			delete(st.Skipped, key)
+			fmt.Printf("%s: recorded chart version %q\n", key, rec.ChartVersion)
 		}
-		delete(st.Skipped, key)
-		fmt.Printf("%s: recorded chart version %q\n", key, rec.ChartVersion)
+		if err := m.hold(ctx, hr); err != nil {
+			return errors.Join(fmt.Errorf("%s: %w", key, err), m.saveState(ctx, st))
+		}
 	}
 	return m.saveState(ctx, st)
 }
@@ -216,6 +272,9 @@ func (m *migrator) seed(ctx context.Context) error {
 func (m *migrator) finish(ctx context.Context) error {
 	st, err := m.loadState(ctx)
 	if err != nil {
+		return err
+	}
+	if err := m.releaseHolds(ctx, st); err != nil {
 		return err
 	}
 	keys := make([]string, 0, len(st.Releases))
@@ -294,7 +353,10 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 	if err := m.stripPasswords(ctx, hr); err != nil {
 		return fmt.Errorf("strip passwords from values: %w", err)
 	}
-	return m.retireSource(ctx, hr)
+	if err := m.retireSource(ctx, hr); err != nil {
+		return err
+	}
+	return m.rotatePlatformKeys(ctx, hr)
 }
 
 // seedRelease writes the account Secrets the release lacks, unowned: the
@@ -310,7 +372,7 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 // the first user added later would never get a Secret. Every failure other
 // than unresolvable accounts is an error.
 func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
-	accounts, err := resolveAccounts(hr, m.o.accountsPath, m.o.refuseFlags)
+	accounts, err := resolveAccounts(hr, m.o.accountsPath, m.o.refuseFlags, m.o.reservedUsers)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnresolvable, err)
 	}
@@ -384,6 +446,9 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 		}
 		fmt.Printf("%s/%s: migrated account %q into %s\n", hr.Namespace, hr.Name, acc.Username, name)
 	}
+	if err := m.addValuesFrom(ctx, hr, accounts); err != nil {
+		return fmt.Errorf("add valuesFrom entries: %w", err)
+	}
 	if !complete || hr.Annotations[account.SeedAnnotation] == "true" {
 		return nil
 	}
@@ -398,11 +463,45 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 	return nil
 }
 
+// addValuesFrom gives the release the valuesFrom entry of every account,
+// as the CredentialTemplate controller builds it, for a kind whose templates
+// name a valuesPath. The controller adds them only once the converted chart
+// has rendered the templates, so without them that first render would carry
+// no stored value, and the chart would leave every account out of the engine
+// until the next upgrade. The entries are optional and the old chart ignores
+// the values they fill, so adding them ahead of the switch changes nothing for
+// it. Non-account entries keep their place, and account entries are replaced
+// in template-name order, which is the controller's, so it finds nothing to
+// change.
+func (m *migrator) addValuesFrom(ctx context.Context, hr *helmv2.HelmRelease, accounts []account.Account) error {
+	if m.o.valuesPath == "" {
+		return nil
+	}
+	var want []helmv2.ValuesReference
+	for _, ref := range hr.Spec.ValuesFrom {
+		if !account.IsAccountValuesFrom(ref) {
+			want = append(want, ref)
+		}
+	}
+	sorted := slices.Clone(accounts)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Mapped < sorted[j].Mapped })
+	for _, acc := range sorted {
+		want = append(want, account.ValuesFrom(account.SecretName(hr.Name, acc.Mapped), m.o.valuesPath, acc.Username))
+	}
+	if equality.Semantic.DeepEqual(hr.Spec.ValuesFrom, want) {
+		return nil
+	}
+	patch := client.MergeFrom(hr.DeepCopy())
+	hr.Spec.ValuesFrom = want
+	return m.c.Patch(ctx, hr, patch)
+}
+
 // resolveAccounts returns the accounts the release declares: the keys of its
 // accounts map, in sorted order. Two users mapping to one name, a user whose
 // name maps to an invalid one, or a user with a refused field set to true,
-// which the converted chart would not render, leave the release unresolvable.
-func resolveAccounts(hr *helmv2.HelmRelease, path string, refuse []string) ([]account.Account, error) {
+// which the converted chart would not render, or a reserved user name leave
+// the release unresolvable.
+func resolveAccounts(hr *helmv2.HelmRelease, path string, refuse, reserved []string) ([]account.Account, error) {
 	var values map[string]any
 	if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
 		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
@@ -418,6 +517,9 @@ func resolveAccounts(hr *helmv2.HelmRelease, path string, refuse []string) ([]ac
 	var accounts []account.Account
 	byMapped := map[string]string{}
 	for _, name := range names {
+		if slices.Contains(reserved, name) {
+			return nil, fmt.Errorf("%s.%s is a name the converted chart reserves for a platform or engine account; rename the user", path, name)
+		}
 		if u, ok := users[name].(map[string]any); ok {
 			for _, field := range refuse {
 				if on, _ := u[field].(bool); on {
@@ -526,6 +628,97 @@ func (m *migrator) retireSource(ctx context.Context, hr *helmv2.HelmRelease) err
 		return err
 	}
 	fmt.Printf("%s/%s: removed the tenant keys from %s\n", hr.Namespace, hr.Name, source.Name)
+	return nil
+}
+
+// rotatePlatformKeys replaces, once, the platform passwords tenants could read
+// in the source Secret before the conversion, and forces an upgrade of the
+// release so the chart, which reads them back with lookup, applies the new
+// ones. The release is suspended while the Secret changes, so no render that
+// started from the old value writes it back, and only a suspension this
+// migration set is lifted. A release someone else suspended is left out
+// until they resume it: helm-controller marks a reconcile request handled
+// even while the release is suspended, and a force request only counts
+// together with an unhandled reconcile request (fluxcd/pkg apis/meta
+// HandleAnnotationRequest), so a force requested now would be spent before
+// the resume and the new password would never reach the engine. Annotations
+// on the Secret record the rotation, so a rerun does not rotate twice, and
+// the chart may key a restart of the consumers that read the password at
+// start on it, and the forced upgrade, so a rerun does not force twice.
+func (m *migrator) rotatePlatformKeys(ctx context.Context, hr *helmv2.HelmRelease) error {
+	if len(m.o.rotateKeys) == 0 {
+		return nil
+	}
+	source := &corev1.Secret{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name + m.o.sourceSuffix}, source); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The chart generates a value no tenant has read at its next render.
+			return nil
+		}
+		return err
+	}
+	mark := strconv.Itoa(m.o.migration)
+	if source.Annotations[RotatedAnnotation] == "" {
+		if !hr.Spec.Suspend {
+			patch := client.MergeFrom(hr.DeepCopy())
+			hr.Spec.Suspend = true
+			if hr.Annotations == nil {
+				hr.Annotations = map[string]string{}
+			}
+			hr.Annotations[SuspendedByAnnotation] = mark
+			if err := m.c.Patch(ctx, hr, patch); err != nil {
+				return fmt.Errorf("suspend for rotation: %w", err)
+			}
+		}
+		patch := client.MergeFrom(source.DeepCopy())
+		rotated := 0
+		for _, k := range m.o.rotateKeys {
+			if _, ok := source.Data[k]; !ok {
+				continue
+			}
+			password, err := format.GeneratePassword()
+			if err != nil {
+				return err
+			}
+			source.Data[k] = []byte(password)
+			rotated++
+		}
+		if source.Annotations == nil {
+			source.Annotations = map[string]string{}
+		}
+		source.Annotations[RotatedAnnotation] = m.now().UTC().Format(time.RFC3339)
+		if err := m.c.Patch(ctx, source, patch); err != nil {
+			return fmt.Errorf("rotate %s: %w", source.Name, err)
+		}
+		fmt.Printf("%s/%s: rotated %d platform password(s) in %s\n", hr.Namespace, hr.Name, rotated, source.Name)
+	}
+	if source.Annotations[ForcedAnnotation] == source.Annotations[RotatedAnnotation] {
+		return nil
+	}
+	if hr.Spec.Suspend && hr.Annotations[SuspendedByAnnotation] != mark {
+		return fmt.Errorf("the platform passwords in %s are rotated, but the release is suspended by someone else, and a forced upgrade requested now would be spent while it stays suspended; resume it and run the conversion again", source.Name)
+	}
+	// Request a forced upgrade, and lift the suspension this migration set,
+	// including one left by an interrupted earlier run.
+	now := m.now().UTC().Format(time.RFC3339Nano)
+	patch := client.MergeFrom(hr.DeepCopy())
+	if hr.Annotations == nil {
+		hr.Annotations = map[string]string{}
+	}
+	hr.Annotations[fluxmeta.ReconcileRequestAnnotation] = now
+	hr.Annotations[fluxmeta.ForceRequestAnnotation] = now
+	if hr.Annotations[SuspendedByAnnotation] == mark {
+		hr.Spec.Suspend = false
+		delete(hr.Annotations, SuspendedByAnnotation)
+	}
+	if err := m.c.Patch(ctx, hr, patch); err != nil {
+		return fmt.Errorf("force an upgrade after rotation: %w", err)
+	}
+	forced := client.MergeFrom(source.DeepCopy())
+	source.Annotations[ForcedAnnotation] = source.Annotations[RotatedAnnotation]
+	if err := m.c.Patch(ctx, source, forced); err != nil {
+		return fmt.Errorf("record the forced upgrade on %s: %w", source.Name, err)
+	}
 	return nil
 }
 

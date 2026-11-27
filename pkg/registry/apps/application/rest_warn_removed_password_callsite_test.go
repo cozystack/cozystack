@@ -164,6 +164,7 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 	}{
 		{"postgres warns", postgresKind, rawWithPassword, true},
 		{"mariadb warns", mariadbKind, rawWithPassword, true},
+		{"clickhouse warns", clickhouseKind, rawWithPassword, true},
 		{"other kind stays quiet", "Redis", rawWithPassword, false},
 		{"no password stays quiet", postgresKind, `{"users":{"app":{}}}`, false},
 		{"warns on a good user despite a non-object user", postgresKind, `{"users":{"good":{"password":"x"},"bad":"str"}}`, true},
@@ -195,7 +196,7 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 // mint on the user's Credential: its <release>-credentials Secret holds no user
 // password a tenant can read, so naming it sends the reader to a dead end.
 func TestWarnRemovedUserPasswords_PointsAtMint(t *testing.T) {
-	for _, kind := range []string{postgresKind} {
+	for _, kind := range []string{postgresKind, clickhouseKind} {
 		t.Run(kind, func(t *testing.T) {
 			r := &REST{kindName: kind}
 			app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(`{"users":{"app":{"password":"hackme"}}}`)}}

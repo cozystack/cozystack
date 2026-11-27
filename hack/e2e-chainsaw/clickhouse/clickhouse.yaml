@@ -10,8 +10,7 @@ spec:
   storageClass: ""
   logTTL: 15
   users:
-    testuser:
-      password: xai7Wepo
+    testuser: {}
   backup:
     enabled: false
     s3Region: us-east-1
