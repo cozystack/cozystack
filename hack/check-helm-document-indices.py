@@ -25,7 +25,13 @@ def check(base):
     root = Path(git("rev-parse", "--show-toplevel").strip())
     additions = {}
     path = None
-    for line in git("diff", "--no-ext-diff", "-M", "--unified=0", base, "--",
+    # Pin every diff option the parser below depends on, so the caller's diff.*
+    # and color.* settings cannot change which lines count as added: another
+    # algorithm or indent heuristic can pair an added line with a removed one,
+    # and a changed or missing b/ prefix hides every file.
+    for line in git("diff", "--no-ext-diff", "--no-color", "--diff-algorithm=myers",
+                    "--indent-heuristic", "--src-prefix=a/", "--dst-prefix=b/", "-M",
+                    "--unified=0", base, "--",
                     ":(glob)packages/*/*/tests/*_test.yaml").splitlines():
         if line.startswith("diff --git "):
             path = None
