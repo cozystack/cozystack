@@ -1,0 +1,170 @@
+suite: bucket refuses COSI classes that the resolved SeaweedFS instance does not provide
+# The tenant inherits the SeaweedFS of tenant-foo; tenant-foo-b is a child
+# tenant running its own instance, whose base classes are named tenant-foo-b.
+templates:
+  - templates/bucketclaim.yaml
+release:
+  name: bucket-data
+  namespace: tenant-foo-c
+set:
+  _namespace:
+    seaweedfs: tenant-foo
+  users:
+    alice: {}
+    bob:
+      readonly: true
+scheme: &scheme
+  "v1/Namespace":
+    gvr:
+      group: ""
+      version: v1
+      resource: namespaces
+    namespaced: false
+  "objectstorage.k8s.io/v1alpha1/BucketClass":
+    gvr:
+      group: objectstorage.k8s.io
+      version: v1alpha1
+      resource: bucketclasses
+    namespaced: false
+  "objectstorage.k8s.io/v1alpha1/BucketAccessClass":
+    gvr:
+      group: objectstorage.k8s.io
+      version: v1alpha1
+      resource: bucketaccessclasses
+    namespaced: false
+releaseNamespace: &releaseNamespace
+  apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: tenant-foo-c
+ownBase: &ownBase
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketClass
+  metadata:
+    name: tenant-foo
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+ownBaseAccess: &ownBaseAccess
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+ownBaseReadonly: &ownBaseReadonly
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo-readonly
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+ownPool: &ownPool
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketClass
+  metadata:
+    name: tenant-foo-fast
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+ownPoolAccess: &ownPoolAccess
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo-fast
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+ownPoolReadonly: &ownPoolReadonly
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo-fast-readonly
+  driverName: tenant-foo.seaweedfs.objectstorage.k8s.io
+childBase: &childBase
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketClass
+  metadata:
+    name: tenant-foo-b
+  driverName: tenant-foo-b.seaweedfs.objectstorage.k8s.io
+childBaseAccess: &childBaseAccess
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo-b
+  driverName: tenant-foo-b.seaweedfs.objectstorage.k8s.io
+childBaseReadonly: &childBaseReadonly
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketAccessClass
+  metadata:
+    name: tenant-foo-b-readonly
+  driverName: tenant-foo-b.seaweedfs.objectstorage.k8s.io
+childLock: &childLock
+  apiVersion: objectstorage.k8s.io/v1alpha1
+  kind: BucketClass
+  metadata:
+    name: tenant-foo-lock
+  driverName: tenant-foo-lock.seaweedfs.objectstorage.k8s.io
+
+tests:
+  - it: renders a pool the resolved instance declares
+    set:
+      storagePool: fast
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*releaseNamespace, *ownBase, *ownBaseAccess, *ownBaseReadonly, *ownPool, *ownPoolAccess, *ownPoolReadonly, *childBase, *childBaseAccess, *childBaseReadonly]
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-foo-fast
+        documentSelector:
+          path: kind
+          value: BucketClaim
+
+  - it: renders the base class when no storagePool is set
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*releaseNamespace, *ownBase, *ownBaseAccess, *ownBaseReadonly, *childBase, *childBaseAccess, *childBaseReadonly]
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-foo
+        documentSelector:
+          path: kind
+          value: BucketClaim
+
+  - it: refuses a storagePool that names the class of another tenant's instance
+    set:
+      storagePool: b
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*releaseNamespace, *ownBase, *ownBaseAccess, *ownBaseReadonly, *ownPool, *ownPoolAccess, *ownPoolReadonly, *childBase, *childBaseAccess, *childBaseReadonly]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not provided by the SeaweedFS instance in namespace "tenant-foo"'
+
+  - it: refuses a storagePool the instance does not declare
+    set:
+      storagePool: slow
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*releaseNamespace, *ownBase, *ownBaseAccess, *ownBaseReadonly, *ownPool, *ownPoolAccess, *ownPoolReadonly]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'BucketClass "tenant-foo-slow" is not provided by the SeaweedFS instance in namespace "tenant-foo"'
+
+  - it: refuses a variant class that another tenant's instance owns
+    set:
+      locking: true
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*releaseNamespace, *ownBase, *ownBaseAccess, *ownBaseReadonly, *childLock]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'BucketClass "tenant-foo-lock" is not provided by the SeaweedFS instance in namespace "tenant-foo"'
+
+  - it: keeps the offline render when the cluster is not reachable
+    set:
+      storagePool: b
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-foo-b
+        documentSelector:
+          path: kind
+          value: BucketClaim
