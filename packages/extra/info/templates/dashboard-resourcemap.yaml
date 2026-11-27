@@ -25,8 +25,8 @@ subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" .Release.Namespace) }}
 {{- else }}
 - kind: ServiceAccount
-  name: tenant-{{ .Release.Namespace }}
-  namespace: tenant-{{ .Release.Namespace }}
+  name: {{ .Release.Namespace }}
+  namespace: {{ .Release.Namespace }}
 {{- end }}
 roleRef:
   kind: Role
