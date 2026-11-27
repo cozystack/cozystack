@@ -37,7 +37,11 @@ jobs:
       packages: write
 
     steps:
-      # Resume an incomplete pre-release build until its release is published.
+      # The same no-op build-amd64 makes on a re-run of an rc whose release
+      # already exists, so the re-run does not rebuild arm64 for nothing. This
+      # token cannot see a draft, but an rc's release is published by the time
+      # it has been prepared; a draft left by a run that failed before that is
+      # rebuilt, which is the safe direction.
       - name: Check if release already exists
         id: check_release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
