@@ -41,19 +41,28 @@ tests:
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.postgres-operator, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.victoria-metrics-operator, any: true}
 
-  - it: keeps the postgres backup roundtrip prerequisites
-    template: templates/bundles/system.yaml
+  # The postgres suite has no backup step, so the selection drops the backup
+  # packages, and the strategy with them: a strategy without its framework
+  # would wait on a dependency that is never installed.
+  - it: drops the backup framework and the strategies a suite without backups does not need
     values:
       - fixtures/selective-install-postgres-values.yaml
     set:
       bundles:
         system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
     asserts:
-      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backupstrategy-controller, any: true}
-      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
-      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.bucket-application, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.objectstorage-controller, any: true}
-      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.velero, any: true}
+        template: templates/bundles/system.yaml
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backupstrategy-controller, any: true}
+        not: true
+        template: templates/bundles/system.yaml
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-controller, any: true}
+        not: true
+        template: templates/bundles/system.yaml
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.backup-strategy-cnpg, any: true}
+        not: true
+        template: templates/bundles/paas.yaml
 
   - it: keeps the CAPI and virtualization runtime baseline
     template: templates/bundles/iaas.yaml

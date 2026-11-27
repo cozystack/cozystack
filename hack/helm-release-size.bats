@@ -116,30 +116,3 @@ $c
   fi
   rm -rf "$tmp"
 }
-
-@test "backupstrategy-controller fits the budget on its largest revision" {
-  # The default render gates every Strategy CR off. The revision that renders
-  # all of them, with the Velero location on as in production, is the one
-  # that grew past the limit once.
-  c=packages/system/backupstrategy-controller
-  tmp=$(mktemp -d)
-  # Rendered to a file rather than piped: in a pipe the estimator's status
-  # would stand for the render's, and a failed render would be measured as an
-  # empty manifest and pass.
-  if ! helm template backupstrategy-controller "$c" -n cozy-backup-controller \
-    --set backupStorage.bucketNameOverride=cozy-backups-0123 \
-    --set velero.bslEnabled=true > "$tmp/manifest"; then
-    echo "$c failed to render its largest revision; nothing was measured" >&2
-    false
-  fi
-  if ! grep -q '^kind: Kafka$' "$tmp/manifest"; then
-    echo "$c rendered without the default Strategy CRs; this is not its largest revision" >&2
-    false
-  fi
-  size=$(python3 -I hack/helm-release-size.py "$c" < "$tmp/manifest")
-  rm -rf "$tmp"
-  if [ "$size" -gt "$BUDGET" ]; then
-    echo "$c: $size bytes with every default Strategy rendered (budget $BUDGET, limit $LIMIT)" >&2
-    false
-  fi
-}

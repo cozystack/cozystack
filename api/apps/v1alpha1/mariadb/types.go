@@ -48,7 +48,7 @@ type ConfigSpec struct {
 	// Databases configuration map.
 	// +kubebuilder:default:={}
 	Databases map[string]Database `json:"databases,omitempty"`
-	// DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
+	// DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb.
 	// +kubebuilder:default:={}
 	Backup Backup `json:"backup"`
 	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.

@@ -334,7 +334,8 @@ load test_helper
 # theirs (#4257).
 # A ref whose key merely ENDS in Image, and which carries no digest to fall back
 # on, used to read as a config change and cost its whole file the overlay. That
-# is how backupstrategy-controller ran a release image two months older than the
+# is how the backup strategy chart, then in this tree, ran a release image two
+# months older than the
 # tree in every lane that did not rebuild it (#4257): one such line sat beside
 # digest-pinned siblings the classifier did recognise.
 @test "a suffixed image key is a ref, not a config change" {

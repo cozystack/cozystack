@@ -35,10 +35,9 @@ velero:
         memory: 2Gi
   configuration:
     # defaultVolumesToFsBackup: true
-    # cozy-default BackupStorageLocation lives in the
-    # backupstrategy-controller chart (single source of truth for
-    # backupStorage.{endpoint,bucketName,region}); see
-    # packages/system/backupstrategy-controller/templates/velero-bsl.yaml.
+    # The cozy-default BackupStorageLocation is rendered by the Velero backup
+    # strategy chart (cozystack.backup-strategy-velero), from the same
+    # backupStorage values as the default Strategy objects.
     backupStorageLocation: null
     volumeSnapshotLocation: null
     namespace: cozy-velero

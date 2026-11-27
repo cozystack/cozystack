@@ -131,21 +131,19 @@ suite_to_source() {
     # The address substrate is what this suite draws every address from, and
     # no other suite installs it.
     endpointattachment) echo "cozystack.address-controller cozystack.metallb-iad" ; return ;;
-    kafka-metadata) echo cozystack.kafka-application ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
   done
 }
 
-# Backup examples create Bucket and backup CRs alongside the selected app;
-# gateway's namespace-churn test also requires the pod admission webhook.
+# Packages a suite needs at run time without owning them: gateway's
+# namespace-churn test requires the pod admission webhook, and
+# endpointattachment attaches addresses to apps it does not own.
 # These requirements belong to the suites; adding application graph edges
 # would also change reverse test selection.
 suite_runtime_sources() {
   case "$1" in
-    clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis|valkey|vminstance)
-      echo cozystack.backupstrategy-controller ;;
     gateway) echo cozystack.kubeovn-webhook ;;
     endpointattachment)
       echo "cozystack.postgres-application cozystack.vm-instance-application cozystack.vm-disk-application cozystack.cozy-proxy" ;;
@@ -161,6 +159,14 @@ build_forward_deps() {
   yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | $n + "\t" + .' "$SOURCES_DIR"/*.yaml
 }
 
+# Every PackageSource is a node here, including one whose sourceRef names
+# another repository's artifact (the backup strategies ship from
+# cozystack/backup-strategies). select-e2e.sh leaves those out of its indexes
+# because no path in this tree can change them; this script must not, because
+# --disabled is a complement over the whole inventory: a source missing from
+# NODES would be missing from the disable list, and the platform chart would
+# then install a package no suite here asked for.
+#
 # Capture each producer before sorting. This file runs under dash through
 # cozytest, so pipefail is not available; checking the producer explicitly is
 # what prevents a failed yq from turning into a successful empty graph.

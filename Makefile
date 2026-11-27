@@ -18,7 +18,6 @@ build: build-deps
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image
 	make -C packages/system/observability-proxy image
-	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
 	make -C packages/system/migration-controller image
 	make -C packages/system/flux-shard-operator image

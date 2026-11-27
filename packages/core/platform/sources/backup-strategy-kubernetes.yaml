@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.backup-strategy-kubernetes
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-backup-strategies
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.backup-controller
+    - cozystack.backupstrategy-controller
+    - cozystack.velero
+    - cozystack.backup-strategy-velero
+    libraries:
+    - name: backup-strategy-lib
+      path: library/backup-strategy-lib
+    components:
+    - name: backup-strategy-kubernetes
+      path: system/backup-strategy-kubernetes
+      libraries: ["backup-strategy-lib"]
+      install:
+        privileged: true
+        namespace: cozy-backup-controller
+        releaseName: backup-strategy-kubernetes

@@ -8,8 +8,7 @@
 # Output:
 #   - empty         no E2E impact, decided by one of the rules that select
 #                   nothing: step 1 for docs/, dashboards/ and *.md, step 2 for
-#                   a *.disabled Chainsaw suite, for an
-#                   examples/backups/<app>/ with no suite and for the CI-only
+#                   a *.disabled Chainsaw suite and for the CI-only
 #                   tools cmd/backport-batch/ and cmd/api-gate/, and
 #                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
@@ -22,7 +21,7 @@
 #     a non-zero    hack/e2e-chainsaw holds no suite file. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list
 #                   silently corrupts both the escalations, which would print
-#                   it, and the backups rule, which membership-tests against
+#                   it, and the per-suite rules, which membership-test against
 #                   it — so the script refuses to answer at all, and since both
 #                   lanes run it under `bash -e` the step fails
 #
@@ -37,7 +36,7 @@
 #
 # "Empty" is not a synonym for inert_config_pattern. Several rules select
 # nothing: step 1 for docs/, dashboards/ and *.md, step 2 for a *.disabled
-# Chainsaw suite and for an examples/backups/<app>/ whose app has no suite, and
+# Chainsaw suite and the CI-only tools, and
 # the pattern itself. The property the lanes depend on is weaker than "matched
 # the inert list" and it is the one to preserve: an empty selection is a
 # decision some rule reached, never a path nothing looked at.
@@ -115,10 +114,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 # the fall-through at the bottom of the loop can escalate safely: the cost of
 # forgetting an inert path is a wasted full run, the cost of forgetting a live
 # one used to be a green gate with nothing tested.
-#   - examples/       demo manifests; examples/backups/<app>/,
-#                     examples/backups/_lib/ and any file directly in
-#                     examples/backups/ are handled above as real test harness
-#                     before this check is reached
+#   - examples/       demo manifests
 #   - .github/        templates, CODEOWNERS, labels, renovate, linter config —
 #                     minus the e2e workflows escalated above
 #   - .claude/ .gemini/  agent config, never shipped
@@ -145,11 +141,11 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     packages/library/ in full_suite_pattern
 #   - boilerplate.go.txt / dcgm-default-counters.csv  codegen header; a CSV read
 #                     only by check-gpu-recording-rules.bats
-#   - the three .gitattributes  ENUMERATED, not matched by name. Every
+#   - the two .gitattributes  ENUMERATED, not matched by name. Every
 #                     .gitattributes in this tree holds nothing but
 #                     `linguist-generated` markers — GitHub's language-stats and
 #                     diff-collapsing hint, which reaches no build, chart or test
-#                     — and these are the three whose classification the entry
+#                     — and these are the two whose classification the entry
 #                     changes; the two under api/ and internal/ are escalated by
 #                     full_suite_pattern first, so an entry for them would be
 #                     dead. The justification is about what these files CONTAIN,
@@ -165,7 +161,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     .gitattributes NOT on this list is classified by whatever
 #                     rule its path falls under — the graph, or the unclassified
 #                     fall-through — both of which fail safe
-inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/test_helper\.bash$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
+inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/test_helper\.bash$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/backup-controller/definitions/\.gitattributes$)'
 
 # All known Chainsaw suites: every dir directly under hack/e2e-chainsaw/ in
 # which Chainsaw v0.2.15 would find a Test (pkg/discovery/load.go and step.go).
@@ -196,20 +192,16 @@ all_apps=$(printf '%s\n' "$suite_files" \
 
 # An empty list here is a broken enumeration — a moved directory, a wrong
 # working directory — not a project without tests, and it silently corrupts
-# every answer the script can give:
+# every answer the script can give: the escalation branches print this list, so
+# "run everything" becomes a blank line, which both lanes read as "skip
+# Chainsaw" before posting the required "E2E Tests" status green. The per-suite
+# rules membership-test against the same list and escalate on a miss, so they
+# end in that blank line too.
 #
-#   - the escalation branches print this list, so "run everything"
-#     becomes a blank line, which both lanes read as "skip Chainsaw" before
-#     posting the required "E2E Tests" status green;
-#   - the examples/backups/<app>/ rule takes no escalation and still consults
-#     it, as a membership test. With the list empty the test fails, the app is
-#     not selected, and an edit to a backup harness that should run its suite
-#     reports nothing to run instead.
-#
-# Neither is distinguishable in the output from a legitimately empty selection,
-# which is the failure #3392 exists to keep out. Checking once here rather than
-# at the escalation branches covers both, and covers the next consumer that
-# reads the list without escalating.
+# That is not distinguishable in the output from a legitimately empty
+# selection, which is the failure #3392 exists to keep out. Checking once here
+# rather than at the escalation branches covers every one of them, and covers
+# the next consumer that reads the list without escalating.
 #
 # Both lanes run this step under `bash -e`, so the non-zero exit fails the job
 # instead of falling through to the empty selection.
@@ -254,10 +246,6 @@ src_to_suites() {
     # not exist, is dropped by intersect_suites(), and a CDI change reaches
     # nothing runnable through it.
     vm-disk-application) echo vminstance ;;
-    # The VMInstance and VMDisk backup round-trips are the only Tests that run a
-    # Velero backup and restore; without this the source maps to a `velero`
-    # suite that does not exist and a Velero change runs neither.
-    velero) echo vminstance ;;
     # Both sources own system/ingress-nginx, and the gateway suite carries the
     # legacy Ingress admission regression coverage. Without these explicit
     # mappings their derived names point at suites that do not exist, so an
@@ -273,18 +261,13 @@ src_to_suites() {
     # endpointattachment is the only suite that installs the address
     # substrate, so it is the one that covers both packages.
     address-controller|metallb-iad) echo endpointattachment ;;
-    # The kafka app source covers both the app suite and the metadata-backup
-    # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
-    # reaches this source) selects both.
-    kafka-application) echo "kafka kafka-metadata" ;;
     # The seaweedfs suite runs an instance of its own, and the rest use
     # tenant-root's. bucket drives the Bucket API against the
-    # tenant-root instance, the backup round-trips write to it through the
-    # in-cluster seaweedfs-s3 endpoint, most of them verifying its CA, and
+    # tenant-root instance, and
     # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
-    # serves. etcd's round-trip is left out because CI gates it off. A test
+    # serves. A test
     # derives this set from the suites.
-    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs valkey vminstance" ;;
+    seaweedfs-application) echo "bucket harbor seaweedfs" ;;
     # Both suites create a KeycloakClient and wait for the operator's finalizer
     # to remove it. kubernetes-application has no dependsOn on keycloak-operator
     # (#4680), so the graph reaches only monitoring and would drop the tenant
@@ -295,9 +278,20 @@ src_to_suites() {
   esac
 }
 
+# A PackageSource whose sourceRef names another repository's artifact (the
+# backup strategies ship from cozystack/backup-strategies) describes charts
+# this tree does not hold. Its component paths are relative to that artifact,
+# so one spelled like a directory here would hand local edits to a source that
+# cannot be changed from this repository, and nothing it depends on is tested
+# by a suite here on its account. Both indexes read only the sources of this
+# tree's own artifact. A source with no sourceRef at all is kept: the fixtures
+# of the unit tests are written that way.
+OWN_ARTIFACT=cozystack-packages
+own_sources='select((.spec.sourceRef.name // "'"$OWN_ARTIFACT"'") == "'"$OWN_ARTIFACT"'")'
+
 # yq: path -> PackageSource name
 build_owners_index() {
-  yq -rN '.metadata.name as $n | .spec.variants[]?.components[]?.path | select(. != null and . != "") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
+  yq -rN "$own_sources"' | .metadata.name as $n | .spec.variants[]?.components[]?.path | select(. != null and . != "") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 # yq: PackageSource name -> sources that depend on it (reverse of dependsOn)
@@ -330,7 +324,7 @@ build_owners_index() {
 # selection downstream, and a change to it still runs everything through the
 # per-path escalation.
 build_reverse_deps() {
-  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine" and . != "cozystack.cozystack-basics") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
+  yq -rN "$own_sources"' | .metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine" and . != "cozystack.cozystack-basics") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 # Each index is one yq, and `OWNERS=$(build_owners_index | sort -u)` reports
@@ -448,58 +442,6 @@ while IFS= read -r file || [ -n "$file" ]; do
         echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
         trigger_full=1
       fi
-      continue ;;
-    examples/backups/_lib/*)
-      # A helper here is shared by the backup walkthroughs, so it is material
-      # of the same kind as hack/e2e-chainsaw/_lib/. Matched before the per-app
-      # rule below, which would read _lib as an app, find no suite and select
-      # nothing. Escalated rather than mapped to the suites that run a
-      # walkthrough: that set is spread across the suites' own scripts, and a
-      # derivation that misses one fails open.
-      echo "select-e2e: '$file' is shared by every backup walkthrough — escalating to the full suite" >&2
-      trigger_full=1
-      continue ;;
-    examples/backups/*/*)
-      # A backup round-trip Test executes the example scripts under
-      # examples/backups/<app>/ as its harness, so an edit there must run that
-      # app's suite. This mapping is
-      # also why a round-trip Test belongs in its app's own suite dir: put it
-      # in a dir whose name does not match examples/backups/<app>/ and an edit
-      # to the harness selects a suite that cannot exercise it. A dir with no
-      # matching suite is a docs-only demo and stays ignored (adding it to
-      # selected_apps would empty the final intersection and trip the
-      # full-suite safety net). The redis walkthrough is the one harness shared
-      # across suites: the valkey round-trip runs it with APP_KIND=Valkey, so an
-      # edit there selects both.
-      app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
-      # The vmi and vmdisk backup demos are both harnessed by the vminstance
-      # suite, which owns VMDisk coverage too (see vm-disk-application in
-      # src_to_suites), so their dirs need the same source-style translation.
-      # The suite runs the vmi demo with SKIP_RESTORE_TO_COPY=1, so the to-copy
-      # step is docs-only: selecting the suite would pass without executing it.
-      case "$file" in
-        examples/backups/vmi/07-restore-to-copy.sh) continue ;;
-      esac
-      case "$app" in
-        redis) users="redis valkey" ;;
-        vmi|vmdisk) users=vminstance ;;
-        *) users=$app ;;
-      esac
-      for user in $users; do
-        if echo "$all_apps" | grep -Fxq "$user"; then
-          selected_apps="$selected_apps $user"
-          trigger_any=1
-        fi
-      done
-      continue ;;
-    examples/backups/*)
-      # A file beside the per-app dirs rather than in one (POSIX case lets `*`
-      # match `/`, so the arm above has already taken every nested path)
-      # belongs to no single walkthrough, so it is treated as shared by all of
-      # them. Otherwise it would fall to examples/ in inert_config_pattern and
-      # select nothing.
-      echo "select-e2e: '$file' belongs to no single backup walkthrough — escalating to the full suite" >&2
-      trigger_full=1
       continue ;;
     cmd/backport-batch/*|cmd/api-gate/*)
       # CI-only Go tools. No image builds them and nothing in the e2e sandbox

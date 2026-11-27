@@ -41,7 +41,6 @@
 /api/backups/                        @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
 /cmd/backup*-controller/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
 /internal/backupcontroller/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
-/examples/backups/                   @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
 /packages/system/backup*-controller/ @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
 /packages/system/velero/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
 /packages/system/vsnap-crd/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri

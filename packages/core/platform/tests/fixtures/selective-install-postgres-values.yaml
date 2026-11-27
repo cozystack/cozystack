@@ -3,8 +3,22 @@
 bundles:
   disabledPackages:
     - cozystack.address-controller
+    - cozystack.backup-controller
+    - cozystack.backup-strategy-altinity
+    - cozystack.backup-strategy-cnpg
+    - cozystack.backup-strategy-etcd
+    - cozystack.backup-strategy-foundationdb
+    - cozystack.backup-strategy-kafka
+    - cozystack.backup-strategy-kubernetes
+    - cozystack.backup-strategy-mariadb
+    - cozystack.backup-strategy-mongodb
+    - cozystack.backup-strategy-rabbitmq
+    - cozystack.backup-strategy-redis
+    - cozystack.backup-strategy-velero
+    - cozystack.backupstrategy-controller
     - cozystack.bootbox
     - cozystack.bootbox-application
+    - cozystack.bucket-application
     - cozystack.capi-provider-infra-proxmox
     - cozystack.capi-provider-ipam-in-cluster
     - cozystack.clickhouse-application
@@ -40,9 +54,11 @@ bundles:
     - cozystack.mariadb-application
     - cozystack.mariadb-operator
     - cozystack.metallb-iad
+    - cozystack.metrics-server
     - cozystack.mongodb-application
     - cozystack.mongodb-operator
     - cozystack.monitoring
+    - cozystack.monitoring-agents
     - cozystack.nats-application
     - cozystack.nfs-driver
     - cozystack.observability-proxy
@@ -59,6 +75,7 @@ bundles:
     - cozystack.tcp-balancer-application
     - cozystack.telepresence
     - cozystack.valkey-application
+    - cozystack.velero
     - cozystack.virtualprivatecloud-application
     - cozystack.vm-default-images
     - cozystack.vm-disk-application

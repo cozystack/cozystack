@@ -1,10 +1,9 @@
 # shellcheck shell=bash
-# Sourced by the chainsaw etcd Tests after `cd` to the repo root. Provides:
-#   etcd_cleanup        — drain of the singleton etcd release (details below)
-#   etcd_backup_cleanup — teardown of the S3 backup round-trip's resources
-# Both are used to pre-clean a scenario and as its guaranteed `finally`
-# teardown (clean-after-each), so the singleton-named etcd release never leaks
-# across scenarios — see hack/e2e-chainsaw/etcd/chainsaw-test.yaml.
+# Sourced by the chainsaw etcd Tests after `cd` to the repo root. Provides
+# etcd_cleanup, the drain of the singleton etcd release (details below). It is
+# used to pre-clean a scenario and as its guaranteed `finally` teardown
+# (clean-after-each), so the singleton-named etcd release never leaks across
+# scenarios — see hack/e2e-chainsaw/etcd/chainsaw-test.yaml.
 #
 # The etcd chart pins the Helm release name to 'etcd'
 # (packages/extra/etcd/templates/check-release-name.yaml) and provisions a
@@ -69,21 +68,4 @@ etcd_cleanup() {
     fi
     sleep 5
   done
-}
-
-# Teardown of the backup round-trip's resources (bucket, BackupJob/Backup,
-# RestoreJob, etcdctl pod, creds Secret, BackupClass, strategy). cleanup.sh
-# resumes the source Etcd HelmRelease first, so a round-trip aborted
-# mid-restore does not strand the app suspended. Idempotent and safe even when
-# the round-trip test never ran (deletes nothing else owns).
-#
-# Has teeth, mirroring etcd_cleanup: cleanup.sh is `set -e` with
-# --ignore-not-found on every delete, so it exits 0 on a clean namespace and
-# non-zero only on a real failure (stuck finalizer, RBAC error, wait timeout).
-# Deliberately NOT `|| true`d here — inside a Chainsaw `finally` a stuck
-# cleanup must fail the step rather than leak a wedged bucket/BackupClass into
-# the next app test.
-etcd_backup_cleanup() {
-  [ -x examples/backups/etcd/cleanup.sh ] || return 0
-  NAMESPACE="$NAMESPACE" examples/backups/etcd/cleanup.sh 2>&1
 }

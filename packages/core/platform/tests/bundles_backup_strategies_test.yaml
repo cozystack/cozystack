@@ -1,0 +1,139 @@
+suite: a backup strategy is installed where its application and the backup framework are
+templates:
+  - templates/bundles/system.yaml
+  - templates/bundles/paas.yaml
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: the full variant emits the strategy of each application it installs
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-cnpg
+          any: true
+        template: templates/bundles/paas.yaml
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-etcd
+          any: true
+        template: templates/bundles/system.yaml
+
+  - it: disabling the application drops its strategy and no other
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+        disabledPackages: [cozystack.postgres-application]
+    template: templates/bundles/paas.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-cnpg
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-mariadb
+          any: true
+
+  - it: disabling the backup framework drops every strategy
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+        disabledPackages: [cozystack.backupstrategy-controller]
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-cnpg
+          any: true
+        not: true
+        template: templates/bundles/paas.yaml
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-etcd
+          any: true
+        not: true
+        template: templates/bundles/system.yaml
+
+  - it: a slim variant emits a strategy only when both the framework and the application are opted in
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-slim}
+        paas: {enabled: true}
+        enabledPackages:
+          - cozystack.backupstrategy-controller
+          - cozystack.postgres-application
+    template: templates/bundles/paas.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-cnpg
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-mariadb
+          any: true
+        not: true
+
+  - it: a slim variant with the application but without the framework emits no strategy
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-slim}
+        paas: {enabled: true}
+        enabledPackages: [cozystack.postgres-application]
+    template: templates/bundles/paas.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-strategy-cnpg
+          any: true
+        not: true
+
+  - it: forwards backupStorage overrides to a strategy, under its own component name
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+      backupStorage:
+        provisionBucket: false
+        endpoint: https://s3.example.com
+    template: templates/bundles/paas.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backup-strategy-cnpg
+    asserts:
+      - equal:
+          path: spec.components.backup-strategy-cnpg.values.backupStorage.endpoint
+          value: https://s3.example.com
+      - equal:
+          path: spec.components.backup-strategy-cnpg.values.backupStorage.provisionBucket
+          value: false
+
+  - it: emits a strategy without a components block when nothing is overridden
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+        paas: {enabled: true}
+    template: templates/bundles/paas.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backup-strategy-cnpg
+    asserts:
+      - notExists:
+          path: spec.components

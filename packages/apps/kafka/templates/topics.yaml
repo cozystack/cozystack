@@ -4,7 +4,8 @@
   whose log holds a segment.bytes below the floor does not start. The same
   limits are in packages/core/platform/templates/_helpers.tpl,
   packages/core/platform/images/migrations/migrations/61 and
-  packages/system/backupstrategy-controller/files/kafka-backup.sh.
+  the kafka-backup.sh of the Kafka backup strategy chart in
+  github.com/cozystack/backup-strategies.
 */}}
 {{- $segmentBytesMin := 1048576 }}
 {{- range $topic := .Values.topics }}

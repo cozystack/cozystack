@@ -118,9 +118,7 @@ spec:
           # one; the 45s PUT cap matches the one terminal `mc cp` in the tree,
           # in `verify-every-bucket-takes-a-write` further down this file, which
           # sizes it for a volume grow. The 15s cap on the `mc` reads has no
-          # terminal precedent: `_lib/backup-access-preflight.sh:107` caps `mc`
-          # at 15s too, but inside a `while :;` retry loop where a 124 costs one
-          # attempt rather than the step, so it is not one. timeout execs its
+          # terminal precedent in the tree. timeout execs its
           # argument directly, so these wrappers do not recurse.
           k()  { timeout 30 kubectl "$@"; }
           mc() { timeout 15 mc "$@"; }  # reads/list/rm; the two PUTs call `timeout 45 mc` directly

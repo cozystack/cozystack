@@ -1,0 +1,33 @@
+#!/bin/sh
+# Migration 64 --> 65
+# Hand the backup strategy objects over to the per-strategy Helm releases.
+#
+# Until this release one Helm release, backupstrategy-controller, owned every
+# strategy CRD, every default Strategy object, the Velero BackupStorageLocation
+# and one Deployment running every backup driver. The drivers now come from
+# github.com/cozystack/backup-strategies as one chart per strategy kind, and
+# that release keeps only the generic Job strategy and the platform bucket.
+#
+# Helm deletes what a release stops rendering, and deleting a CRD deletes
+# every object of its kind, the Strategy objects an administrator created
+# included. This runs as the pre-upgrade hook of the platform chart, before
+# any backup chart changes, and for each object the old release is about to
+# drop it sets the keep policy and names the release that renders it from now
+# on. It also stops the single controller, so that it never reconciles a job
+# beside a per-strategy one, and copies the bindings of the cozy-default
+# BackupClass into a fragment that keeps the class resolving while the
+# strategy charts install theirs.
+#
+# The steps are in lib/backup-strategy-handover.sh, a copy of
+# hack/handover-strategy-releases.sh in that repository, which also runs it in
+# its nightly upgrade test. Its design document describes the handover:
+# https://github.com/cozystack/backup-strategies/blob/main/docs/design.md
+
+set -eu
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+sh "$(dirname "$0")/lib/backup-strategy-handover.sh"
+
+stamp_cozystack_version 65

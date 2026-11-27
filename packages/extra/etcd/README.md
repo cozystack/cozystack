@@ -18,7 +18,7 @@ same CA.
 
 Backups are driven by the Cozystack `BackupClass` flow: a `BackupJob` /
 `RestoreJob` against the `Etcd` strategy (`strategy.backups.cozystack.io/v1alpha1`).
-See `examples/backups/etcd/` for the end-to-end demo and
+See [`examples/backups/etcd`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/etcd) for the end-to-end demo and
 `internal/backupcontroller/etcdstrategy_controller.go` for the driver. The
 driver materialises one `EtcdSnapshot` (`etcd-operator.cozystack.io/v1alpha2`)
 per `BackupJob`; restore is in-place (the driver suspends this chart's

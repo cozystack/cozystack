@@ -448,33 +448,14 @@
 {{include "cozystack.platform.package.full.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{- /*
-  Forward admin backupStorage overrides (endpoint, region, systemSecretName, …)
-  into the emitted cozystack.backupstrategy-controller Package CR's
-  components.backupstrategy-controller.values, so the supported override path
-  on the cozystack-platform Package — spec.components.platform.values.backupStorage —
-  actually reaches the backupstrategy-controller HelmRelease (#3245). Same
-  pattern as the kubevirt / gpu-operator forwarding in bundles/iaas.yaml. The
-  components block is only rendered when the admin set something, so an unset
-  backupStorage keeps the emitted Package identical to the historical render.
+  The administrator's backupStorage and backupStrategyController overrides on
+  the cozystack-platform Package reach the backup charts through the
+  components block of each emitted Package. It is rendered only when
+  something is set, so an unset override keeps the Package without one.
 */ -}}
-{{- $backupStrategyValues := dict -}}
-{{- if .Values.backupStorage -}}
-{{- $_ := set $backupStrategyValues "backupStorage" .Values.backupStorage -}}
-{{- end -}}
-{{- if .Values.backupStrategyController -}}
-{{- $_ := set $backupStrategyValues "backupStrategyController" .Values.backupStrategyController -}}
-{{- end -}}
-{{- $backupStrategyComponents := dict -}}
-{{- if $backupStrategyValues -}}
-{{- $_ := set $backupStrategyComponents "backupstrategy-controller" (dict "values" $backupStrategyValues) -}}
-{{- end -}}
-{{include "cozystack.platform.package.full" (list "cozystack.backupstrategy-controller" "default" $ $backupStrategyComponents) }}
+{{include "cozystack.platform.package.full" (list "cozystack.backupstrategy-controller" "default" $ (include "cozystack.platform.backupStrategyComponents" (list "backupstrategy-controller" $) | fromYaml)) }}
+{{include "cozystack.platform.package.backupStrategy" (list "etcd" "cozystack.etcd-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.backup-controller" $) }}
-{{- /* velero must be emitted wherever backupstrategy-controller is: the latter
-hard-depends on cozystack.velero, so a missing velero leaves the
-backupstrategy-controller Package permanently DependenciesNotReady and the
-cozystack-platform HelmRelease never becomes Ready. Both are default on the full
-variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.full.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metrics-server" $) }}

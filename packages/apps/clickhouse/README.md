@@ -28,7 +28,7 @@ Wiring per release:
    reads the Secret directly.
 2. Cluster admin one-time installs an `Altinity` strategy and a `BackupClass`
    that maps `apps.cozystack.io/ClickHouse` to it (see
-   `examples/backups/clickhouse/01-create-strategy.sh` and `02-create-backupclass.sh`).
+   [`01-create-strategy.sh` and `02-create-backupclass.sh`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/clickhouse)).
 3. Tenant creates a `Plan` (cron schedule) or submits an ad-hoc `BackupJob`
    referencing the BackupClass. Restoring is a `RestoreJob` referencing the
    resulting `Backup`; omit `targetApplicationRef` for in-place, set it to a
@@ -70,7 +70,7 @@ backup:
 > single `BucketInfo` key holding a JSON blob) is **not directly
 > consumable** as `s3CredentialsSecret`. Either let the chart read the raw
 > values via `backup.s3*` (as
-> `examples/backups/clickhouse/03-create-bucket.sh` does — extract
+> [`03-create-bucket.sh`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/clickhouse) does — extract
 > coordinates from BucketInfo and pass them to the chart values), or
 > materialise an intermediate Secret with the five string keys above.
 

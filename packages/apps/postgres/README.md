@@ -52,7 +52,7 @@ spec:
 
 paired with a `strategy.backups.cozystack.io/CNPG` + `BackupClass` + `Plan`
 in the same tenant. The end-to-end e2e fixture under
-[`examples/backups/postgres/`](../../../examples/backups/postgres/) is the
+[`examples/backups/postgres/`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/postgres) is the
 canonical reference (`05-postgres-src.yaml` shows the chart side,
 `10-cnpg-strategy.yaml` and `15-backupclass.yaml` show the orchestration
 side, `25-backupjob-adhoc.yaml` and `40-restorejob-to-copy.yaml` show
@@ -62,7 +62,7 @@ ad-hoc backup and restore).
 
 ### How to enable backups (preferred: BackupClass + Plan)
 
-End-to-end manifests live under [`examples/backups/postgres/`](../../../examples/backups/postgres/).
+End-to-end manifests live under [`examples/backups/postgres/`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/postgres).
 Briefly, the moving parts are:
 
 1. A `strategy.backups.cozystack.io/CNPG` describing the destination bucket and templating the barman-cloud `ObjectStore` (including a Secret reference to S3 credentials - the credentials never appear on the Postgres CR `.spec`; see Security note below).
@@ -113,9 +113,9 @@ backup:
 
 For BackupClass-managed backups, create a `backups.cozystack.io/RestoreJob`
 that references the desired `Backup`. See
-[`examples/backups/postgres/35-restorejob-in-place.yaml`](../../../examples/backups/postgres/35-restorejob-in-place.yaml)
+[`examples/backups/postgres/35-restorejob-in-place.yaml`](https://github.com/cozystack/backup-strategies/blob/main/examples/backups/postgres/35-restorejob-in-place.yaml)
 and
-[`examples/backups/postgres/40-restorejob-to-copy.yaml`](../../../examples/backups/postgres/40-restorejob-to-copy.yaml).
+[`examples/backups/postgres/40-restorejob-to-copy.yaml`](https://github.com/cozystack/backup-strategies/blob/main/examples/backups/postgres/40-restorejob-to-copy.yaml).
 On a to-copy restore the controller replaces the target app's
 `spec.databases` and `spec.users` with the source-spec snapshot persisted
 in `Backup.status.underlyingResources`, so the chart's post-install

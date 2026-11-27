@@ -152,9 +152,3 @@ isa_baseline() {
   [ -n "$ref" ] || return 0
   smoke_run "$ref" 'test "$(id -u harbor)" = 10000 && test -x /harbor/harbor_core'
 }
-
-@test "redis-backup carries redis 8 or newer and curl" {
-  ref=$(smoke_ref redis-backup)
-  [ -n "$ref" ] || return 0
-  smoke_run "$ref" 'major=$(redis-server --version | sed -n "s/^Redis server v=\([0-9]*\)\..*/\1/p") && test "${major:-0}" -ge 8 && curl --version'
-}

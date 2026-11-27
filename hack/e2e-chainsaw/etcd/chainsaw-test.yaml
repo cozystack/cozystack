@@ -1,9 +1,6 @@
 # Chainsaw port of hack/e2e-apps/etcd.bats (v1alpha2 etcd-operator era).
-# Two scenarios as separate Tests:
-#   etcd-1-contracts       — install + the operator runtime contracts the chart
-#                            depends on but the operator owns
-#   etcd-2-backup-roundtrip — S3 backup/restore round-trip, gated out of CI
-#                            (opt in with ETCD_E2E_S3_ROUNDTRIP=1)
+# One scenario, etcd-1-contracts: install + the operator runtime contracts the
+# chart depends on but the operator owns.
 #
 # The etcd chart pins the Helm release name to 'etcd'
 # (packages/extra/etcd/templates/check-release-name.yaml), so every scenario
@@ -19,7 +16,7 @@
 # that during cleanup is what errored every etcd case in CI.
 #
 # Each scenario is self-contained (clean-after-each): a single `run` step
-# pre-cleans any leftover etcd + backup artifacts, installs, asserts, and then
+# pre-cleans any leftover etcd, installs, asserts, and then
 # drains in a `finally` that always runs (the step is always reached, so
 # teardown fires on success and on failure alike). This is deliberate: with
 # skipDelete: true opting out of Chainsaw's auto-cleanup and `finally` having no
@@ -54,16 +51,14 @@ spec:
   steps:
   - name: run
     try:
-    # Pre-clean: isolate this scenario from any etcd (or aborted backup
-    # round-trip) a prior failed run left behind — the release name 'etcd' is
-    # a singleton and cleanup.sh resumes a suspended HR before deleting.
+    # Pre-clean: isolate this scenario from any etcd a prior failed run left
+    # behind — the release name 'etcd' is a singleton.
     - script:
         timeout: 6m
         content: |
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_backup_cleanup
           etcd_cleanup
         check:
           ($error == null): true
@@ -241,99 +236,4 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_cleanup
----
-# Full backup -> EtcdSnapshot -> in-place RestoreJob round-trip against the
-# v1alpha2 operator, driving the validated example scripts
-# (examples/backups/etcd) as the harness so the test and the documented flow
-# can never drift. The scripts run 01 strategy -> 02 bucket+BackupClass ->
-# 03 source Etcd + sentinel write -> 04 BackupJob (waits Succeeded) ->
-# 05 mutate sentinel + RestoreJob (waits Succeeded) and assert the sentinel
-# reverts to its pre-mutation value — the in-cluster witness that the snapshot
-# round-tripped through S3.
-#
-# GATED OUT OF CI (opt in with ETCD_E2E_S3_ROUNDTRIP=1). The etcd S3 backup
-# path cannot succeed in the kind e2e environment with etcd-operator v0.5.2:
-#   - step 02 bakes the bucket's EXTERNAL ingress endpoint into the
-#     BackupClass; in CI that is the s3.example.org placeholder, which the
-#     in-cluster snapshot Job can neither route to nor TLS-validate;
-#   - the in-cluster seaweedfs-s3.<ns>.svc:8333 endpoint serves HTTPS with a
-#     self-signed cert, and the operator's snapshot agent (AWS SDK v2)
-#     verifies against the image's system trust store — the EtcdSnapshot CRD
-#     exposes no InsecureSkipVerify / CA-mount surface, and there is no
-#     plaintext-http S3 port — so it cannot trust that cert;
-#   - the strategy driver intentionally forbids a PVC destination
-#     (api/backups/strategy/v1alpha1/etcd_types.go, CEL has(self.s3)), so
-#     there is no in-cluster no-TLS fallback either.
-# The round-trip therefore only works against a publicly-trusted S3 endpoint
-# (a real cluster). Chainsaw v0.2.15 has no conditional Test-level skip, so
-# the gate is a plain in-script conditional that exits 0 in CI with the skip
-# reason in the log — the same file runs un-gated on a real cluster with just
-# the env var set.
-apiVersion: chainsaw.kyverno.io/v1alpha1
-kind: Test
-metadata:
-  name: etcd-2-backup-roundtrip
-spec:
-  skipDelete: true
-  catch:
-  - events: {}
-  - describe:
-      apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: etcd
-  - describe:
-      apiVersion: etcd-operator.cozystack.io/v1alpha2
-      kind: EtcdCluster
-      name: etcd
-  - describe:
-      apiVersion: backups.cozystack.io/v1alpha1
-      kind: BackupJob
-  - describe:
-      apiVersion: etcd-operator.cozystack.io/v1alpha2
-      kind: EtcdSnapshot
-  # The snapshot agent runs in its OWN Job Pod (the operator labels it with
-  # etcd-operator.cozystack.io/cluster=<cluster>); a wedged etcd read or S3
-  # upload leaves its error ONLY in that Pod's log and the statuses above.
-  - podLogs:
-      selector: etcd-operator.cozystack.io/cluster=etcd
-      tail: 200
-  - podLogs:
-      namespace: cozy-etcd-operator
-      selector: app.kubernetes.io/name=etcd-operator
-      tail: 100
-  steps:
-  - name: run
-    try:
-    # 03 re-applies the singleton Etcd 'etcd' in place, reusing (or recreating
-    # after the contracts drain) the cluster; run-all.sh is `set -e` so any
-    # step failing fails the test. NAMESPACE is the e2e tenant namespace.
-    - script:
-        timeout: 20m
-        content: |
-          set -eu
-          if [ "${ETCD_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
-            echo "# S3 backup/restore round-trip gated out of CI: no publicly-trusted"
-            echo "# S3 endpoint in kind (see comment in this file). Set"
-            echo "# ETCD_E2E_S3_ROUNDTRIP=1 on a real cluster to run it."
-            exit 0
-          fi
-          cd ../../..
-          [ -x examples/backups/etcd/run-all.sh ] || { echo "etcd backup example scripts not found at examples/backups/etcd" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" examples/backups/etcd/run-all.sh
-        check:
-          ($error == null): true
-    finally:
-    # Clean up the backup-flow resources (idempotent — a no-op when the
-    # round-trip was gated out), then drain etcd, its retained data PVCs and
-    # the Kamaji DataStore. Both have teeth: a teardown that does not settle
-    # fails the step instead of leaking into later app tests.
-    - description: backup cleanup + drain (clean-after-each)
-      script:
-        timeout: 8m
-        content: |
-          set -eu
-          cd ../../..
-          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_backup_cleanup
           etcd_cleanup

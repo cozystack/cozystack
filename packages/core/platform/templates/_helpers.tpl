@@ -138,6 +138,56 @@ alone: no KubeOVN component, and Cilium L2 announcements stand in for MetalLB.
 {{- include "cozystack.platform.package" (list "cozystack.networking" $variant $root $components) }}
 {{- end }}
 
+{{/*
+Emits the Package of one backup strategy next to the application it backs up.
+Call as (list <strategy> <application package> $ <full>): <full> is "true"
+when the application package is emitted with cozystack.platform.package.full,
+and empty when it is always on inside its bundle.
+
+A strategy is a driver for the objects of one application's operator, so it is
+installed exactly where the application is and the backup framework
+(cozystack.backupstrategy-controller) is. The administrator's backupStorage
+and backupStrategyController overrides go to every strategy: each chart
+renders its default Strategy against the same platform bucket.
+*/}}
+{{- define "cozystack.platform.package.backupStrategy" -}}
+{{- $name := printf "cozystack.backup-strategy-%s" (index . 0) -}}
+{{- $application := index . 1 -}}
+{{- $root := index . 2 -}}
+{{- $full := index . 3 -}}
+{{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
+{{- $enabled := default (list) $root.Values.bundles.enabledPackages -}}
+{{- $slim := include "cozystack.platform.slim" $root -}}
+{{- $framework := "cozystack.backupstrategy-controller" -}}
+{{- $on := and (not (has $framework $disabled)) (not (has $application $disabled)) -}}
+{{- if $slim -}}
+{{- $on = and $on (has $framework $enabled) (or (not $full) (has $application $enabled)) -}}
+{{- end -}}
+{{- if $on -}}
+{{- include "cozystack.platform.package" (list $name "default" $root (include "cozystack.platform.backupStrategyComponents" (list (trimPrefix "cozystack." $name) $root) | fromYaml)) }}
+{{- end -}}
+{{ end }}
+
+{{/*
+The components block that forwards the administrator's backup overrides to the
+component named by the first argument. Empty when nothing is overridden, so the
+Package is emitted without a components block.
+*/}}
+{{- define "cozystack.platform.backupStrategyComponents" -}}
+{{- $component := index . 0 -}}
+{{- $root := index . 1 -}}
+{{- $values := dict -}}
+{{- if $root.Values.backupStorage -}}
+{{- $_ := set $values "backupStorage" $root.Values.backupStorage -}}
+{{- end -}}
+{{- if $root.Values.backupStrategyController -}}
+{{- $_ := set $values "backupStrategyController" $root.Values.backupStrategyController -}}
+{{- end -}}
+{{- if $values -}}
+{{ toYaml (dict $component (dict "values" $values)) }}
+{{- end -}}
+{{- end }}
+
 {{- define "cozystack.platform.package.full.default" -}}
 {{- include "cozystack.platform.package.full" (list (index . 0) "default" (index . 1)) }}
 {{ end }}
@@ -397,7 +447,8 @@ sliced into /24s ever allowed.
   floor does not start. The same limits are in
   packages/apps/kafka/templates/topics.yaml,
   packages/core/platform/images/migrations/migrations/61 and
-  packages/system/backupstrategy-controller/files/kafka-backup.sh.
+  the kafka-backup.sh of the Kafka backup strategy chart in
+  github.com/cozystack/backup-strategies.
   Application values live in the HelmRelease, so this does not depend on the
   aggregated apps API being available.
 */ -}}

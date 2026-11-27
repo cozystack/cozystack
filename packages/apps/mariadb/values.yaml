@@ -148,7 +148,7 @@ databases: {}
 ## unchanged. New deployments should use the operator-native backup path
 ## via Cozystack's BackupClass / Plan / RestoreJob CRDs and the
 ## strategy.backups.cozystack.io/MariaDB driver. See
-## examples/backups/mariadb/ for a full end-to-end walkthrough.
+## https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb for a full end-to-end walkthrough.
 
 ## @typedef {struct} Backup - DEPRECATED: Backup configuration.
 ## @field {bool} enabled - DEPRECATED: Enable regular backups (default: false).
@@ -160,7 +160,7 @@ databases: {}
 ## @field {string} s3SecretKey - DEPRECATED: Secret key for S3 authentication.
 ## @field {string} resticPassword - DEPRECATED: Password for Restic backup encryption.
 
-## @param {Backup} backup - DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
+## @param {Backup} backup - DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb.
 backup:
   enabled: false
   s3Region: us-east-1

@@ -62,7 +62,7 @@ The recommended backup flow uses the Cozystack backups framework: a
 cluster-scoped `BackupClass` binds `apps.cozystack.io/FoundationDB` to a
 `strategy.backups.cozystack.io/FoundationDB` strategy, and tenants drive
 runs via `BackupJob` / `RestoreJob`. See
-[`examples/backups/foundationdb/`](../../../examples/backups/foundationdb/)
+[`examples/backups/foundationdb/`](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/foundationdb)
 for an end-to-end walkthrough (admin setup, backup, in-place restore,
 to-copy restore).
 

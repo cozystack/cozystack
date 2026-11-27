@@ -556,7 +556,7 @@ ensure_v1alpha2_crds() {
 # adopts the data plane, but the legacy etcd.aenix.io EtcdBackupSchedule /
 # EtcdBackup CRs have no equivalent under the v1alpha2 operator — scheduled
 # etcd backups silently stop. The replacement is a backups.cozystack.io
-# BackupClass + Plan (see examples/backups/etcd), which a tenant who relied on
+# BackupClass + Plan (see https://github.com/cozystack/backup-strategies/tree/main/examples/backups/etcd), which a tenant who relied on
 # the old backup.enabled=true must reconfigure. We deliberately do NOT
 # auto-translate: the destination/credentials shapes differ and a silent,
 # best-effort translation would be worse than a loud, actionable warning during
@@ -574,7 +574,7 @@ warn_orphaned_backup_schedules() {
   echo "WARNING: legacy etcd.aenix.io backup resources will NOT be migrated."     >&2
   echo "Scheduled/one-off etcd backups STOP working after this upgrade. The new"  >&2
   echo "flow is a backups.cozystack.io BackupClass + Plan (see"                   >&2
-  echo "examples/backups/etcd); reconfigure it per tenant. Orphaned resources:"   >&2
+  echo "https://github.com/cozystack/backup-strategies/tree/main/examples/backups/etcd); reconfigure it per tenant. Orphaned resources:"   >&2
   printf '%s' "$found" | sed '/^$/d;s/^/  - /'                                    >&2
   echo "=========================================================================" >&2
 }

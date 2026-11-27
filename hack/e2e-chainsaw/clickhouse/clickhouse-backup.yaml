@@ -11,8 +11,8 @@
 # platform useSystemBucket flow can start the Pod before any bucket is
 # projected). So the Pod becomes Ready and the
 # chart<->strategy contract is assertable with no reachable object store. The
-# real S3 backup/restore round-trip lives in clickhouse-2-backup-roundtrip,
-# which runs in tenant-root against the in-cluster SeaweedFS.
+# real S3 backup/restore round-trip lives with the Altinity strategy in
+# cozystack/backup-strategies.
 #
 # backup.endpointCA is deliberately left unset: this Test never reaches S3, and
 # leaving it empty keeps it covering the default rendering (no CA volume, no

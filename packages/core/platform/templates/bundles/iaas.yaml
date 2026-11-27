@@ -258,6 +258,7 @@
 {{include "cozystack.platform.package.default" (list $proxmoxName $) }}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "kubernetes" "cozystack.kubernetes-application" $ "") }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.computeplane-application" "kubevirt" $) }}
 {{- /* virtualprivatecloud follows the networking variant: the kubevirt flavor
@@ -271,6 +272,7 @@
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "velero" "cozystack.vm-instance-application" $ "") }}
 {{- /*
   VM import is opt-in: the Forklift operator ships a large manifest with its own
   CRDs and broad RBAC, and the migration controller holds cluster-wide access to

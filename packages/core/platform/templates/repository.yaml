@@ -18,3 +18,27 @@ metadata:
     platform.cozystack.io/no-delete: "true"
 spec:
 {{- $sourceRepo.spec | toYaml | nindent 2 }}
+{{- /*
+  The backup strategy drivers are built and published from
+  github.com/cozystack/backup-strategies. Their PackageSources in sources/
+  read the charts from this artifact instead of cozystack-packages.
+*/}}
+{{- with .Values.backupStrategies.source }}
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: cozystack-backup-strategies
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+spec:
+  interval: 5m0s
+  url: {{ required "backupStrategies.source.url is required" .url | quote }}
+  ref:
+    {{- required "backupStrategies.source.ref is required" .ref | toYaml | nindent 4 }}
+  {{- with .secretRef }}
+  secretRef:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

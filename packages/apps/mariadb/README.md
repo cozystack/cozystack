@@ -39,7 +39,7 @@ NAME        READY   STATUS    PRIMARY POD   AGE
 
 The recommended path is the Cozystack `BackupClass` / `Plan` /
 `RestoreJob` flow with the operator-native `strategy.backups.cozystack.io/MariaDB`
-strategy. See [examples/backups/mariadb](../../../examples/backups/mariadb/)
+strategy. See [examples/backups/mariadb](https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb)
 for a numbered, end-to-end walkthrough (bucket, source, strategy,
 BackupClass, Plan, ad-hoc BackupJob, and both in-place + to-copy
 RestoreJob fixtures).
@@ -215,17 +215,17 @@ Uninstalling the instance does this for you; only the turn-it-off-and-keep-runni
 
 ### Backup parameters (DEPRECATED)
 
-| Name                     | Description                                                                                           | Type     | Value                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
-| `backup`                 | DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/. | `object` | `{}`                                                   |
-| `backup.enabled`         | DEPRECATED: Enable regular backups (default: false).                                                  | `bool`   | `false`                                                |
-| `backup.s3Region`        | DEPRECATED: AWS S3 region where backups are stored.                                                   | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | DEPRECATED: S3 bucket used for storing backups.                                                       | `string` | `s3.example.org/mariadb-backups`                       |
-| `backup.schedule`        | DEPRECATED: Cron schedule for automated backups.                                                      | `string` | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | DEPRECATED: Retention strategy for cleaning up old backups.                                           | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | DEPRECATED: Access key for S3 authentication.                                                         | `string` | `<your-access-key>`                                    |
-| `backup.s3SecretKey`     | DEPRECATED: Secret key for S3 authentication.                                                         | `string` | `<your-secret-key>`                                    |
-| `backup.resticPassword`  | DEPRECATED: Password for Restic backup encryption.                                                    | `string` | `<password>`                                           |
+| Name                     | Description                                                                                                                                                   | Type     | Value                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `backup`                 | DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb. | `object` | `{}`                                                   |
+| `backup.enabled`         | DEPRECATED: Enable regular backups (default: false).                                                                                                          | `bool`   | `false`                                                |
+| `backup.s3Region`        | DEPRECATED: AWS S3 region where backups are stored.                                                                                                           | `string` | `us-east-1`                                            |
+| `backup.s3Bucket`        | DEPRECATED: S3 bucket used for storing backups.                                                                                                               | `string` | `s3.example.org/mariadb-backups`                       |
+| `backup.schedule`        | DEPRECATED: Cron schedule for automated backups.                                                                                                              | `string` | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | DEPRECATED: Retention strategy for cleaning up old backups.                                                                                                   | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | DEPRECATED: Access key for S3 authentication.                                                                                                                 | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | DEPRECATED: Secret key for S3 authentication.                                                                                                                 | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | DEPRECATED: Password for Restic backup encryption.                                                                                                            | `string` | `<password>`                                           |
 
 
 ### Scheduling parameters

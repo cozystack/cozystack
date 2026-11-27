@@ -18,22 +18,11 @@ It does **not** implement the backup logic itself.
 
 This document covers only the **core** API and its contracts with drivers, not driver implementations.
 
-### Platform-managed default flow
+### Where the drivers live
 
-As of Phase 2, Cozystack also ships **opinionated defaults** for the entire stack:
+This repository holds the core API and its controller only. The strategy drivers, their CRDs (API group `strategy.backups.cozystack.io`), the platform-managed defaults (the `cozy-backups` bucket, the `cozy-default` class, the default Strategy objects and the `cozy-backups-creds` projection) and the tests of each driver are in [cozystack/backup-strategies](https://github.com/cozystack/backup-strategies), one chart per strategy kind. Its [design document](https://github.com/cozystack/backup-strategies/blob/main/docs/design.md) covers packaging and the upgrade from the single strategy controller this repository used to ship.
 
-* A platform-managed S3 bucket `cozy-backups` (provisioned through `apps.cozystack.io/Bucket` in `tenant-root`).
-* Pre-rendered `Strategy` CRs `cozy-default-{cnpg,mariadb,etcd,altinity,foundationdb,velero-vminstance,velero-vmdisk}`.
-* A single cluster-wide `BackupClass` `cozy-default` whose `spec.strategies[]` binds each supported `apps.cozystack.io/<Kind>` to the matching strategy.
-* A `CredentialsProjector` inside `backupstrategy-controller` that copies the bucket-controller Secret into each tenant namespace as `cozy-backups-creds` on demand (per `BackupJob`/`RestoreJob` reconcile) and into a configured list of system namespaces (e.g. `cozy-velero`) on a periodic tick.
-
-Tenants reference `cozy-default` from `BackupJob`/`Plan`/`RestoreJob`; they never see the bucket controller Secret, never write to a Secret in their own namespace (default RBAC denies it), and never share an S3 path with another tenant (every default strategy template prefixes the object key with `<namespace>/<application>`).
-
-The platform-managed flow is layered *on top of* — not in place of — the core API. Custom `BackupClass`/Strategy CRs targeting other buckets continue to work; tenants picking `cozy-default` simply opt into the platform's pre-wired stack.
-
-**Open gap (FoundationDB):** the `cozy-default-foundationdb` Strategy CR is shipped but **not** bound by `cozy-default`. Restore for FoundationDB runs `fdbrestore` from inside the `cozy-foundationdb-operator` deployment, which does not yet mount `cozy-backups-creds` with the blob credentials file. Admins who want platform-default FDB backups today must either wire the operator deployment manually or use a custom BackupClass — see [Backup Classes](https://cozystack.io/docs/v1/operations/services/backup-classes/) for the follow-up plan.
-
-**Tenant visibility:** projected Secrets carry no `internal.cozystack.io/tenantresource` label, so the lineage-controller webhook does not promote them to a `TenantSecret` view. Combined with the default RBAC (no core/v1.Secret verbs on tenant ServiceAccounts), the projected credentials are unreadable from a tenant kubeconfig even when they sit in the tenant's own namespace; the operator Pods mount the Secret via kubelet, which bypasses tenant RBAC.
+The core controller imports no driver and names no strategy or application kind. Everything it shares with a driver is in this API group and in the `pkg/backups` Go package, which a driver in another module imports.
 
 ---
 
@@ -220,15 +209,18 @@ type ApplicationSelector struct {
 
 **BackupClass resolution**
 
-* When a `BackupJob` or `Plan` references a `BackupClass` via `backupClassName`, the controller:
-  1. Fetches the `BackupClass` by name.
-  2. Matches the `ApplicationRef` against strategies in the `BackupClass`:
-     * Normalizes `ApplicationRef.apiGroup` (defaults to `"apps.cozystack.io"` if not specified).
-     * Finds a strategy where `ApplicationSelector` matches the `ApplicationRef` (apiGroup and kind).
-  3. Returns the matched `StrategyRef` and `Parameters`.
-* Strategy templates (e.g., Velero's `backupTemplate.spec`) are processed with a context containing:
-  * `Application`: The application object being backed up.
-  * `Parameters`: The parameters from the matched `BackupClassStrategy`.
+`backups.ResolveBackupClass` (`pkg/backups`) is the one implementation, used by the core controller and by every driver:
+
+1. It collects the parts of the class: the `BackupClass` named by `backupClassName`, if it exists, then every `BackupClass` labelled `backups.cozystack.io/class=<backupClassName>`, in name order. The labelled objects are the class's fragments. A class may consist of fragments alone; when there is no part at all the class is not found.
+2. It normalizes `ApplicationRef.apiGroup` (defaults to `"apps.cozystack.io"` if not specified) and returns the `StrategyRef` and `Parameters` of the first binding, across the parts in that order, whose `ApplicationSelector` matches the application's group and kind.
+3. When no part binds the kind it returns `ErrNoMatchingStrategy`.
+
+Fragments let each package ship the binding for its own application kind: a class that lists every application in one object can only be owned by a package that names them all. A fragment is an ordinary `BackupClass` and can also be named directly; lists of classes offered to users leave fragments out.
+
+Strategy templates (e.g., Velero's `backupTemplate.spec`) are processed with a context containing:
+
+* `Application`: The application object being backed up.
+* `Parameters`: The parameters from the matched `BackupClassStrategy`.
 
 **Parameters**
 
@@ -315,6 +307,18 @@ type BackupJobStatus struct {
      * Set `status.message` and conditions.
 
 Drivers must **not** modify `BackupJob.spec` or delete `BackupJob` themselves.
+
+**Jobs without a driver**
+
+Several drivers watch the same `BackupJob` objects, so a driver acts only on a job whose resolved strategy has its group and kind and writes nothing to any other. The jobs no driver can attribute to itself are settled by the core controller's dispatcher, which never touches a job whose `status.startedAt` is set:
+
+| Situation | Outcome |
+| --- | --- |
+| The class and its fragments do not exist | `Ready=False`, reason `BackupClassNotFound`; retried |
+| The class binds no strategy to the application kind | the job is failed |
+| The API server does not serve the strategy kind | `Ready=False`, reason `DriverNotInstalled`; the job is failed 30 minutes after its creation |
+
+A driver ships the CRD of its strategy kind, so an unserved kind means the driver is not installed. A served kind whose driver is not running leaves the job waiting. The dispatcher treats a `RestoreJob` the same way, through the strategy reference of its `Backup`, and fails a `RestoreJob` whose `Backup` does not exist.
 
 ---
 

@@ -206,7 +206,7 @@
       }
     },
     "backup": {
-      "description": "DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.",
+      "description": "DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under https://github.com/cozystack/backup-strategies/tree/main/examples/backups/mariadb.",
       "type": "object",
       "default": {},
       "required": [

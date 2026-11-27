@@ -23,28 +23,3 @@ SUITE=hack/e2e-chainsaw/kafka/chainsaw-test.yaml
     return 1
   fi
 }
-
-@test "kafka backup round-trip deletes each cluster's PVCs after its app cleanup" {
-  # examples/backups/kafka creates two apps, kafka-test and kafka-restore; the
-  # chart names their Strimzi clusters with a kafka- prefix.
-  # One line per finally op, in source order, which is the order they run in.
-  # yq emits the facts and awk names the op, because if/then/else only reached
-  # yq in v4.54.1 and older ones reject the expression. The test document is
-  # cut out first: in a multi-document file yq also evaluates the array literal
-  # against the documents the select drops, and prints a line for each.
-  sequence=$(yq 'select(.metadata.name == "kafka-2-backup-roundtrip")' "$SUITE" \
-    | yq '.spec.steps[].finally[]?
-      | [((.script.content // "") | test("examples/backups/kafka/cleanup.sh") | tostring),
-         ((.delete.ref.apiVersion // "") + "/" + (.delete.ref.kind // "")),
-         (.delete.ref.labels."strimzi.io/cluster" // "")] | join(" ")' \
-    | awk '$1 == "true" { print "app-cleanup"; next }
-      $2 == "v1/PersistentVolumeClaim" { print "pvc:" $3; next }
-      { print "other" }')
-
-  for cluster in kafka-kafka-test kafka-kafka-restore; do
-    if ! printf '%s\n' "$sequence" | awk 'seen; /^app-cleanup$/ { seen = 1 }' | grep -qx "pvc:${cluster}"; then
-      echo "kafka-2-backup-roundtrip does not delete the PVCs of cluster ${cluster} after cleanup.sh: ${sequence}" >&2
-      return 1
-    fi
-  done
-}

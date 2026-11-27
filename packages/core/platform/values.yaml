@@ -89,7 +89,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 64
+  targetVersion: 65
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -844,26 +844,36 @@ monitoring:
   # tenant once, since it travels in the cozystack-values Secret they all
   # read.
   tracingCentralTenantBytesPerSecond: 0
+# The artifact the backup strategy drivers are installed from. It is published
+# by github.com/cozystack/backup-strategies and holds one chart per strategy
+# kind; the cozystack.backupstrategy-controller and cozystack.backup-strategy-*
+# PackageSources read from it. ref is an OCIRepository reference (tag, semver
+# or digest); secretRef names a pull Secret in cozy-system for a mirror that
+# needs one.
+backupStrategies:
+  source:
+    url: oci://ghcr.io/cozystack/backup-strategies/packages
+    ref:
+      tag: main
 # Backup storage overrides for the platform-managed cozy-default BackupClass.
-# Everything set here is forwarded verbatim into the emitted
-# cozystack.backupstrategy-controller Package CR as
-# components.backupstrategy-controller.values.backupStorage, so it lands on the
-# backupstrategy-controller HelmRelease and deep-merges over that chart's own
-# backupStorage defaults (packages/system/backupstrategy-controller/values.yaml
+# Everything set here is forwarded verbatim into the Package of the backup
+# framework (cozystack.backupstrategy-controller) and of every backup strategy
+# (cozystack.backup-strategy-*) as components.<name>.values.backupStorage, so
+# every chart renders against the same bucket. The values.yaml of the
+# backupstrategy-controller chart in github.com/cozystack/backup-strategies
 # documents every knob: provisionBucket, bucketName, endpoint, region,
-# forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
+# forcePathStyle, systemSecretName, …. Admins set this via
 # spec.components.platform.values.backupStorage on the
 # cozystack.cozystack-platform Package — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
-# Empty (the default) forwards nothing and keeps the child chart defaults.
+# Empty (the default) forwards nothing and keeps the charts' defaults.
 backupStorage: {}
 
-# backupStrategyController overrides for the platform-managed strategy CRs,
-# forwarded verbatim into the same Package as
-# components.backupstrategy-controller.values.backupStrategyController. The
-# knob that needs this is redisBackupResources: the shipped cozy-default-redis
-# Strategy CR is Helm-managed (a direct edit reverts on upgrade), so a tenant
-# with a large Redis raises the restore Pod's memory / ephemeral-storage here,
-# via spec.components.platform.values.backupStrategyController.redisBackupResources
+# backupStrategyController overrides, forwarded the same way as
+# components.<name>.values.backupStrategyController. The knob that needs this
+# is redisBackupResources: the shipped cozy-default-redis Strategy is
+# Helm-managed (a direct edit reverts on upgrade), so a tenant with a large
+# Redis raises the restore Pod's memory / ephemeral-storage here, via
+# spec.components.platform.values.backupStrategyController.redisBackupResources
 # on the cozystack.cozystack-platform Package. Empty forwards nothing.
 backupStrategyController: {}
 # Overrides for the optional cozystack.kubernetes-worker-image package (the

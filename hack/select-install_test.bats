@@ -82,12 +82,12 @@ assert_output_graph_error() {
     assert_contains_package "$output" cozystack.mongodb-operator
 }
 
-@test "root SeaweedFS keeps COSI for suites without backup steps" {
+@test "root SeaweedFS keeps COSI for a suite that uses no object storage" {
     output=$(hack/select-install.sh kuberture)
     assert_contains_package "$output" cozystack.seaweedfs-application
     assert_contains_package "$output" cozystack.objectstorage-controller
 
-    # A backup suite would hide a lost SeaweedFS edge by retaining COSI itself.
+    # A suite that keeps COSI on its own account would hide a lost SeaweedFS edge.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     yq -i '(.spec.variants[].dependsOn) -= ["cozystack.objectstorage-controller"]' \
@@ -176,21 +176,51 @@ assert_output_graph_error() {
     rm -rf "$tmp"
 }
 
-@test "backup suites keep the APIs used by their roundtrip examples" {
-    for suite in clickhouse etcd kafka kafka-metadata mariadb mongodb postgres rabbitmq redis valkey vminstance; do
-        keep=$(hack/select-install.sh "$suite")
-        drop=$(hack/select-install.sh --disabled "$suite")
-        for required in cozystack.backupstrategy-controller cozystack.backup-controller \
-            cozystack.bucket-application cozystack.objectstorage-controller cozystack.velero; do
-            assert_contains_package "$keep" "$required"
-            case " $drop " in
-                *" $required "*) echo "suite '$suite' disables backup prerequisite '$required'" >&2; exit 1 ;;
-            esac
-        done
-    done
-    # Suites without backup steps must not acquire the backup stack as baseline.
-    drop=$(hack/select-install.sh --disabled kuberture)
-    assert_contains_package "$drop" cozystack.backupstrategy-controller
+@test "a source from another repository's artifact is disabled unless a kept package needs it" {
+    # --disabled is a complement over the whole inventory, so a PackageSource
+    # whose sourceRef names another artifact has to stay a node: left out of
+    # the graph it would be left out of the disable list, and the platform
+    # chart would install a package no suite asked for.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    cat > "$tmp/sources/elsewhere.yaml" <<'YAML'
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.elsewhere
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: some-other-artifact
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.postgres-operator
+      components:
+        - name: elsewhere
+          path: system/elsewhere
+YAML
+    hack/select-install.sh --validate "$tmp/sources"
+    keep=$(hack/select-install.sh postgres "$tmp/sources")
+    drop=$(hack/select-install.sh --disabled postgres "$tmp/sources")
+    assert_contains_package "$drop" cozystack.elsewhere
+    case " $keep " in
+        *" cozystack.elsewhere "*) echo "a source nothing selected depends on was kept" >&2; exit 1 ;;
+    esac
+
+    # A kept package that declares it as a dependency keeps it, like any other.
+    yq -i '.spec.variants[0].dependsOn += ["cozystack.elsewhere"]' \
+      "$tmp/sources/postgres-application.yaml"
+    hack/select-install.sh --validate "$tmp/sources"
+    keep=$(hack/select-install.sh postgres "$tmp/sources")
+    drop=$(hack/select-install.sh --disabled postgres "$tmp/sources")
+    assert_contains_package "$keep" cozystack.elsewhere
+    case " $drop " in
+        *" cozystack.elsewhere "*) echo "a dependency of a kept package was disabled" >&2; exit 1 ;;
+    esac
+    rm -rf "$tmp"
 }
 
 @test "gateway keeps the pod admission webhook used by its churn test" {
@@ -199,7 +229,7 @@ assert_output_graph_error() {
 }
 
 @test "suite runtime requirements must resolve in every selector mode" {
-    for pair in "postgres backupstrategy-controller" "gateway kubeovn-webhook"; do
+    for pair in "gateway kubeovn-webhook"; do
         set -- $pair
         suite=$1
         requirement=$2

@@ -11,7 +11,6 @@ on:
       - 'packages/system/cozystack-controller/definitions/**'
       - 'packages/system/application-definition-crd/definition/**'
       - 'packages/system/backup-controller/definitions/**'
-      - 'packages/system/backupstrategy-controller/definitions/**'
       - 'hack/update-codegen.sh'
       - 'hack/boilerplate.go.txt'
       - 'Makefile'

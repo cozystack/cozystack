@@ -293,111 +293,74 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
-@test "backup example harness edit selects its app suite" {
+@test "a velero change selects the suites whose application packages the chart" {
+    # system/velero is a component of cozystack.velero and of
+    # cozystack.kubernetes-application, which ships it as a tenant addon. No
+    # suite here runs a Velero backup, so cozystack.velero maps to no suite and
+    # the path is covered through its other owner alone.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo "examples/backups/postgres/run-all.sh" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "postgres" ]
-    rm -rf "$tmp"
-}
-
-@test "redis backup harness edit selects the valkey suite that also runs it" {
-    # valkey-backup-roundtrip drives examples/backups/redis with
-    # APP_KIND=Valkey, so a change to that harness must run both suites.
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    echo "examples/backups/redis/00-helpers.sh" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "redis valkey" ]
-    rm -rf "$tmp"
-}
-
-@test "a velero change selects the vminstance suite" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
+    grep -q 'path: system/velero' "$tmp/sources/kubernetes-application.yaml"
+    echo "packages/apps/kubernetes/values.yaml" > "$tmp/diff"
+    want=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "packages/system/velero/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     rm -rf "$tmp"
-    case " $output " in *" vminstance "*) ;; *) echo "a velero change selected '$output'" >&2; exit 1 ;; esac
+    case " $output " in *" kubernetes-latest "*) ;; *) echo "a velero change selected '$output'" >&2; exit 1 ;; esac
+    assert_selection "a velero change must select what its kubernetes-application owner does" \
+        "$output" "$want"
 }
 
-@test "vmi/vmdisk backup harness edit selects the vminstance suite" {
+@test "a source from another repository's artifact owns no path and extends no walk" {
+    # Its component paths are relative to that artifact, so one spelled like a
+    # directory of this tree must not hand local edits to it, and a dependsOn
+    # it declares must not carry selection anywhere. The fixture gives it both:
+    # a claim on apps/postgres and an edge from postgres-operator to a suite
+    # the operator does not otherwise reach.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
-    for f in examples/backups/vmi/run-all.sh examples/backups/vmdisk/run-all.sh; do
-        echo "$f" > "$tmp/diff"
+    cat > "$tmp/sources/qdrant.yaml" <<'YAML'
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.qdrant
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: some-other-artifact
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.postgres-operator
+      components:
+        - name: qdrant
+          path: apps/postgres
+        - name: elsewhere
+          path: system/elsewhere
+YAML
+    for path in packages/apps/postgres/values.yaml packages/system/postgres-operator/values.yaml; do
+        echo "$path" > "$tmp/diff"
+        want=$(hack/select-e2e.sh "$tmp/diff")
         output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-        [ "$output" = "vminstance" ]
+        assert_selection "a foreign source changed the selection for $path" "$output" "$want"
+        case " $output " in *" qdrant "*) echo "the foreign source's suite was selected for $path: $output" >&2; exit 1 ;; esac
     done
-    rm -rf "$tmp"
-}
-
-@test "vmi restore-to-copy step, which the suite skips, selects nothing" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    echo "examples/backups/vmi/07-restore-to-copy.sh" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
-    rm -rf "$tmp"
-    [ -z "$output" ]
-}
-
-@test "backup example without a matching suite selects nothing" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    echo "examples/backups/no-such-app/run.sh" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
-    [ -z "$output" ]
-    rm -rf "$tmp"
-}
-
-@test "a file directly under examples/backups escalates instead of selecting nothing" {
-    # A file beside the per-app directories rather than inside one belongs to
-    # no single walkthrough, so it is treated as shared by all of them. It
-    # matched neither backup rule and fell to examples/ in
-    # inert_config_pattern, so an edit to it selected nothing.
-    # README.md stays inert through the *.md rule, which runs first.
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    for diff in "examples/backups/common.sh" \
-        "examples/backups/common.sh examples/backups/postgres/run-all.sh"; do
-        printf '%s\n' $diff > "$tmp/diff"
-        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-        assert_selection "a loose backup file was not escalated for: $diff" \
-            "$output" "$(full_suite_list)"
-        if ! grep -q "select-e2e: 'examples/backups/common.sh' belongs to no single backup walkthrough" "$tmp/err"; then
-            echo "the escalation must name the file; stderr was:" >&2
-            cat "$tmp/err" >&2
-            exit 1
-        fi
+    # Premise: the same source with this tree's own artifact does both, so the
+    # equalities above are the filter's doing.
+    yq -i '.spec.sourceRef.name = "cozystack-packages"' "$tmp/sources/qdrant.yaml"
+    for path in packages/apps/postgres/values.yaml packages/system/postgres-operator/values.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        case " $output " in *" qdrant "*) ;; *) echo "premise broken: an own-artifact source did not select qdrant for $path: $output" >&2; exit 1 ;; esac
     done
-    echo examples/backups/README.md > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ -z "$output" ]
-    rm -rf "$tmp"
-}
-
-@test "a shared backup helper escalates instead of selecting nothing" {
-    # examples/backups/_lib/ is sourced by the backup walkthroughs, so it is
-    # shared material the way hack/e2e-chainsaw/_lib/ is. Read as an app named
-    # _lib it matched no suite and selected nothing, which both lanes take as
-    # "skip Chainsaw": a change to every walkthrough at once would test none.
-    # Also pinned beside an app path, where selecting only that app would pass
-    # a test that checked for a non-empty selection.
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    for diff in "examples/backups/_lib/wait-helpers.sh" \
-        "examples/backups/_lib/wait-helpers.sh examples/backups/postgres/run-all.sh"; do
-        printf '%s\n' $diff > "$tmp/diff"
-        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-        assert_selection "a shared backup helper was not escalated for: $diff" \
-            "$output" "$(full_suite_list)"
-        if ! grep -q "select-e2e: 'examples/backups/_lib/wait-helpers.sh' is shared by every backup walkthrough" "$tmp/err"; then
-            echo "the escalation must name the helper; stderr was:" >&2
-            cat "$tmp/err" >&2
-            exit 1
-        fi
-    done
+    # A path only the foreign source lists is a packages/ path nobody owns.
+    yq -i '.spec.sourceRef.name = "some-other-artifact"' "$tmp/sources/qdrant.yaml"
+    echo "packages/system/elsewhere/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    grep -q "lists 'system/elsewhere' as a component path" "$tmp/err"
     rm -rf "$tmp"
 }
 
@@ -738,8 +701,7 @@ assert_full_suite() {
     printf '%s\n' packages/tests/cozy-lib-tests/tests/quota_test.yaml \
         packages/tests/cozy-lib-tests/templates/tests/quota.yaml \
         packages/system/.gitattributes \
-        packages/system/backup-controller/definitions/.gitattributes \
-        packages/system/backupstrategy-controller/definitions/.gitattributes > "$tmp/diff"
+        packages/system/backup-controller/definitions/.gitattributes > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
     # The .gitattributes rule is an ENUMERATION and must stay one. The
@@ -839,23 +801,21 @@ assert_full_suite() {
     # because an empty list corrupts more than those. The escalations would
     # print it, and a blank selection is what both lanes read as "skip
     # Chainsaw" before posting the required status green — the outcome meaning
-    # "run everything" delivering a run of nothing. But the
-    # examples/backups/<app>/ rule escalates nothing and still consults the
-    # list as a membership test, so with the list empty a backup-harness edit
-    # that should run its suite reports nothing to run instead — and that one
-    # is indistinguishable from a legitimately empty selection.
+    # "run everything" delivering a run of nothing. The per-suite rule consults
+    # the list as a membership test before it escalates, so with the list empty
+    # an edit that should run its own suite ends in the same blank line.
     #
     # Run from a tree whose hack/e2e-chainsaw exists but holds no
     # chainsaw-test.yaml, so find succeeds and matches nothing — the state a
     # moved directory or a wrong working directory produces. All three diff
     # classes are exercised: one that escalates, one that selects by
-    # membership, and one that legitimately selects nothing. The middle two
+    # membership, and one that legitimately selects nothing. The last
     # exited 0 while the guard lived at the escalation branches.
     tmp=$(mktemp -d)
     script="$PWD/hack/select-e2e.sh"
     cp -r packages/core/platform/sources "$tmp/sources"
     mkdir -p "$tmp/tree/hack/e2e-chainsaw"
-    for d in go.mod examples/backups/postgres/run-all.sh docs/x.md; do
+    for d in go.mod hack/e2e-chainsaw/postgres/chainsaw-test.yaml docs/x.md; do
         echo "$d" > "$tmp/diff"
         rc=0
         output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>"$tmp/err") || rc=$?
@@ -1174,17 +1134,13 @@ assert_full_suite() {
     # cozystack.seaweedfs-application used to map to a seaweedfs suite that did
     # not exist, so every seaweedfs change ran the whole suite. The seaweedfs
     # suite, which runs an instance of its own, is not the only one it can
-    # break. bucket drives tenant-root's instance, the backup round-trips write
-    # to that instance through the in-cluster seaweedfs-s3 endpoint, most of
-    # them verifying its CA, which bucket skips; harbor gets its registry
+    # break. bucket drives tenant-root's instance; harbor gets its registry
     # storage from a BucketClaim served by the seaweedfs COSI driver, and no
     # graph edge links the two. The expected set is read off the suites' own
     # yaml rather than written here, so a new suite that names the endpoint or
     # a BucketClaim there and is left out of src_to_suites goes red. A suite reaching seaweedfs only through a
-    # sourced script is invisible to the scan; the round-trips pass S3_ENDPOINT
-    # in their yaml, which is what makes it hold today. Comment lines are
-    # skipped, which is what keeps etcd out: its round-trip is gated off in CI
-    # and names the endpoint only in prose.
+    # sourced script is invisible to the scan. Comment lines are
+    # skipped, so a suite that names the endpoint only in prose stays out.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     want=''

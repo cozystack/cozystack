@@ -118,7 +118,7 @@ resourcesPreset: "c1.small"
 ## @field {string} region - DEPRECATED S3 region.
 ## @field {BackupS3Credentials} credentials - DEPRECATED S3 credentials.
 
-## @typedef {struct} Backup - DEPRECATED Backup configuration. The in-chart backup wiring is superseded by the Cozystack backups framework: create a BackupClass + a strategy.backups.cozystack.io/FoundationDB strategy, then drive backups via BackupJob/RestoreJob (see examples/backups/foundationdb/). Existing tenants with backup.enabled=true continue to render the legacy FoundationDBBackup CR unchanged.
+## @typedef {struct} Backup - DEPRECATED Backup configuration. The in-chart backup wiring is superseded by the Cozystack backups framework: create a BackupClass + a strategy.backups.cozystack.io/FoundationDB strategy, then drive backups via BackupJob/RestoreJob (see https://github.com/cozystack/backup-strategies/tree/main/examples/backups/foundationdb). Existing tenants with backup.enabled=true continue to render the legacy FoundationDBBackup CR unchanged.
 ## @field {bool} enabled - DEPRECATED Enable in-chart backups (superseded by BackupClass + FoundationDB strategy).
 ## @field {BackupS3} s3 - DEPRECATED S3 configuration for backups.
 ## @field {string} retentionPolicy - DEPRECATED Retention policy for backups.

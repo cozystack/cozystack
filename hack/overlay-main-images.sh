@@ -88,11 +88,12 @@ skip=" packages/core/talos packages/core/installer $(echo "$BUILT_JSON" | tr -d 
 # key holding a repository path, or a `--…-image=` arg.
 #
 # The prefixed-key branch exists because a chart that renders several images
-# names the extra ones after what they are for — chBackupClientImage,
-# rabbitmqBackupClientImage, redisBackupClientImage. Those used to pass only
+# names the extra ones after what they are for — the backup strategy chart had
+# chBackupClientImage, rabbitmqBackupClientImage and redisBackupClientImage
+# while it lived in this tree. Those used to pass only
 # through the `@sha256:` branch, so one pinned by tag alone read as a config
-# change and cost its WHOLE file the overlay: that is how
-# backupstrategy-controller kept serving a release image two months older than
+# change and cost its WHOLE file the overlay: that is how that chart kept
+# serving a release image two months older than
 # the tree in every lane that did not rebuild it (#4257).
 #
 # Two things keep that branch narrow, and neither is the trailing `:`. The

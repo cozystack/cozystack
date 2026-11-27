@@ -21,17 +21,25 @@
 {{include "cozystack.platform.package.full.default" (list "cozystack.mongodb-operator" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.opensearch-operator" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.clickhouse-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "altinity" "cozystack.clickhouse-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.foundationdb-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "foundationdb" "cozystack.foundationdb-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.harbor-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.kafka-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "kafka" "cozystack.kafka-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.mariadb-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "mariadb" "cozystack.mariadb-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.mongodb-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "mongodb" "cozystack.mongodb-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.nats-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.openbao-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.opensearch-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.postgres-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "cnpg" "cozystack.postgres-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.qdrant-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.rabbitmq-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "rabbitmq" "cozystack.rabbitmq-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.redis-application" $) }}
+{{include "cozystack.platform.package.backupStrategy" (list "redis" "cozystack.redis-application" $ "true") }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.valkey-application" $) }}
 {{- end }}

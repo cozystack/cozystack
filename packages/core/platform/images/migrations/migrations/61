@@ -257,7 +257,8 @@ fi
 # holds a segment.bytes below the floor does not start. The same limits are in
 # packages/apps/kafka/templates/topics.yaml,
 # packages/core/platform/templates/_helpers.tpl and
-# packages/system/backupstrategy-controller/files/kafka-backup.sh.
+# the kafka-backup.sh of the Kafka backup strategy chart in
+# github.com/cozystack/backup-strategies.
 # Application values are read from the HelmReleases, the same source as the
 # platform chart's guard; KafkaTopics cover topics created outside the chart.
 SEGMENT_BYTES_MIN=1048576

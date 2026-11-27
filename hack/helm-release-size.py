@@ -86,8 +86,8 @@ def main(argv):
             "lock": None,
             "templates": templates,
             # Helm stores the parsed values and the user config; raw text with
-            # comments and no config errs high (about 6 KB on
-            # backupstrategy-controller), the safe side for a budget.
+            # comments and no config errs high (about 6 KB on the largest
+            # values.yaml this was measured on), the safe side for a budget.
             "values": read("values.yaml"),
             "schema": base64.b64encode(read("values.schema.json").encode()).decode() or None,
             "files": files,

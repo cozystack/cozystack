@@ -146,6 +146,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: renders the repository when every Kafka proves KRaft, including modern evidence without legacy state
     kubernetesProvider:
@@ -157,6 +158,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   # The kafka-operator release replaces these CRDs with v1-only ones, which the
   # API server refuses while v1beta2 is still stored.
@@ -210,6 +212,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: fails with migrations disabled and lists every Kafka without KRaft evidence
     set:
@@ -334,6 +337,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: fails closed on a Kafka CRD that serves neither known version
     kubernetesProvider:
@@ -431,6 +435,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: lists a Kafka without a metadata version, or NotReady without a KRaft state or annotation
     kubernetesProvider:
@@ -597,6 +602,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: ignores a removed topic config once only the Strimzi 1.2 v1 API is served
     kubernetesProvider:
@@ -608,6 +614,7 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true
 
   - it: skips a topic entry that is not a map instead of failing the render
     kubernetesProvider:
@@ -634,3 +641,4 @@ tests:
           kind: OCIRepository
           name: cozystack-packages
           namespace: cozy-system
+          any: true

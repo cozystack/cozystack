@@ -1,11 +1,9 @@
-suite: backupstrategy-controller waits for the tenant-root namespace and its CRDs
-# Regression guard for a fresh-install ordering race: backupstrategy-controller
-# creates the cozy-backups Bucket INTO the tenant-root namespace, which is
-# provisioned by cozystack-basics. Without the cozystack-basics edge the Bucket
-# patch races namespace creation and fails with `namespaces "tenant-root" not
-# found`, which then races the install script's wait deadline. The CRD edges
-# (backup-controller / bucket-application / objectstorage-controller / velero)
-# guard the `no matches for kind` race. All edges below must stay.
+suite: backup framework and strategy sources wait for what they render into
+# The base chart creates the cozy-backups Bucket in the tenant-root namespace,
+# which cozystack-basics provisions: without that edge the Bucket races
+# namespace creation on a fresh install and fails with `namespaces
+# "tenant-root" not found`. The other edges guard the `no matches for kind`
+# race for the objects each chart renders.
 templates:
   - templates/sources.yaml
 release:
@@ -29,6 +27,23 @@ tests:
       - contains:
           path: spec.variants[0].dependsOn
           content: cozystack.objectstorage-controller
+      - equal:
+          path: spec.sourceRef.name
+          value: cozystack-backup-strategies
+
+  # The BackupStorageLocation the Velero strategy renders is a Velero kind,
+  # and its BackupClass fragment a backup-controller kind.
+  - it: the Velero strategy dependsOn velero, the framework and the core controller
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backup-strategy-velero
+    asserts:
       - contains:
           path: spec.variants[0].dependsOn
           content: cozystack.velero
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.backupstrategy-controller
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.backup-controller

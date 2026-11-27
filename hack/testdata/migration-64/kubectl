@@ -1,0 +1,66 @@
+#!/bin/sh
+# A kubectl that answers platform migration 64 from files under $FAKE_STATE and
+# logs every mutating call to $FAKE_STATE/calls, so that a test can describe a
+# cluster as files and assert on what the migration changed.
+#
+#   release              present when the single Helm release exists
+#   deployment-args      args of the backupstrategy-controller Deployment
+#   crds                 CRD names, one per line
+#   owner/<object>       Helm release that owns <object> ('/' written as '__')
+#   objects/<resource>   object names of a strategy resource, one per line
+#   class-strategies     .spec.strategies of the cozy-default BackupClass
+#   fail-annotate        present to make every annotate fail
+set -eu
+
+args="$*"
+owner_of() { cat "${FAKE_STATE}/owner/$(echo "$1" | sed 's#/#__#g')" 2>/dev/null || true; }
+
+case "${args}" in
+  *"get secrets"*)
+    [ -f "${FAKE_STATE}/release" ] && echo secret/sh.helm.release.v1.backupstrategy-controller.v1
+    exit 0 ;;
+  *"get deployment backupstrategy-controller"*)
+    cat "${FAKE_STATE}/deployment-args" 2>/dev/null || true
+    exit 0 ;;
+  *"delete deployment backupstrategy-controller"*)
+    echo "delete deployment" >> "${FAKE_STATE}/calls"
+    exit 0 ;;
+  "get customresourcedefinitions --output=name")
+    sed 's#^#customresourcedefinition.apiextensions.k8s.io/#' "${FAKE_STATE}/crds"
+    exit 0 ;;
+  "get customresourcedefinition "*" --ignore-not-found --output=name")
+    grep -x "$3" "${FAKE_STATE}/crds" || true
+    exit 0 ;;
+  *"--output=jsonpath={.spec.strategies}")
+    cat "${FAKE_STATE}/class-strategies" 2>/dev/null || true
+    exit 0 ;;
+  *"release-name}")
+    # get [--namespace=NS] <kind> <name> | get <kind>/<name>, then flags.
+    shift
+    [ "${1#--namespace=}" = "$1" ] || shift
+    case "$1" in
+      */*) owner_of "$1" ;;
+      *) owner_of "$1/$2" ;;
+    esac
+    exit 0 ;;
+  "get "*" --output=name")
+    resource=$2
+    [ -f "${FAKE_STATE}/objects/${resource}" ] || exit 0
+    sed "s#^#${resource}/#" "${FAKE_STATE}/objects/${resource}"
+    exit 0 ;;
+  "annotate --overwrite "*)
+    [ ! -f "${FAKE_STATE}/fail-annotate" ] || { echo "annotate refused" >&2; exit 1; }
+    echo "${args}" >> "${FAKE_STATE}/calls"
+    exit 0 ;;
+  "apply --filename -")
+    cat > "${FAKE_STATE}/stamped"
+    echo "stamp" >> "${FAKE_STATE}/calls"
+    exit 0 ;;
+  "apply --filename=-")
+    cat > "${FAKE_STATE}/applied"
+    echo "apply" >> "${FAKE_STATE}/calls"
+    exit 0 ;;
+esac
+
+echo "fake kubectl: unexpected call: ${args}" >&2
+exit 64

@@ -12,8 +12,8 @@
 # second copy by a key that had no producer: it froze at v1.4.0-rc.2 while the
 # other advanced to v1.5.0, and v1.6.0, the first release cut through the
 # promote path, would have been the first to hit it. A chart that renders one
-# image under several keys (backupstrategy-controller's backup client) must
-# have them stamped together.
+# image under several keys (one backup client shared by several drivers, say)
+# must have them stamped together.
 #
 # Harness compatibility note: CI runs this file under Bats through
 # `make bats-unit-tests`. It also remains compatible with the narrower legacy
