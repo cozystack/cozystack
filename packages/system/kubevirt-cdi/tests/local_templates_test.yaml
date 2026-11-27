@@ -6,10 +6,11 @@ release:
 # gate alone. Emission is gated on expose-services and gateway-enabled, so
 # without a matching expose-services entry neither route renders and both
 # fail on "no manifest found" rather than on the assertion they are about.
-# root-host is not part of that gate and no assertion reads it: it is set
-# because the hostname is built from it, and without it the TLSRoute renders
-# "cdi-uploadproxy.%!s(<nil>)". tests/standalone_render_test.yaml covers the
-# opposite case, that the chart renders with nothing injected at all.
+# root-host is part of that gate as well: neither route renders without it,
+# because the hostname is built from it. It is also what the CDI object derives
+# its upload URL from, so a value asserted below has to differ from
+# https://cdi-uploadproxy.example.com to prove it was read. tests/standalone_render_test.yaml
+# covers the opposite case, that the chart renders with nothing injected at all.
 set:
   _cluster:
     root-host: example.com
@@ -59,9 +60,8 @@ tests:
           value:
             - HonorWaitForFirstConsumer
 
-  # The default is the empty string, so the block renders nothing and an
-  # assertion on the default value would pass against a template that had
-  # stopped rendering the block. Setting it is what makes this able to fail.
+  # This suite's _cluster makes the chart derive a URL of its own, so only an
+  # explicit value that differs from it shows the setting was actually read.
   - it: renders the upload-proxy URL override when one is set
     template: cdi-cr.yaml
     documentSelector:
@@ -69,11 +69,11 @@ tests:
       value: CDI
       matchMany: false
     set:
-      uploadProxyURL: https://cdi-uploadproxy.example.com
+      uploadProxyURL: https://uploads.custom.example.net
     asserts:
       - equal:
           path: spec.config.uploadProxyURLOverride
-          value: https://cdi-uploadproxy.example.com
+          value: https://uploads.custom.example.net
 
   # What lets a tenant service account clone from the golden-image namespace.
   # `any: true` on both: a bare containsDocument holds every document in the

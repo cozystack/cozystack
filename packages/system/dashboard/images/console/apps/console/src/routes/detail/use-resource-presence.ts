@@ -18,10 +18,14 @@ export interface ResourcePresence {
 export function useResourcePresence(
   ad: ApplicationDefinition | undefined,
   instance: ApplicationInstance | undefined,
+  options?: { enabled?: boolean },
 ): ResourcePresence {
   const ns = instance?.metadata.namespace ?? ""
   const label = ad && instance ? appInstanceLabel(ad, instance) : ""
-  const opts = { labelSelector: label, enabled: !!ns && !!label }
+  const opts = {
+    labelSelector: label,
+    enabled: options?.enabled !== false && !!ns && !!label,
+  }
 
   const deployments = useK8sList<K8sResource>(
     { apiGroup: "apps", apiVersion: "v1", plural: "deployments", namespace: ns },

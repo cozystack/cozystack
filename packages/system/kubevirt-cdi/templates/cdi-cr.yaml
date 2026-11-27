@@ -1,3 +1,21 @@
+{{- $cluster := .Values._cluster | default dict -}}
+{{- $rootHost := (index $cluster "root-host") | default "" -}}
+{{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") -}}
+{{- $proxyExposed := and $rootHost (has "cdi-uploadproxy" $exposeServices) -}}
+{{- /* An edge-terminated Gateway class renders no passthrough listener, so the
+       TLSRoute matches nothing and the derived host would answer nobody. The
+       publishing tenant's class terminates like the platform default (the
+       gateway chart refuses anything else). */ -}}
+{{- $edgeClasses := list -}}
+{{- range splitList "," ((index $cluster "gateway-edge-classes") | default "") -}}
+{{- if trim . -}}{{- $edgeClasses = append $edgeClasses (trim .) -}}{{- end -}}
+{{- end -}}
+{{- $gatewayClass := (index $cluster "gateway-class-name") | default "cilium" -}}
+{{- $edgeTerminated := and (eq ((index $cluster "gateway-enabled") | default "false") "true") (has $gatewayClass $edgeClasses) -}}
+{{- $uploadProxyURL := .Values.uploadProxyURL | default "" -}}
+{{- if and (not $uploadProxyURL) $proxyExposed (not $edgeTerminated) -}}
+{{- $uploadProxyURL = printf "https://cdi-uploadproxy.%s" $rootHost -}}
+{{- end -}}
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: CDI
 metadata:
@@ -7,7 +25,7 @@ spec:
   cloneStrategyOverride: {{ quote . }}
   {{- end }}
   config:
-    {{- with .Values.uploadProxyURL }}
+    {{- with $uploadProxyURL }}
     uploadProxyURLOverride: {{ quote . }}
     {{- end }}
     featureGates:
