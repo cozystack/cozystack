@@ -79,8 +79,8 @@ A regular release sequence runs as follows:
    1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.0` Go-module tag at the same commit.
    3. Ensures the `release-1.2` maintenance branch exists at the tag commit.
-   4. Publishes the release page (`draft` → `latest`).
-   5. Retags the rc's images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no rebuild.
+   4. Retags the rc's images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no rebuild.
+   5. Publishes the release page (`draft` → `latest`). It goes last, so the page never announces a version whose images and chart are not in the registry yet.
 6. The maintainer can now announce the release to the community.
 
 ```mermaid
@@ -170,8 +170,8 @@ gitGraph
 6. CI workflow triggers on merge (all irreversible side effects, post-e2e):
    1. Creates the tag `v1.2.1` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.1` Go-module tag at the same commit.
-   3. Publishes the release page (`draft` → `latest`; `latest` moves only if `v1.2.1` is the newest published stable).
-   4. Retags the rc's images by digest to `v1.2.1` and publishes the stable `cozy-installer` chart — no rebuild.
+   3. Retags the rc's images by digest to `v1.2.1` and publishes the stable `cozy-installer` chart — no rebuild.
+   4. Publishes the release page (`draft` → `latest`; `latest` moves only if `v1.2.1` is the newest published stable). It goes last, so the page never announces a version whose images and chart are not in the registry yet.
 7. The maintainer can now announce the release to the community.
 
 ## What CI does during the release process
@@ -181,7 +181,7 @@ The numbered process above is implemented by five workflows. Knowing which job d
 1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
 2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
 3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable), drafts the stable release, and opens the `release-X.Y.Z` promote PR. No registry mutation — transactional.
-4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
+4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, retags the rc images to stable by digest (`:latest` gated on newest-stable), publishes the stable chart, and last publishes the release.
 5. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
 
 ### Phase 1 — `prepare-release` (hard gate)
@@ -232,13 +232,14 @@ Reviewer checklist:
 
 ### Phase 5 — `pull-requests-release.yaml` (finalize)
 
-Fires on merge of a PR that is merged, carries the `release` label, and is authored by `cozystack-ci[bot]` (the last guard closes the "name a branch `release-X.Y.Z`, get it labelled, merge it" hole). Head branch must match `release-X.Y.Z[-suffix]`. This is where **every irreversible side effect of a promotion happens** — after the PR's e2e passed and the PR merged, making promotion transactional. Steps:
+Fires on merge of a PR that is merged, carries the `release` label, and is authored by `cozystack-ci[bot]` (the last guard closes the "name a branch `release-X.Y.Z`, get it labelled, merge it" hole). Head branch must match `release-X.Y.Z[-suffix]`. This is where **every irreversible side effect of a promotion happens** — after the PR's e2e passed and the PR merged, making promotion transactional. Finalize runs one release at a time: two release PRs merged close together finalize one after the other, so the second decides `latest` against a release the first has already published. Steps:
 
 1. **Create the tag at the merge commit** (write-once). The merge commit of `Prepare release vX.Y.Z` did not exist before the PR opened, so there is nothing to move — the tag is created here for the first time. A pre-existing tag at a different commit fails the step loudly rather than being force-moved (see [Tag immutability](#tag-immutability)).
 2. **Cut the `api/apps/v1alpha1/vX.Y.Z` Go-module tag** (write-once, stable only) at the same commit, so Go consumers of `api/apps/v1alpha1` get the release. Moved here from `tags.yaml`, whose `prepare-release` body is skipped for a promoted stable (the draft already exists).
 3. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Created if missing; updated fast-forward-only — a non-fast-forward update warns and is left for a maintainer rather than being force-updated.
-4. **Publish the draft release.** `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false` (and the current max is force-restored to `latest` if necessary, so an older patch tag cut after a newer minor won't downgrade `latest`).
-5. **Retag the rc images to stable** by digest (`hack/promote-retag.sh`, no rebuild) and **publish the stable `cozy-installer` chart**. `:latest` (on both the images and the chart) moves only when this release's `make_latest` was `true` — the same decision as step 4, so the release's `latest` and the images' `:latest` never disagree. The chart is packaged with `platformVersion` stamped into its default values so the documented `helm --install --version X.Y.Z` path reports the stable version.
+4. **Resolve the draft release** and decide whether it becomes `latest`, before anything is written to the registry, so a missing draft fails the job while no stable image name exists yet. `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false`.
+5. **Retag the rc images to stable** by digest (`hack/promote-retag.sh`, no rebuild) and **publish the stable `cozy-installer` chart**. `:latest` (on both the images and the chart) moves only when this release's `make_latest` was `true` — the decision step 4 made, so the release's `latest` and the images' `:latest` agree within a run. The chart is packaged with `platformVersion` stamped into its default values so the documented `helm --install --version X.Y.Z` path reports the stable version.
+6. **Publish the draft release**, with `docs/changelogs/vX.Y.Z.md` from the merge commit as its body. It runs last on purpose: the release page is what announces the version, so it goes public only once the images and chart it points at exist, and a failed retag leaves the draft in place for a re-run. For an older patch tag cut after a newer minor, the current max is force-restored to `latest` if necessary, so `latest` is not downgraded.
 
 ### Phase 6 — `update-releasenotes.yaml` (sync GitHub Release body)
 
@@ -524,14 +525,14 @@ For RCs and final releases, run this before merging the release PR. Each item is
 - [ ] **Apply-mutate-reapply** on the kubernetes umbrella HelmRelease (catches second-reconcile bugs).
 - [ ] **For every CRD-source bump** (kubevirt, cert-manager, flux, cilium, kamaji): `helm template | kubectl apply --dry-run=server` against the freshly-installed CRDs.
 - [ ] **For every flux / helm-controller / kubevirt-operator / cert-manager bump:** paste the upstream breaking-changes section of the bump's CHANGELOG into the PR body before merge.
-- [ ] **After cutting the tag,** watch `pull-requests-release.yaml::Finalize Release`. If it fails on `Draft release for v... not found`, undraft the release manually and file the workflow regression — this has been a known recurring failure since the `Publish draft release` step lost its explicit `github-token` in refactor `66a756b6`.
+- [ ] **After cutting the tag,** watch `pull-requests-release.yaml::Finalize Release`. If it fails on `Draft release for v... not found` while the release is still a draft, nothing has been written to the registry yet, so undrafting the release by hand would publish it without its stable images and chart. If the release is already published, this is a re-run after `Publish draft release` failed past the undraft: the images and the chart went out in the earlier attempt, so only check that `latest` sits on the newest stable (`gh release edit <tag> --latest`). Fix the cause and re-run the failed job; a re-run uses the same workflow file, so for a workflow regression run `hack/promote-retag.sh` and push the stable chart by hand first (the commands are the `Retag rc images to stable` and `Publish stable cozy-installer chart` steps), then undraft. If the step lost its `github-token` again, file the workflow regression: it lists releases with the CI app token, and while it ran without it, until `7d2fe2f7`, the lookup found no draft on any release.
 - [ ] **Changelog PR exists and was verified** per [Changelog pre-publish verification](#changelog-pre-publish-verification).
 
 ## CI failures release engineers commonly hit
 
 | Symptom | Class | Diagnosis | Block release? |
 |---------|-------|-----------|----------------|
-| `Draft release for vX.Y.Z not found` on every release-* merge | Workflow regression — `Publish draft release` lost its `github-token` in a past refactor; default `GITHUB_TOKEN` cannot list drafts | At `pull-requests-release.yaml:163`. Undraft manually, file the fix | No |
+| `Draft release for vX.Y.Z not found` in finalize | No draft the CI app token can see: the draft for the tag is missing, or the `Resolve draft release` step lost its `github-token` again (it lists releases with the CI app token; while it ran without it, until `7d2fe2f7`, the lookup found no draft on any release) | In the `Resolve draft release` step of `pull-requests-release.yaml`. A release that is already published means a re-run after `Publish draft release` failed past the undraft: the images and the chart went out in the earlier attempt, so only check that `latest` sits on the newest stable. Otherwise the job stops before the retag and the chart, so do not undraft first: fix the cause and re-run the job, or run those two steps by hand and then undraft. File the fix when the token is gone | No |
 | Changelog Copilot job returns 402 | Token quota — `COPILOT_GITHUB_TOKEN` premium-request quota empty | All tag CI runs that day fail the changelog phase | No — `continue-on-error: true`, generate changelog by hand following [`agents/changelog.md`](./agents/changelog.md) |
 | E2E `kubernetes-test` fails with `CSINode does not contain driver csi.kubevirt.io` | Test ordering bug | Tenant's `kubernetes-${test_name}-csi` HelmRelease still installing when NFS PVC is created. Fix: wait for `csinode/<node>` to advertise the driver before creating the PVC | Yes — flaky and masks real CSI bugs |
 | `tenant-root` HR in perpetual upgrade-rollback loop after OIDC patch | Real bug at the intersection of #2602's readiness change and the cozystack reconcile cadence | Look for `rate: Wait(n=1) would exceed context deadline` in operator logs; multiple tenant child HRs stuck `InProgress` | Yes |

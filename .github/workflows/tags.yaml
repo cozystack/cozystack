@@ -419,9 +419,9 @@ jobs:
       # `at_tag` — is it present in THIS checkout (the tag commit)? Under the
       # promote flow it normally is, because the promote PR carried it onto
       # release-1.6 and the stable tag sits on that merge commit. So this is the
-      # usual state on arrival: `exists` false, `at_tag` true, a reviewed and
-      # already-published changelog sitting right here — port it rather than
-      # regenerate.
+      # usual state on arrival: `exists` false, `at_tag` true, the reviewed
+      # changelog finalize publishes as the release body sitting right here — port
+      # it rather than regenerate.
       #
       # Only when both are false is there genuinely no changelog to publish, and
       # only then does the AI run.
@@ -443,8 +443,8 @@ jobs:
           # flow it normally is: promote-rc.yaml commits it onto release-X.Y.Z and
           # it reaches the tag via the merge commit. That PR targets the maintenance
           # line, so the file lands on release-1.6 and never reaches main —
-          # `exists` above is false even though a reviewed, already-PUBLISHED
-          # changelog exists right here.
+          # `exists` above is false even though the reviewed changelog finalize
+          # publishes as the body exists right here.
           #
           # Regenerating in that case would spend a second AI run and, once the
           # backstop PR merged, update-releasenotes.yaml would overwrite the
@@ -491,7 +491,7 @@ jobs:
           CHANGELOG_BRANCH="changelog-v${VERSION}"
 
           # Two ways the file can be here: ported verbatim from the tag commit
-          # (at_tag=true — the reviewed, already-published changelog reaching main
+          # (at_tag=true — the reviewed changelog finalize publishes, reaching main
           # for the first time), or freshly generated above. Either is valid.
           if [ ! -f "$CHANGELOG_FILE" ]; then
             echo "::error::Changelog file $CHANGELOG_FILE is absent — it was neither present at the tag nor produced by the Generate changelog using AI step"
