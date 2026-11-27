@@ -383,7 +383,7 @@ _make_world() {
   amd_steps=$(yq -r '.jobs.build-amd64.steps[].name' "$wf")
   echo "$amd_steps" | grep -qx 'Check if release already exists'
   echo "$amd_steps" | grep -qx 'Reject hand-pushed stable tags'
-  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.run // "" | test("build-matrix")) | .env.IMAGE_TAG' "$wf")" = '${{ github.ref_name }}-arm64' ]
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.run // "" | test("build-units")) | .env.IMAGE_TAG' "$wf")" = '${{ github.ref_name }}-arm64' ]
   [ "$(yq -r '.jobs.prepare-release.needs | sort | join(" ")' "$wf")" = 'build-amd64 build-arm64' ]
   cond=$(yq -r '.jobs.prepare-release.if' "$wf")
   echo "$cond" | grep -qF '!cancelled()'
