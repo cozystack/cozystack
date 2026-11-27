@@ -11,6 +11,37 @@
   {{- end }}
 {{- end }}
 
+{{- /*
+  The inner registry authenticates Harbor core and jobservice with htpasswd
+  basic auth. Left unset, the vendored chart falls back to the credential
+  published in its values.yaml, which anyone who can reach the registry
+  Service can use to bypass Harbor's authorisation. Each release gets its own
+  random password instead.
+
+  The htpasswd line is stored next to the password rather than computed on
+  every render: bcrypt salts each call, and a hash that changed on every
+  reconcile would change the registry Secret checksum and restart the registry
+  each time. Both keys are regenerated together when either is missing, so the
+  pair always matches. The Secret is kept out of the tenant allowlist on
+  purpose: nothing but core and jobservice needs this credential.
+*/}}
+{{- $registrySecretName := printf "%s-registry-credentials" .Release.Name }}
+{{- $registryUser := "harbor_registry_user" }}
+{{- $registryPassword := "" }}
+{{- $registryHtpasswd := "" }}
+{{- $existingRegistrySecret := lookup "v1" "Secret" .Release.Namespace $registrySecretName }}
+{{- if $existingRegistrySecret }}
+  {{- $registryData := $existingRegistrySecret.data | default dict }}
+  {{- if and (hasKey $registryData "password") (hasKey $registryData "htpasswd") }}
+    {{- $registryPassword = index $registryData "password" | b64dec }}
+    {{- $registryHtpasswd = index $registryData "htpasswd" | b64dec }}
+  {{- end }}
+{{- end }}
+{{- if not (and $registryPassword $registryHtpasswd) }}
+  {{- $registryPassword = randAlphaNum 32 }}
+  {{- $registryHtpasswd = htpasswd $registryUser $registryPassword }}
+{{- end }}
+
 {{- $existingCoreSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-core" .Release.Name) }}
 {{- $tokenKey := "" }}
 {{- $tokenCert := "" }}
@@ -76,6 +107,16 @@ stringData:
 
 ---
 
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $registrySecretName }}
+stringData:
+  password: {{ $registryPassword | quote }}
+  htpasswd: {{ $registryHtpasswd | quote }}
+
+---
+
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -134,6 +175,14 @@ spec:
     name: {{ .Release.Name }}-credentials
     valuesKey: redis-password
     targetPath: harbor.redis.external.password
+  - kind: Secret
+    name: {{ $registrySecretName }}
+    valuesKey: password
+    targetPath: harbor.registry.credentials.password
+  - kind: Secret
+    name: {{ $registrySecretName }}
+    valuesKey: htpasswd
+    targetPath: harbor.registry.credentials.htpasswdString
   # BucketInfo is the JSON blob populated by the COSI BucketAccess controller.
   # Merge it at the values root (no targetPath) so Flux unmarshals it as YAML
   # instead of running it through Helm's strvals parser, which would split the
@@ -202,6 +251,8 @@ spec:
         {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
       registry:
+        credentials:
+          username: {{ $registryUser | quote }}
         registry:
           resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
         controller:
