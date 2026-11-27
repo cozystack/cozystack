@@ -74,9 +74,10 @@ tests:
           path: metadata.annotations["secret.reloader.stakater.com/reload"]
           value: linstor-client-tls
 
-  # While a LinstorCluster still runs its own controller under blockstor,
-  # that controller is the API linstor-csi uses, so the scheduler stays on it.
-  - it: keeps the values while the LinstorCluster runs an in-cluster controller
+  # On a backend switch this release can upgrade before the linstor release
+  # has written externalController. Falling back to the values would leave
+  # the scheduler on linstor-controller for good; failing has Flux retry it.
+  - it: refuses blockstor while the LinstorCluster has no external controller yet
     set:
       linstor-scheduler.linstor.backend: blockstor
     kubernetesProvider:
@@ -87,14 +88,8 @@ tests:
           metadata: {name: linstorcluster}
           spec: {}
     asserts:
-      - contains:
-          path: spec.template.spec.containers[1].env
-          content:
-            name: LS_CONTROLLERS
-            value: https://linstor-controller.cozy-linstor.svc:3371
-      - equal:
-          path: metadata.annotations["secret.reloader.stakater.com/reload"]
-          value: linstor-client-tls
+      - failedTemplate:
+          errorPattern: "backend is blockstor, but the LinstorCluster has no spec.externalController.url yet"
 
   - it: refuses blockstor when no LinstorCluster tells it where the API is
     set:

@@ -83,9 +83,10 @@ tests:
               secretName: linstor-client-tls
               defaultMode: 0444
 
-  # While a LinstorCluster still runs its own controller under blockstor,
-  # that controller is the API linstor-csi uses, so this chart stays on it.
-  - it: keeps the values while the LinstorCluster runs an in-cluster controller
+  # On a backend switch this release can upgrade before the linstor release
+  # has written externalController. Falling back to the values would leave
+  # the GUI on linstor-controller for good; failing has Flux retry it.
+  - it: refuses blockstor while the LinstorCluster has no external controller yet
     set:
       linstor.backend: blockstor
     kubernetesProvider:
@@ -95,11 +96,10 @@ tests:
           apiVersion: piraeus.io/v1
           metadata: {name: linstorcluster}
           spec: {}
-    template: templates/configmap-nginx.yaml
+    template: templates/deployment.yaml
     asserts:
-      - matchRegex:
-          path: data["nginx.conf"]
-          pattern: "proxy_pass https://linstor-controller.cozy-linstor.svc:3371;"
+      - failedTemplate:
+          errorPattern: "linstor.backend is blockstor, but the LinstorCluster has no spec.externalController.url yet"
 
   - it: refuses blockstor when no LinstorCluster tells it where the API is
     set:
