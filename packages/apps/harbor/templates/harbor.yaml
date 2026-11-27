@@ -167,6 +167,28 @@ spec:
       retryInterval: 30s
     remediation:
       retries: -1
+  {{- /* jobservice mounts a ReadWriteOnce job-log volume, and the upstream
+         chart rolls it with a surge: a replacement scheduled on another node
+         waits on the attach for good and the upgrade fails as stalled. With
+         no surge the old pod goes first and releases the volume. The chart's
+         own switch, updateStrategy=Recreate, also covers the registry, which
+         keeps its data in S3 and should keep rolling without an outage. */}}
+  postRenderers:
+  - kustomize:
+      patches:
+      - target:
+          group: apps
+          version: v1
+          kind: Deployment
+          name: {{ .Release.Name }}-jobservice
+        patch: |
+          - op: replace
+            path: /spec/strategy
+            value:
+              type: RollingUpdate
+              rollingUpdate:
+                maxSurge: 0
+                maxUnavailable: 1
   valuesFrom:
   - kind: Secret
     name: cozystack-values
