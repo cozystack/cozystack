@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0@sha256:e996a072eee1c74d71421ad82a8f898b38e9fe73fbe3a1308e3170399d863bc4
+ghcr.io/cozystack/cozystack/cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0@sha256:90aad1fc7cf658489fe1476ef8d5d674ab291e8c91fb882ff05ca9c2be7cdae9
