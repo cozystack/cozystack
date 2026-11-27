@@ -44,6 +44,15 @@ build: build-deps
 	make -C packages/core/installer image
 	make manifests
 
+# The same images as `build`, with the units in hack/build-matrix.sh built
+# BUILD_JOBS at a time. The installer goes last because it packs the tree every
+# other unit stamps.
+build-parallel: build-deps
+	hack/build-units.sh
+	make -C packages/core/talos image
+	make -C packages/core/installer image
+	make manifests
+
 manifests:
 	mkdir -p _out/assets
 	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml

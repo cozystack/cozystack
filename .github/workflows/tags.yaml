@@ -20,8 +20,8 @@ jobs:
   prepare-release:
     name: Prepare Release
     # Ephemeral pool, not the dedicated self-hosted runner (#2937 decommission).
-    # Serial `make build` + `make assets` is CPU-bound, so use the large shape —
-    # same as the main cache warmer (build-main.yaml).
+    # `make build-parallel` runs several image builds at once, so use the large
+    # shape, as the main cache warmer (build-main.yaml) does.
     runs-on: oracle-vm-24cpu-96gb-x86-64
     timeout-minutes: 120
     outputs:
@@ -174,13 +174,16 @@ jobs:
       # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.release_exists == 'false'
-        run: make build
+        run: make build-parallel
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           # Cache manifests are registry-portable (oci-mediatypes=true) — read
           # them from OCIR while pushing images to GHCR. A missing :buildcache
           # ref 404s harmlessly into a cold build.
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # The line's own cache, which build-release.yaml writes on every push
+          # to the line, and main's.
+          CACHE_FROM_TAGS: buildcache-release-${{ steps.tag.outputs.line }} buildcache
           # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
           # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
           # job only ever runs for a prerelease (a stable tag is rejected or
