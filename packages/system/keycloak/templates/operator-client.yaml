@@ -1,0 +1,206 @@
+{{- $realmName := index .Values._cluster "oidc-realm-name" | default "cozy" | toString }}
+{{- $secretName := printf "%s-operator-client" .Release.Name }}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName | default dict }}
+{{- $existingPassword := dig "data" "password" "" $existingSecret }}
+{{- $clientSecret := randAlphaNum 32 }}
+{{- if $existingPassword }}
+  {{- $clientSecret = b64dec $existingPassword }}
+{{- end }}
+{{/*
+  The keycloak-operator reads these keys for adminType serviceAccount:
+  `username` is the client ID and `password` is the client secret.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+stringData:
+  username: cozystack-operator
+  password: {{ $clientSecret }}
+
+---
+{{/*
+  Create the confidential client in realm master that the keycloak-operator
+  and the keycloak-configure Jobs sign in with, so none of them depends on the
+  bootstrap admin, which Keycloak treats as temporary. The Job belongs to this
+  chart because what the admin API asks of a client changes with the server:
+  Keycloak 26.8 accepts only tokens that carry the kc-admin-api scope.
+
+  The bootstrap admin is used only while the admin API refuses the client: on
+  the first install, on the upgrade that brings the client or a server that
+  asks more of it, and after the Secret above was replaced. Otherwise the Job
+  stops there, so disabling or deleting the bootstrap admin breaks nothing.
+
+  The service account gets the master realm role create-realm and, when the
+  realm already exists, every role of the <realm>-realm client in master but
+  impersonation. That is what Keycloak grants the user who creates a realm, so
+  a cluster where the client created the realm ends up with the same grants as
+  one that upgraded.
+  Full scope is off, as Keycloak 26.8 asks, and the client's scope is the
+  master role admin, a composite that Keycloak extends with every new realm.
+  The grants decide what the client holds; the scope only caps its tokens.
+  The client is enabled last, so a Job that dies halfway is finished by its
+  next attempt.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-operator-client
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kcadm
+          image: {{ .Values.image | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: HOME
+              value: /tmp
+            - name: KC_URL
+              value: http://keycloak-http:8080
+            - name: CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: username
+            - name: CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+            # Optional, so the Job still runs on the client alone once the
+            # bootstrap credentials are gone.
+            - name: ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: username
+                  optional: true
+            - name: ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: password
+                  optional: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -eu
+              KCADM=/opt/keycloak/bin/kcadm.sh
+              CFG=/tmp/kcadm.config
+              REALM={{ $realmName | squote }}
+              SERVICE_ACCOUNT="service-account-$CLIENT_ID"
+
+              # Signing in proves only the secret. The client works once the
+              # admin API accepts its token. serverinfo needs no more than
+              # create-realm, while the realm list answers 403 until the
+              # client can see a realm.
+              client_works() {
+                "$KCADM" config credentials --config "$CFG" --server "$KC_URL" \
+                  --realm master --client "$CLIENT_ID" --secret "$CLIENT_SECRET" >/dev/null 2>&1 \
+                  && "$KCADM" get serverinfo --config "$CFG" >/dev/null 2>&1
+              }
+
+              sign_in_admin() {
+                [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_PASS:-}" ] \
+                  && "$KCADM" config credentials --config "$CFG" --server "$KC_URL" \
+                    --realm master --user "$ADMIN_USER" --password "$ADMIN_PASS" >/dev/null 2>&1
+              }
+
+              client_uuid() {
+                "$KCADM" get clients --config "$CFG" -r master -q clientId="$1" \
+                  --fields id --format csv --noquotes
+              }
+
+              i=0
+              until client_works || sign_in_admin; do
+                i=$((i + 1))
+                if [ "$i" -ge 30 ]; then
+                  echo "the admin API at $KC_URL accepts neither client '$CLIENT_ID' nor the bootstrap admin" >&2
+                  exit 1
+                fi
+                echo "waiting for keycloak ... ($i)"
+                sleep 10
+              done
+
+              if client_works; then
+                echo "client '$CLIENT_ID' works, nothing to do"
+                exit 0
+              fi
+              sign_in_admin
+
+              id=$(client_uuid "$CLIENT_ID")
+              if [ -z "$id" ]; then
+                printf '{"clientId":"%s","enabled":false,"publicClient":false,"serviceAccountsEnabled":true,"standardFlowEnabled":false,"implicitFlowEnabled":false,"directAccessGrantsEnabled":false,"fullScopeAllowed":false}' "$CLIENT_ID" \
+                  | "$KCADM" create clients --config "$CFG" -r master -f -
+                id=$(client_uuid "$CLIENT_ID")
+              fi
+
+              "$KCADM" add-roles --config "$CFG" -r master --uusername "$SERVICE_ACCOUNT" --rolename create-realm
+              if [ -n "$(client_uuid "$REALM-realm")" ]; then
+                set --
+                for role in $("$KCADM" get-roles --config "$CFG" -r master --cclientid "$REALM-realm" \
+                    --fields name --format csv --noquotes); do
+                  if [ "$role" != impersonation ]; then
+                    set -- "$@" --rolename "$role"
+                  fi
+                done
+                "$KCADM" add-roles --config "$CFG" -r master --uusername "$SERVICE_ACCOUNT" \
+                  --cclientid "$REALM-realm" "$@"
+              fi
+
+              admin_role=$("$KCADM" get roles/admin --config "$CFG" -r master --fields id --format csv --noquotes)
+              printf '[{"id":"%s","name":"admin"}]' "$admin_role" \
+                | "$KCADM" create "clients/$id/scope-mappings/realm" --config "$CFG" -r master -f -
+
+              # Servers before Keycloak 26.8 have no kc-admin-api scope and
+              # need none.
+              scope=$("$KCADM" get client-scopes --config "$CFG" -r master --fields id,name --format csv --noquotes \
+                | while IFS=, read -r scope_id scope_name; do
+                    if [ "$scope_name" = kc-admin-api ]; then echo "$scope_id"; fi
+                  done)
+              if [ -n "$scope" ]; then
+                "$KCADM" update "clients/$id/default-client-scopes/$scope" --config "$CFG" -r master
+              fi
+
+              printf '{"enabled":true,"publicClient":false,"serviceAccountsEnabled":true,"fullScopeAllowed":false,"secret":"%s"}' "$CLIENT_SECRET" \
+                | "$KCADM" update "clients/$id" --config "$CFG" -r master --merge -f -
+
+              if ! client_works; then
+                echo "client '$CLIENT_ID' is set up but the admin API refuses it" >&2
+                exit 1
+              fi
+              echo "client '$CLIENT_ID' set up in realm master"
+      volumes:
+        - name: tmp
+          emptyDir: {}

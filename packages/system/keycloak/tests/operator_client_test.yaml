@@ -1,0 +1,226 @@
+suite: operator client Secret and the hook Job that creates the client
+templates:
+  - templates/operator-client.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# The keycloak-operator and the keycloak-configure Jobs sign in to realm master
+# as the confidential client cozystack-operator. keycloak-configure names the
+# Secret keycloak-operator-client, so its name is part of the contract. The
+# client secret is minted once and then kept: a new value on every render would
+# no longer match the client in Keycloak, and once the bootstrap admin is
+# disabled nothing could set it again.
+
+tests:
+  - it: mints a client secret when the existing Secret has none
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-operator-client
+            namespace: cozy-keycloak
+          data:
+            username: Y296eXN0YWNrLW9wZXJhdG9y # cozystack-operator
+    asserts:
+      - matchRegex:
+          path: stringData.password
+          pattern: "^[A-Za-z0-9]+$"
+
+  - it: mints the client credentials under the name keycloak-configure reads
+    documentSelector:
+      path: kind
+      value: Secret
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-operator-client
+      # The operator reads these two keys in adminType serviceAccount as the
+      # client ID and the client secret.
+      - equal:
+          path: stringData.username
+          value: cozystack-operator
+      - matchRegex:
+          path: stringData.password
+          pattern: "^[A-Za-z0-9]+$"
+
+  - it: keeps the client secret of an existing Secret
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-operator-client
+            namespace: cozy-keycloak
+          data:
+            username: Y296eXN0YWNrLW9wZXJhdG9y # cozystack-operator
+            password: cHJlc2VydmVkLXNlY3JldA== # preserved-secret
+    asserts:
+      - equal:
+          path: stringData.password
+          value: preserved-secret
+
+  # Post hooks run after the upgraded server is ready, so the Job checks the
+  # client against the server version it will be used with.
+  - it: runs after every install and upgrade of the server
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: reads the client from its Secret and the bootstrap admin only optionally
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-operator-client
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-operator-client
+                key: password
+      # Required references would keep the Job from starting once the
+      # bootstrap credentials are gone, even though the client still works.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_USER
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-credentials
+                key: username
+                optional: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ADMIN_PASS
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-credentials
+                key: password
+                optional: true
+
+  - it: runs kcadm from the server image and needs no Kubernetes API token
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      image: registry.example.com/keycloak:test
+      imagePullSecrets:
+        - name: pull-secret
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/keycloak:test
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value:
+            - name: pull-secret
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  # A token that signs in can still be refused by the admin API, as Keycloak
+  # 26.8 does without the kc-admin-api scope. Only a working admin call skips
+  # the repair.
+  - it: tries the client before the bootstrap admin and counts an admin call as success
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "until client_works \\|\\| sign_in_admin; do"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--client "\$CLIENT_ID" --secret "\$CLIENT_SECRET" >/dev/null 2>&1 \\\s+&& "\$KCADM" get serverinfo'
+
+  - it: keeps full scope off and caps the scope at the master role admin
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '"fullScopeAllowed":false\}'' "\$CLIENT_ID"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '"fullScopeAllowed":false,"secret"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'clients/\$id/scope-mappings/realm'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'scope_name" = kc-admin-api'
+
+  # Keycloak grants the user who creates a realm every role of <realm>-realm
+  # but impersonation. Granting the same on an upgraded cluster keeps it equal
+  # to one where the client created the realm.
+  - it: grants the realm roles of a realm creator, without impersonation
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--rolename create-realm'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$role" != impersonation \]; then\s+set -- "\$@" --rolename "\$role"'
+
+  - it: defaults the realm whose roles the client gets to cozy
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "REALM='cozy'(\\s|$)"
+
+  - it: threads a single-quoted custom realm name into the Job
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        oidc-realm-name: acme
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "REALM='acme'(\\s|$)"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "REALM='cozy'"

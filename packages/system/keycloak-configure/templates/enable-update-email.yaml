@@ -55,15 +55,15 @@ spec:
               value: /tmp
             - name: KC_URL
               value: "http://keycloak-http.cozy-keycloak.svc:8080"
-            - name: KC_USER
+            - name: KC_CLIENT
               valueFrom:
                 secretKeyRef:
-                  name: keycloak-credentials
+                  name: keycloak-operator-client
                   key: username
-            - name: KC_PASS
+            - name: KC_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: keycloak-credentials
+                  name: keycloak-operator-client
                   key: password
           volumeMounts:
             - name: tmp
@@ -81,7 +81,7 @@ spec:
               # keycloak-operator, so wait for it before configuring it.
               i=0
               until "$KCADM" config credentials --config "$CFG" --server "$KC_URL" \
-                      --realm master --user "$KC_USER" --password "$KC_PASS" >/dev/null 2>&1 \
+                      --realm master --client "$KC_CLIENT" --secret "$KC_SECRET" >/dev/null 2>&1 \
                     && "$KCADM" get authentication/required-actions --config "$CFG" -r "$REALM" >/dev/null 2>&1; do
                 i=$((i + 1))
                 if [ "$i" -ge 30 ]; then
