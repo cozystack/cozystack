@@ -14,28 +14,18 @@ tests:
     asserts:
       - matchRegexRaw:
           pattern: 'provisioned as a restore'
+      # The passwords of a restored application come from its account Secrets,
+      # applied by CloudNativePG once the primary is up, and a seeded account
+      # has none issued until a mint. The note must say that, and must not
+      # describe a chart-rendered Secret or a pending-credentials flag, which
+      # the conversion removed.
       - matchRegexRaw:
-          pattern: 'pg-test-credentials Secret now holds freshly generated passwords'
-      - matchRegexRaw:
-          pattern: 'postgres\.cozystack\.io/credentials-pending'
-      # The flag is gated on bootstrap.enabled (init-script.yaml), which the
-      # restore driver clears at the START of convergence, so it is absent for
-      # the window before the init-job finishes. NOTES must not claim the flag
-      # persists "until this converges" and must point at an application login as
-      # the real check. Restoring that overclaim turns this red.
+          pattern: 'mint'
       - notMatchRegexRaw:
-          pattern: 'until this converges'
-      - matchRegexRaw:
-          pattern: 'That flag tracks only'
-      - matchRegexRaw:
-          pattern: 'Do not read a missing flag as "converged"'
-      - matchRegexRaw:
-          pattern: 'Confirm convergence by logging in as an'
+          pattern: 'credentials-pending'
+      - notMatchRegexRaw:
+          pattern: 'pg-test-credentials'
 
-  # The credentials Secret is gated on .Values.users in init-script.yaml, so a
-  # users-less restore never renders it. NOTES must not then describe that Secret
-  # and its pending-credentials annotation, or an operator chases a nonexistent
-  # object. Reverting the gate to bootstrap-only turns this red.
   - it: stays quiet during a restore when there are no users
     set:
       bootstrap:
@@ -44,8 +34,6 @@ tests:
     asserts:
       - notMatchRegexRaw:
           pattern: 'provisioned as a restore'
-      - notMatchRegexRaw:
-          pattern: 'credentials-pending'
 
   - it: stays quiet for a normal install
     set:

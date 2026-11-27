@@ -36,14 +36,14 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
-// Postgres and MariaDB dropped users[].password from the chart render but the
-// key is still accepted and stored, and a leftover value stays the live
-// credential. The warning telling an operator that editing it has no effect is
-// only useful if wired into the write path; deleting either call site
-// (rest.go Create / Update) must fail loudly. These tests drive Create and
-// Update end to end and assert the warning surfaces; TestWarnRemovedUserPasswords
-// below pins the helper in isolation (which kinds warn, and that a missing
-// password stays quiet).
+// The kinds removedUserPasswordKinds lists dropped users[].password from the
+// chart render but the key is still accepted and stored, and a leftover value
+// can stay the live credential. The warning telling an operator that editing
+// it has no effect is only useful if wired into the write path; deleting either
+// call site (rest.go Create / Update) must fail loudly. These tests drive
+// Create and Update end to end and assert the warning surfaces;
+// TestWarnRemovedUserPasswords below pins the helper in isolation (which kinds
+// warn, and that a missing password stays quiet).
 
 func newPostgresWarnREST(t *testing.T, objects ...client.Object) *REST {
 	t.Helper()
@@ -186,6 +186,31 @@ func TestWarnRemovedUserPasswords(t *testing.T) {
 			got := len(rec.warnings) > 0
 			if got != tc.wantWarn {
 				t.Fatalf("kind %s: warned=%v, want %v (warnings: %v)", tc.kind, got, tc.wantWarn, rec.warnings)
+			}
+		})
+	}
+}
+
+// A kind whose passwords the credentials API issues points the warning at a
+// mint on the user's Credential: its <release>-credentials Secret holds no user
+// password a tenant can read, so naming it sends the reader to a dead end.
+func TestWarnRemovedUserPasswords_PointsAtMint(t *testing.T) {
+	for _, kind := range []string{postgresKind} {
+		t.Run(kind, func(t *testing.T) {
+			r := &REST{kindName: kind}
+			app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(`{"users":{"app":{"password":"hackme"}}}`)}}
+			rec := &fakeWarningRecorder{}
+			ctx := warning.WithWarningRecorder(context.Background(), rec)
+			r.warnRemovedUserPasswords(ctx, app)
+			if len(rec.warnings) != 1 {
+				t.Fatalf("want one warning, got %v", rec.warnings)
+			}
+			w := rec.warnings[0]
+			if !strings.Contains(w, `spec.users["app"].password is ignored`) || !strings.Contains(w, "credentials.core.cozystack.io, mint subresource") {
+				t.Errorf("warning does not point at a mint on the Credential: %q", w)
+			}
+			if strings.Contains(w, "<release>-credentials") {
+				t.Errorf("warning still names <release>-credentials: %q", w)
 			}
 		})
 	}

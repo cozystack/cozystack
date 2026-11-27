@@ -2357,18 +2357,22 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 	}
 }
 
-// removedUserPasswordKinds are the Application kinds whose per-user `password`
-// field was removed from the chart render -- passwords are chart-generated into
-// the <release>-credentials Secret. Like the Kubernetes fields above the key is
-// still accepted and stored (the user object's schema keeps additionalProperties
-// open, and the render preserves an existing password through lookup), so a value
-// left from before the upgrade stays the LIVE credential and there is no longer a
-// values knob to change it. Warn so an operator editing it is told it has no
-// effect instead of getting a silent 200.
-var removedUserPasswordKinds = map[string]bool{
-	postgresKind: true,
-	mariadbKind:  true,
+// removedUserPasswordKinds maps each Application kind whose per-user `password`
+// field was removed from the chart render to the warning that field draws. Like
+// the Kubernetes fields above the key is still accepted and stored (the user
+// object's schema keeps additionalProperties open), and a value left from before
+// the upgrade can still be the LIVE credential, with no values knob left to
+// change it. Warn so an operator editing it is told it has no effect instead of
+// getting a silent 200, and where the password comes from now.
+var removedUserPasswordKinds = map[string]string{
+	postgresKind: mintedPasswordWarning,
+	mariadbKind:  "spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.",
 }
+
+// mintedPasswordWarning is the warning of a kind whose user passwords the
+// credentials API issues: the tenant cannot read <release>-credentials, so the
+// warning names the operation that sets a password instead.
+const mintedPasswordWarning = "spec.users[%q].password is ignored: passwords are issued through the credentials API and cannot be set from values. Mint a new password on the user's Credential (credentials.core.cozystack.io, mint subresource); editing this field has no effect."
 
 const (
 	postgresKind = "Postgres"
@@ -2376,9 +2380,11 @@ const (
 )
 
 // warnRemovedUserPasswords emits a client-facing admission warning for every
-// spec.users[<name>].password still present on a Postgres or MariaDB resource.
+// spec.users[<name>].password still present on a kind removedUserPasswordKinds
+// lists.
 func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
-	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+	message, removed := removedUserPasswordKinds[r.kindName]
+	if !removed || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}
 	// Decode the users map leniently, then each user on its own, so one malformed
@@ -2411,8 +2417,7 @@ func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.A
 			continue
 		}
 		if _, present := u["password"]; present {
-			warning.AddWarning(ctx, "", fmt.Sprintf(
-				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
+			warning.AddWarning(ctx, "", fmt.Sprintf(message, user))
 		}
 	}
 	// MariaDB force-generates root's password (root is chart-managed), silently
