@@ -462,20 +462,32 @@ jobs:
         run: |
           set -eu
           STABLE_VERSION="${TAG#v}"
-          # Bake the correct platform version into the chart's DEFAULT values so
-          # the primary `helm --install --version X.Y.Z` path reports the stable
-          # version in telemetry — the operator image itself still carries the rc
-          # version baked at build time, and this env override is what corrects
-          # it. Done on the working tree only (never committed): committing it
-          # would leak platformVersion=vX.Y.Z onto main/the release line when the
-          # promote PR merges, mis-stamping the next rc built from that branch.
-          export STABLE_VERSION
-          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
-            packages/core/installer/values.yaml
-          PKG="$(helm package packages/core/installer \
-            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
-          helm push "$PKG" "oci://${REGISTRY}"
-          rm -f "$PKG"
+          # helm package does not give the same bytes twice, so pushing again on
+          # a re-run of this job would move cozy-installer:X.Y.Z to another
+          # digest. The first push stays, and only a registry that says the tag
+          # is missing gets one: any other lookup error stops the step. Absence
+          # is read as manifest_digest in hack/promote-retag.sh reads it.
+          if lookup="$(skopeo inspect --raw "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" 2>&1)"; then
+            echo "cozy-installer:${STABLE_VERSION} is already in the registry, keeping it."
+          elif ! printf '%s\n' "$lookup" | grep -qiE 'manifest unknown|manifest not known|manifest for [^ ]* not found|not found|404'; then
+            echo "::error::cannot tell whether cozy-installer:${STABLE_VERSION} is in the registry: $lookup"
+            exit 1
+          else
+            # Bake the correct platform version into the chart's DEFAULT values so
+            # the primary `helm --install --version X.Y.Z` path reports the stable
+            # version in telemetry — the operator image itself still carries the rc
+            # version baked at build time, and this env override is what corrects
+            # it. Done on the working tree only (never committed): committing it
+            # would leak platformVersion=vX.Y.Z onto main/the release line when the
+            # promote PR merges, mis-stamping the next rc built from that branch.
+            export STABLE_VERSION
+            yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
+              packages/core/installer/values.yaml
+            PKG="$(helm package packages/core/installer \
+              --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
+            helm push "$PKG" "oci://${REGISTRY}"
+            rm -f "$PKG"
+          fi
           # cozy-installer:latest tracks the newest stable, matching the image
           # :latest and the release's `latest` flag — never moved by a patch on
           # an older line.
