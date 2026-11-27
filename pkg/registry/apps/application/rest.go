@@ -32,6 +32,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	corev1 "k8s.io/api/core/v1"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,6 +57,7 @@ import (
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
@@ -102,6 +104,16 @@ type REST struct {
 	specSchema    *structuralschema.Structural
 	nameSchema    *validation.NameSchema
 	nameSchemaErr error
+	// imageOverrides reads the platform's image override table. Nil applies
+	// none; the API server sets it through WithImageOverrides.
+	imageOverrides func(context.Context) ([]kustomize.Image, bool, error)
+}
+
+// WithImageOverrides makes every release this storage writes carry the image
+// override table that load returns, and returns r.
+func (r *REST) WithImageOverrides(load func(context.Context) ([]kustomize.Image, bool, error)) *REST {
+	r.imageOverrides = load
+	return r
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
@@ -236,6 +248,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if err != nil {
 		klog.Errorf("Conversion error: %v", err)
 		return nil, fmt.Errorf("conversion error: %v", err)
+	}
+	if helmRelease.Spec.PostRenderers, err = r.postRenderersFor(ctx, nil); err != nil {
+		return nil, err
 	}
 
 	// Merge system labels (from config) directly
@@ -613,6 +628,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 	keepAccountValuesFrom(helmRelease, cur)
+	if helmRelease.Spec.PostRenderers, err = r.postRenderersFor(ctx, cur.Spec.PostRenderers); err != nil {
+		return nil, false, err
+	}
 
 	// Suspension is not part of the Application, so the rebuilt object always
 	// says suspend=false, and sending it as is resumes a release that an
@@ -633,11 +651,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. Apart from suspend, the HelmRelease spec is derived from the
-	// Application the caller just applied, so a stale-resourceVersion conflict
-	// is never a real spec conflict here: refresh the resourceVersion from the
-	// live object and retry. Suspend is refreshed with it, because the write
-	// that caused the conflict may be the one that suspended the release.
+	// 409 Conflict. On retry, rebuild the update from the freshly read release
+	// to preserve its suspension, credential values references, and release-owned
+	// post-renderers. Read the current image override table again before merging it.
 	//
 	// The carried-over metadata is not derived from the Application, though, and
 	// the writer that caused the conflict is usually the controller that owns it
@@ -660,6 +676,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			keepAccountValuesFrom(helmRelease, cur)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 			helmRelease.Spec.Suspend = cur.Spec.Suspend
+			var prErr error
+			if helmRelease.Spec.PostRenderers, prErr = r.postRenderersFor(ctx, cur.Spec.PostRenderers); prErr != nil {
+				return prErr
+			}
 		}
 		return updateErr
 	})
@@ -1501,6 +1521,30 @@ func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, h
 
 	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
 	return app, nil
+}
+
+// postRenderersFor returns the post-renderers a write gives a release that
+// carries live. The spec is otherwise rebuilt from the Application, but
+// post-renderers are not part of it: the release keeps any of its own, as it
+// does under the ApplicationDefinition reconciler, and the platform's image
+// override table goes last. The table is read on every call, and an update
+// calls this after every read of the live release, conflict retries included:
+// a table read earlier could be older than the one a conflicting writer just
+// applied, and writing it back would leave the release stale until the next
+// unrelated event. A missing table Secret, or no loader, leaves live as it is.
+func (r *REST) postRenderersFor(ctx context.Context, live []helmv2.PostRenderer) ([]helmv2.PostRenderer, error) {
+	if r.imageOverrides == nil {
+		return live, nil
+	}
+	images, found, err := r.imageOverrides(ctx)
+	if err != nil {
+		klog.Errorf("Loading image overrides: %v", err)
+		return nil, apierrors.NewInternalError(fmt.Errorf("loading image overrides: %w", err))
+	}
+	if !found {
+		return live, nil
+	}
+	return imageoverrides.Merge(live, images), nil
 }
 
 // ConvertApplicationToHelmRelease converts an Application to a HelmRelease

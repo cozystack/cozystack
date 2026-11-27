@@ -7,6 +7,7 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   releaseName: prometheus-operator-crds
   chartRef:
     kind: ExternalArtifact

@@ -818,6 +818,9 @@ kubernetesWorkerImage: {}
 kubernetesEtcd:
   storageClassLocal: ""
   storageClassReplicated: ""
+registries:
+  # Example entry: {name: docker.io/qdrant/qdrant, newName: mirror.example.org/team/qdrant}
+  imageOverrides: []
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
