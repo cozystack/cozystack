@@ -120,6 +120,130 @@ step_line() {
   printf '%s\n' "$setup" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
 }
 
+# The release page announces the version, so it must not go public before the
+# stable images and chart it points at exist. A step that fails after the draft
+# is undrafted also cannot be re-run: the draft lookup in resolve no longer finds
+# anything to publish.
+@test "finalize publishes the release page only after the stable images and chart exist" {
+  resolve="$(step_line 'Resolve draft release' "$FINALIZE")"
+  retag="$(step_line 'Retag rc images to stable' "$FINALIZE")"
+  chart="$(step_line 'Publish stable cozy-installer chart' "$FINALIZE")"
+  publish="$(step_line 'Publish draft release' "$FINALIZE")"
+  [ -n "$resolve" ] && [ -n "$retag" ] && [ -n "$chart" ] && [ -n "$publish" ]
+  [ "$resolve" -lt "$retag" ]
+  [ "$retag" -lt "$chart" ]
+  [ "$chart" -lt "$publish" ]
+
+  # One latest decision, made before the first registry write; the registry
+  # steps and the release page read it instead of recomputing it.
+  for step in 'Retag rc images to stable' 'Publish stable cozy-installer chart' 'Publish draft release'; do
+    step_block "$step" "$FINALIZE" | code_lines | grep -qF 'steps.resolve.outputs.make_latest'
+  done
+}
+
+# Finalize decides `latest` minutes before it moves it, so two release PRs
+# merged close together must not finalize at once. The group is built from the
+# job's own condition: a PR that skips finalize must not take the shared
+# group's one pending slot from a release waiting in it.
+@test "finalize runs one release at a time, and only release PRs share the queue" {
+  [ "$(yq '.jobs.finalize.concurrency.cancel-in-progress' "$FINALIZE")" = false ]
+  # One pending job per group is GitHub's default: a third release merged while
+  # two are in line would cancel the one waiting.
+  [ "$(yq '.jobs.finalize.concurrency.queue' "$FINALIZE")" = max ]
+  cond="$(yq '.jobs.finalize.if' "$FINALIZE" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
+  [ -n "$cond" ]
+  want="\${{ ($cond) && 'release-finalize' || format('release-finalize-skipped-{0}', github.event.pull_request.number) }}"
+  [ "$(yq '.jobs.finalize.concurrency.group' "$FINALIZE")" = "$want" ]
+}
+
+# Order alone does not hold the page back. A registry step allowed to fail
+# without failing the job, or a publish step that runs whatever happened before
+# it, publishes over a missing image or chart all the same. And a patch on an
+# older line must move no `latest`: the image and chart aliases follow the one
+# decision, not a default.
+@test "finalize publishes nothing after a failed registry step, and latest moves only on the resolved decision" {
+  for step in 'Resolve draft release' 'Retag rc images to stable' 'Publish stable cozy-installer chart' 'Publish draft release'; do
+    STEP="$step" yq --exit-status '.jobs.finalize.steps[] | select(.name == strenv(STEP)) | has("continue-on-error") | not' "$FINALIZE" >/dev/null
+  done
+  # No condition at all on the publish step, so it runs only when every step
+  # before it succeeded; and no registry command whose failure is swallowed.
+  yq --exit-status '.jobs.finalize.steps[] | select(.name == "Publish draft release") | has("if") | not' "$FINALIZE" >/dev/null
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .run' "$FINALIZE")" = './hack/promote-retag.sh "${STABLE_TAG}"' ]
+  chart_code="$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" | code_lines)"
+  [ "$(printf '%s\n' "$chart_code" | head -n 1)" = 'set -eu' ]
+  if printf '%s\n' "$chart_code" | grep -qF '||'; then
+    echo "Publish stable cozy-installer chart swallows a failure with ||" >&2; false
+  fi
+
+  # A registry step skipped for a stable tag publishes over a missing artifact
+  # just as a failed one would; only a prerelease skips them.
+  for step in 'Retag rc images to stable' 'Publish stable cozy-installer chart'; do
+    [ "$(STEP="$step" yq '.jobs.finalize.steps[] | select(.name == strenv(STEP)) | .if' "$FINALIZE")" = "\${{ !contains(steps.get_tag.outputs.tag, '-') }}" ]
+  done
+
+  move_latest="$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .env.MOVE_LATEST' "$FINALIZE")"
+  [ "$move_latest" = "\${{ steps.resolve.outputs.make_latest == 'true' && '1' || '0' }}" ]
+
+  chart_run="$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE")"
+  [ "$(printf '%s\n' "$chart_run" | code_lines | grep -cF 'cozy-installer:latest')" -eq 1 ]
+  printf '%s\n' "$chart_run" | code_lines | grep -A3 -F 'if [ "${MAKE_LATEST}" = "true" ]; then' | grep -qF 'cozy-installer:latest'
+}
+
+# helm package does not give the same bytes twice, so a re-run that pushed the
+# chart again would move cozy-installer:X.Y.Z to another digest. The step runs
+# here as the workflow carries it, against stub skopeo, helm and yq.
+@test "finalize pushes the stable chart once, and a re-run keeps the first push" {
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/bin" "$tmp/tree"
+  yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" > "$tmp/step.sh"
+  cat > "$tmp/bin/helm" <<'EOF'
+#!/bin/sh
+echo "helm $*" >> "$CALLS"
+case "$1" in
+  package) echo "Successfully packaged chart and saved it to: $TMP_DIR/cozy-installer.tgz" ;;
+  push) [ -z "${PUSH_FAILS:-}" ] || exit 1 ;;
+esac
+EOF
+  # CHART_EXISTS: 1 finds the tag, unset answers as GHCR does for a missing tag,
+  # and error answers with any other failure.
+  cat > "$tmp/bin/skopeo" <<'EOF'
+#!/bin/sh
+echo "skopeo $*" >> "$CALLS"
+[ "$1" = inspect ] || exit 0
+case "${CHART_EXISTS:-}" in
+  1) echo '{"schemaVersion":2}' ;;
+  error) echo 'toomanyrequests: retry-after: 60s' >&2; exit 1 ;;
+  *) echo 'reading manifest 1.2.3 in ghcr.io/example/cozy-installer: manifest unknown' >&2; exit 2 ;;
+esac
+EOF
+  printf '#!/bin/sh\necho "yq $*" >> "$CALLS"\n' > "$tmp/bin/yq"
+  chmod +x "$tmp/bin/helm" "$tmp/bin/skopeo" "$tmp/bin/yq"
+  # run_chart_step <case> <MAKE_LATEST> <CHART_EXISTS> [<PUSH_FAILS>]
+  run_chart_step() {
+    (cd "$tmp/tree" && PATH="$tmp/bin:$PATH" TMP_DIR="$tmp" CALLS="$tmp/$1" TAG=v1.2.3 REGISTRY=ghcr.io/example \
+      MAKE_LATEST="$2" CHART_EXISTS="$3" PUSH_FAILS="${4:-}" bash -e "$tmp/step.sh")
+  }
+
+  run_chart_step first true ''
+  grep -qx 'helm push .*/cozy-installer.tgz oci://ghcr.io/example' "$tmp/first"
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/first"
+
+  run_chart_step rerun true 1
+  if grep -q '^helm ' "$tmp/rerun"; then echo "FAIL: a re-run packaged or pushed the chart again"; false; fi
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/rerun"
+
+  run_chart_step older false ''
+  grep -q '^helm push ' "$tmp/older"
+  if grep -qF 'cozy-installer:latest' "$tmp/older"; then echo "FAIL: an older patch moved cozy-installer:latest"; false; fi
+
+  if run_chart_step failing true '' 1; then echo "FAIL: a failed helm push did not fail the step"; false; fi
+
+  # A lookup that fails for another reason says nothing about the tag.
+  if run_chart_step lookup-error true error; then echo "FAIL: a failed lookup did not fail the step"; false; fi
+  if grep -q '^helm ' "$tmp/lookup-error"; then echo "FAIL: a failed lookup packaged or pushed the chart"; false; fi
+  rm -rf "$tmp"
+}
+
 @test "promote rejects an old target base before publishing a candidate" {
   validate="$(step_block 'Validate rc is promotable' "$PROMOTE")"
   prepare_line="$(step_line 'Prepare stable branch' "$PROMOTE")"

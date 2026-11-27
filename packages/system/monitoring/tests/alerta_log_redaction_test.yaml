@@ -1,0 +1,101 @@
+suite: alerta keeps its credentials out of the container log
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+    gateway-enabled: "false"
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+
+tests:
+  - it: ships an entrypoint without the environment dump and with key creation silenced
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - notMatchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^env'
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^  alertad key --all >/dev/null$'
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^    alertad key --username "\$\{ADMIN_USER\}" --key "\$\{ADMIN_KEY\}" --duration "\$\{MAXAGE\}" >/dev/null \|\| true$'
+
+  - it: resets the admin users' password to ADMIN_PASSWORD right after creating them
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^  alertad user --all --password "\$\{ADMIN_PASSWORD\}" \|\| true\n  /venv/bin/python /app/sync-admin-password\.py$'
+      - matchRegex:
+          path: data["sync-admin-password.py"]
+          pattern: 'user\.update\(password=password\)'
+
+  - it: ships an nginx config that masks the api-key parameter in the access log
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: 'map \$request \$request_redacted'
+      - matchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: '"\$request_redacted" \$status'
+      - notMatchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: '"\$request" '
+
+  - it: mounts both files over the image's copies
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /usr/local/bin/docker-entrypoint.sh
+            subPath: docker-entrypoint.sh
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /app/nginx.conf.j2
+            subPath: nginx.conf.j2
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /app/sync-admin-password.py
+            subPath: sync-admin-password.py
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: alerta-entrypoint
+            configMap:
+              name: alerta-entrypoint
+              defaultMode: 0755
+
+  - it: runs the exact image the mounted files were copied from
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/alerta/alerta-web:9.1.0@sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39

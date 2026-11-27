@@ -74,6 +74,41 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubeReserved:\s*\n\s+cpu: "100m"\s*\n\s+memory: "512Mi"'
 
+  # The machineconfig sizes the reservations from resources.cpu as a decimal
+  # string, so a leading-zero "010" (an eight-core VM, see
+  # resources_cpu_test.yaml) reserves 5% of ten, clamped to 500m, and keeps
+  # the config, and so the TalosConfigTemplate name, it has always had.
+  - it: sizes the reservations of a leading-zero pool from the decimal string
+    set:
+      gpus: []
+      resources:
+        cpu: "010"
+        memory: 16Gi
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'systemReserved:\s*\n\s+cpu: "500m"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubeReserved:\s*\n\s+cpu: "500m"'
+
+  - it: sizes the reservations of a plain eight from eight cores
+    set:
+      gpus: []
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'systemReserved:\s*\n\s+cpu: "400m"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubeReserved:\s*\n\s+cpu: "400m"'
+
   # On proxmox the worker kubelet runs with an external cloud provider: the
   # node is tainted uninitialized until the cloud-controller-manager clears it
   # and applies the topology labels the CSI node plugin needs. On kubevirt no

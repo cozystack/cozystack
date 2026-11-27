@@ -35,7 +35,4 @@ spec:
       retries: -1
   values:
     {{- toYaml (deepCopy .Values.addons.coredns.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCoreDNSValues" .))) | nindent 4 }}
-  dependsOn:
-  - name: {{ .Release.Name }}-cilium
-    namespace: {{ .Release.Namespace }}
 {{- end }}

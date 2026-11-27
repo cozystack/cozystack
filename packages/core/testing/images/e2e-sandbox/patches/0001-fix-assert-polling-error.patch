@@ -1,0 +1,247 @@
+From dcbe912b15be1060c741b88d275b2134b29a2704 Mon Sep 17 00:00:00 2001
+From: Shubham Singh <shubhsoch@gmail.com>
+Date: Mon, 3 Aug 2026 16:18:17 +0530
+Subject: [PATCH] fix: assert-polling-error
+
+Upstream: https://github.com/kyverno/chainsaw/pull/2761
+
+Signed-off-by: Shubham Singh <shubhsoch@gmail.com>
+---
+ pkg/engine/operations/assert/operation.go     | 10 ++-
+ .../operations/assert/operation_test.go       |  8 +-
+ pkg/engine/operations/error/operation.go      |  9 ++-
+ pkg/engine/operations/error/operation_test.go |  4 +-
+ pkg/engine/operations/internal/errors.go      | 18 +++++
+ pkg/engine/operations/internal/errors_test.go | 81 +++++++++++++++++++
+ 6 files changed, 122 insertions(+), 8 deletions(-)
+ create mode 100644 pkg/engine/operations/internal/errors.go
+ create mode 100644 pkg/engine/operations/internal/errors_test.go
+
+diff --git a/pkg/engine/operations/assert/operation.go b/pkg/engine/operations/assert/operation.go
+index c457d7d64..0b70fe05d 100644
+--- a/pkg/engine/operations/assert/operation.go
++++ b/pkg/engine/operations/assert/operation.go
+@@ -3,6 +3,7 @@ package assert
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 
+ 	"github.com/kyverno/chainsaw/pkg/apis"
+ 	"github.com/kyverno/chainsaw/pkg/apis/v1alpha1"
+@@ -100,6 +101,10 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, obj uns
+ 					errs = append(errs, errors.New("actual resource not found"))
+ 					return false, nil
+ 				}
++				if internal.IsRetriable(err) {
++					errs = append(errs, err)
++					return false, nil
++				}
+ 				return false, err
+ 			} else if len(candidates) == 0 {
+ 				errs = append(errs, errors.New("no actual resource found"))
+@@ -127,7 +132,10 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, obj uns
+ 	}
+ 	// eventually return a combination of last errors
+ 	if len(lastErrs) != 0 {
+-		return multierr.Combine(lastErrs...)
++		return multierr.Append(
++			multierr.Combine(lastErrs...),
++			fmt.Errorf("operation terminated with error: %w", err),
++		)
+ 	}
+ 	// return received error
+ 	return err
+diff --git a/pkg/engine/operations/assert/operation_test.go b/pkg/engine/operations/assert/operation_test.go
+index cf5b64c59..7ceea5c98 100644
+--- a/pkg/engine/operations/assert/operation_test.go
++++ b/pkg/engine/operations/assert/operation_test.go
+@@ -96,7 +96,7 @@ func Test_operationAssert(t *testing.T) {
+ 		expectErr: true,
+ 		expectedLogs: []string{
+ 			"ASSERT: RUN - []",
+-			"ASSERT: ERROR - [=== ERROR\n---------------\nv1/Pod/test-pod\n---------------\n* spec.containers[0].image: Invalid value: \"fake-image\": Expected value: \"test-image\"\n* spec.containers[0].name: Invalid value: \"fake-container\": Expected value: \"test-container\"\n\n--- expected\n+++ actual\n@@ -4,6 +4,6 @@\n   name: test-pod\n spec:\n   containers:\n-  - image: test-image\n-    name: test-container\n+  - image: fake-image\n+    name: fake-container]",
++			"ASSERT: ERROR - [=== ERROR\n---------------\nv1/Pod/test-pod\n---------------\n* spec.containers[0].image: Invalid value: \"fake-image\": Expected value: \"test-image\"\n* spec.containers[0].name: Invalid value: \"fake-container\": Expected value: \"test-container\"\n\n--- expected\n+++ actual\n@@ -4,6 +4,6 @@\n   name: test-pod\n spec:\n   containers:\n-  - image: test-image\n-    name: test-container\n+  - image: fake-image\n+    name: fake-container\n \n\noperation terminated with error: context deadline exceeded]",
+ 		},
+ 	}, {
+ 		name: "Not found using Get",
+@@ -117,7 +117,7 @@ func Test_operationAssert(t *testing.T) {
+ 			},
+ 		},
+ 		expectErr:    true,
+-		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\nactual resource not found]"},
++		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\nactual resource not found\noperation terminated with error: context deadline exceeded]"},
+ 	}, {
+ 		name: "Bad assert",
+ 		expected: unstructured.Unstructured{
+@@ -176,7 +176,7 @@ func Test_operationAssert(t *testing.T) {
+ 				return nil
+ 			},
+ 		},
+-		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\n---------------\nv1/Pod/test-pod\n---------------\n* spec.foo: Required value: field not found in the input object\n\n--- expected\n+++ actual\n@@ -2,6 +2,5 @@\n kind: Pod\n metadata:\n   name: test-pod\n-spec:\n-  foo: bar\n+spec: {}]"},
++		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\n---------------\nv1/Pod/test-pod\n---------------\n* spec.foo: Required value: field not found in the input object\n\n--- expected\n+++ actual\n@@ -2,6 +2,5 @@\n kind: Pod\n metadata:\n   name: test-pod\n-spec:\n-  foo: bar\n+spec: {}\n \n\noperation terminated with error: context deadline exceeded]"},
+ 		expectErr:    true,
+ 	}, {
+ 		name: "Successful match using List",
+@@ -243,7 +243,7 @@ func Test_operationAssert(t *testing.T) {
+ 			},
+ 		},
+ 		expectErr:    true,
+-		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\nno actual resource found]"},
++		expectedLogs: []string{"ASSERT: RUN - []", "ASSERT: ERROR - [=== ERROR\nno actual resource found\noperation terminated with error: context deadline exceeded]"},
+ 	}, {
+ 		name: "List operation fails",
+ 		expected: unstructured.Unstructured{
+diff --git a/pkg/engine/operations/error/operation.go b/pkg/engine/operations/error/operation.go
+index 031f1c2eb..8fcf2ee39 100644
+--- a/pkg/engine/operations/error/operation.go
++++ b/pkg/engine/operations/error/operation.go
+@@ -95,6 +95,10 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, obj uns
+ 				if kerrors.IsNotFound(err) {
+ 					return true, nil
+ 				}
++				if internal.IsRetriable(err) {
++					errs = append(errs, err)
++					return false, nil
++				}
+ 				return false, err
+ 			} else if len(candidates) == 0 {
+ 				return true, nil
+@@ -119,7 +123,10 @@ func (o *operation) execute(ctx context.Context, bindings apis.Bindings, obj uns
+ 	}
+ 	// eventually return a combination of last errors
+ 	if len(lastErrs) != 0 {
+-		return multierr.Combine(lastErrs...)
++		return multierr.Append(
++			multierr.Combine(lastErrs...),
++			fmt.Errorf("operation terminated with error: %w", err),
++		)
+ 	}
+ 	// return received error
+ 	return err
+diff --git a/pkg/engine/operations/error/operation_test.go b/pkg/engine/operations/error/operation_test.go
+index 0280b2cb2..e2be30464 100644
+--- a/pkg/engine/operations/error/operation_test.go
++++ b/pkg/engine/operations/error/operation_test.go
+@@ -80,8 +80,8 @@ func Test_operationError(t *testing.T) {
+ 				return nil
+ 			},
+ 		},
+-		expectedErr:  fmt.Errorf("v1/Pod/foo/test-pod - resource matches expectation"),
+-		expectedLogs: []string{"ERROR: RUN - []", "ERROR: ERROR - [=== ERROR\nv1/Pod/foo/test-pod - resource matches expectation]"},
++		expectedErr:  fmt.Errorf("v1/Pod/foo/test-pod - resource matches expectation; operation terminated with error: context deadline exceeded"),
++		expectedLogs: []string{"ERROR: RUN - []", "ERROR: ERROR - [=== ERROR\noperation terminated with error: context deadline exceeded\nv1/Pod/foo/test-pod - resource matches expectation]"},
+ 	}, {
+ 		name: "Bad assert",
+ 		expected: unstructured.Unstructured{
+diff --git a/pkg/engine/operations/internal/errors.go b/pkg/engine/operations/internal/errors.go
+new file mode 100644
+index 000000000..dacff7efd
+--- /dev/null
++++ b/pkg/engine/operations/internal/errors.go
+@@ -0,0 +1,18 @@
++package internal
++
++import (
++	kerrors "k8s.io/apimachinery/pkg/api/errors"
++)
++
++// IsRetriable checks if an error from the API server is a transient error that should be retried.
++func IsRetriable(err error) bool {
++	if err == nil {
++		return false
++	}
++	return kerrors.IsInternalError(err) ||
++		kerrors.IsServiceUnavailable(err) ||
++		kerrors.IsTimeout(err) ||
++		kerrors.IsServerTimeout(err) ||
++		kerrors.IsTooManyRequests(err) ||
++		kerrors.IsUnexpectedServerError(err)
++}
+diff --git a/pkg/engine/operations/internal/errors_test.go b/pkg/engine/operations/internal/errors_test.go
+new file mode 100644
+index 000000000..012d16c0d
+--- /dev/null
++++ b/pkg/engine/operations/internal/errors_test.go
+@@ -0,0 +1,81 @@
++package internal
++
++import (
++	"errors"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	kerrors "k8s.io/apimachinery/pkg/api/errors"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++)
++
++func TestIsRetriable(t *testing.T) {
++	tests := []struct {
++		name     string
++		err      error
++		expected bool
++	}{
++		{
++			name:     "nil error",
++			err:      nil,
++			expected: false,
++		},
++		{
++			name:     "generic error",
++			err:      errors.New("some error"),
++			expected: false,
++		},
++		{
++			name:     "forbidden error",
++			err:      kerrors.NewForbidden(schema.GroupResource{Group: "", Resource: "pods"}, "test-pod", errors.New("forbidden")),
++			expected: false,
++		},
++		{
++			name:     "unauthorized error",
++			err:      kerrors.NewUnauthorized("unauthorized"),
++			expected: false,
++		},
++		{
++			name:     "bad request error",
++			err:      kerrors.NewBadRequest("bad request"),
++			expected: false,
++		},
++		{
++			name:     "internal error",
++			err:      kerrors.NewInternalError(errors.New("internal server error")),
++			expected: true,
++		},
++		{
++			name:     "service unavailable error",
++			err:      kerrors.NewServiceUnavailable("service unavailable"),
++			expected: true,
++		},
++		{
++			name:     "timeout error",
++			err:      kerrors.NewTimeoutError("timeout", 10),
++			expected: true,
++		},
++		{
++			name:     "server timeout error",
++			err:      kerrors.NewServerTimeout(schema.GroupResource{Group: "", Resource: "pods"}, "get", 10),
++			expected: true,
++		},
++		{
++			name:     "too many requests error",
++			err:      kerrors.NewTooManyRequests("too many requests", 10),
++			expected: true,
++		},
++		{
++			name:     "unexpected server error",
++			err:      kerrors.NewGenericServerResponse(500, "GET", schema.GroupResource{Group: "", Resource: "pods"}, "test-pod", "unexpected body", 0, false),
++			expected: true,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			actual := IsRetriable(tt.err)
++			assert.Equal(t, tt.expected, actual)
++		})
++	}
++}

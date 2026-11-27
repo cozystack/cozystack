@@ -2561,7 +2561,73 @@ tests:
           value: "true"
         documentIndex: 3
 
-  - it: bootstrap Job command builds a CRB for each users[] entry
+  - it: the bindings ConfigMap holds a CRB for each users[] entry
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-bindings.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+        - email: bob@example.org
+          role: view
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-bindings
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'name: alice@example.org'
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'name: bob@example.org'
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'app.kubernetes.io/managed-by: cozystack-oidc'
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'app.kubernetes.io/instance: kubernetes-app'
+
+  - it: the binding names and roles stay what the Job script used to render
+    # The prune step and every binding already in a tenant cluster go by these
+    # names: cozystack-oidc- plus the first 16 hex digits of
+    # sha256("<release>-<email>"). A different name leaves the old binding
+    # behind next to the new one.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-bindings.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+        - email: bob@example.org
+          role: view
+    asserts:
+      - equal:
+          path: data["desired.txt"]
+          value: "cozystack-oidc-0001a28136ca1a02\ncozystack-oidc-ec8dfb1cbc75e699\n"
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'name: cozystack-oidc-0001a28136ca1a02\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: cluster-admin\nsubjects:\n- apiGroup: rbac.authorization.k8s.io\n  kind: User\n  name: alice@example.org\n'
+      - matchRegex:
+          path: data["crbs.yaml"]
+          pattern: 'name: cozystack-oidc-ec8dfb1cbc75e699\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: view\nsubjects:\n- apiGroup: rbac.authorization.k8s.io\n  kind: User\n  name: bob@example.org\n'
+
+  - it: the bootstrap Job mounts the bindings ConfigMap and carries no users[] entry in its script
+    # The script is one `sh -c` argument and Linux caps one argument at 128 KiB:
+    # a binding per user in it stops the container from starting at about 240
+    # users. hack/kubernetes-oidc-bindings.bats renders 300 users to hold the
+    # size itself.
     release:
       name: kubernetes-app
       namespace: tenant-foo
@@ -2576,22 +2642,129 @@ tests:
         - email: bob@example.org
           role: view
     asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: oidc-bindings
+            configMap:
+              name: kubernetes-app-oidc-bindings
+              optional: true
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: oidc-bindings
+            mountPath: /etc/oidc-bindings
+            readOnly: true
+        documentIndex: 3
+      # The script reads the directory from the environment, which is also how
+      # hack/kubernetes-oidc-bindings.bats points it at a scratch directory.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_BINDINGS_DIR
+            value: /etc/oidc-bindings
+        documentIndex: 3
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'alice@example\.org'
+        documentIndex: 3
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'bob@example\.org'
+        documentIndex: 3
+
+  - it: the bootstrap Job stops before pruning when the desired list is not mounted
+    # `! grep -F` on a file that is not there is true, so a missing mount would
+    # delete every binding of the release.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'name: "alice@example.org"'
+          pattern: '(?s)if \[ ! -f "\$BINDINGS/desired\.txt" \]; then.*?exit 1\n\s*fi.*Pruning stale ClusterRoleBindings'
         documentIndex: 3
+
+  - it: the bootstrap Job applies the bindings file only when it has objects in it
+    # kubectl apply exits non-zero on a file with no objects, and a release
+    # with no users has none.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'name: "bob@example.org"'
+          pattern: 'if \[ -s "\$BINDINGS/crbs\.yaml" \]; then\n\s+kubectl --kubeconfig "\$KUBECONFIG_TENANT" apply --filename "\$BINDINGS/crbs\.yaml"\n\s*fi'
         documentIndex: 3
+
+  - it: a release with no users renders an empty bindings ConfigMap
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-bindings.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users: []
+    asserts:
+      - equal:
+          path: data["crbs.yaml"]
+          value: ""
+      - equal:
+          path: data["desired.txt"]
+          value: ""
+
+  - it: CustomConfig mode renders the bindings ConfigMap for its users
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-bindings.yaml
+    set:
+      _cluster.oidc-enabled: "false"
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: |
+        apiVersion: apiserver.config.k8s.io/v1beta1
+        kind: AuthenticationConfiguration
+        jwt:
+        - issuer:
+            url: https://idp.example.com
+            audiences: [my-cluster]
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+    asserts:
+      - isKind:
+          of: ConfigMap
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'name: cluster-admin'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'name: view'
-        documentIndex: 3
+          path: data["crbs.yaml"]
+          pattern: 'name: alice@example.org'
+
+  - it: mode=None renders no bindings ConfigMap even when users are set
+    # The Job takes its early branch at mode None and never reads the file.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-bindings.yaml
+    set:
+      oidc.mode: None
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+    asserts:
+      - hasDocuments:
+          count: 0
 
   - it: mode=System aborts the Job instead of leaving the OIDC kubeconfig Secret as the install-time placeholder when the tenant CA is missing
     # A placeholder kubeconfig cannot authenticate, so the release must not go Ready with it.

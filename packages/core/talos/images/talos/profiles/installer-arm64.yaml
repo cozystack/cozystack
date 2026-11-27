@@ -3,20 +3,20 @@
 arch: arm64
 platform: metal
 secureboot: false
-version: v1.14.2
+version: v1.14.4
 input:
   kernel:
     path: /usr/install/arm64/vmlinuz
   initramfs:
     path: /usr/install/arm64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer-base:v1.14.2"
+    imageRef: "ghcr.io/siderolabs/installer-base:v1.14.4"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260916@sha256:f0ba5d110925a3e4e4fceeb146001e1f6b2430ef85b85c8fdd07848cd82b8b7b
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260916@sha256:858c93853e75fdc69da6ada28a24d2b9e2ec486e3f53b6ccf520fb4ab9b3388e
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260916@sha256:44adfb8f21402064e2406d7eb70d2dc6925ed231ba3884a52a5019047a4409b9
-    - imageRef: ghcr.io/siderolabs/drbd:9.3.4-v1.14.2@sha256:07d2be475e08b3c8b633319e7ed1e73d3e838836cfa734fef1bc0d45ea4b18d1
-    - imageRef: ghcr.io/siderolabs/zfs:2.4.4-v1.14.2@sha256:19f57dacaaac5689ec50c77c94e40051676215ef21700e37e5adf4b6055e3dc7
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260916@sha256:d10645288db60031e91215cfc8744e49b093a558e5676a6252585063f20c34cf
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260916@sha256:e86aa59ceeee0a50253f96ecb1b4283392e14753089cee6c15308c4861e021f2
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260916@sha256:bef6ad629f73c763464b67efbbb452e11e6ee63fb69fc6ac8cb178eab625d778
+    - imageRef: ghcr.io/siderolabs/drbd:9.3.4-v1.14.4@sha256:f749e8d741e41145ca0ed36e16e66e5fe8d7f0ec91a46fa60e67f87199835760
+    - imageRef: ghcr.io/siderolabs/zfs:2.4.4-v1.14.4@sha256:12bf14bdc28a17cd73fcb1d8ddcbe47addc7b85c0156b73d01b26038005de4e0
 output:
   kind: installer
   imageOptions: {}

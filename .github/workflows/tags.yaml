@@ -664,8 +664,8 @@ jobs:
   # release-X.Y.Z branch so it rides the promote PR and is on the base branch the
   # moment finalize publishes the release. That is the whole point of
   # generating it there: at the time THIS job runs the stable tag has already been
-  # pushed by finalize, which means the release is already public — too late for a
-  # changelog PR to be of any use to a reader.
+  # pushed by finalize, whose run publishes the release once the retag and the chart
+  # are done — too late for a changelog PR to be of any use to a reader.
   #
   # What the freeze changed: promote-rc.yaml bases its promote PR on release-X.Y
   # whenever that branch exists, and cutting vX.Y.0-rc.1 now creates it. So EVERY
@@ -698,8 +698,8 @@ jobs:
     # !cancelled(): this job runs on stable tags only, which skip build-arm64,
     # and a skipped ancestor makes the implicit success() false.
     if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
-    # Non-blocking: this is a best-effort backfill of an already-published
-    # release, never a gate on one.
+    # Non-blocking: this is a best-effort backfill for the release finalize
+    # publishes, never a gate on one.
     continue-on-error: true
     steps:
       - name: Generate GitHub App token
@@ -766,8 +766,8 @@ jobs:
       # promote flow it normally is, because the promote PR carried it onto
       # release-X.Y and the stable tag sits on that merge commit. Since the freeze
       # that PR always targets the line, so this is the usual state on arrival:
-      # `exists` false, `at_tag` true, a reviewed and already-published changelog
-      # sitting right here — port it rather than regenerate.
+      # `exists` false, `at_tag` true, the reviewed changelog finalize publishes as
+      # the release body sitting right here — port it rather than regenerate.
       #
       # Only when both are false is there genuinely no changelog to publish, and
       # only then does the AI run.
@@ -790,7 +790,7 @@ jobs:
           # it reaches the tag via the merge commit. That PR targets the maintenance
           # line for every release since the freeze, so the file lands on
           # release-X.Y and never reaches main — `exists` above is false even though
-          # a reviewed, already-PUBLISHED changelog exists right here.
+          # the reviewed changelog finalize publishes as the body exists right here.
           #
           # Regenerating in that case would spend a second AI run and, once the
           # backstop PR merged, update-releasenotes.yaml would overwrite the
@@ -837,7 +837,7 @@ jobs:
           CHANGELOG_BRANCH="changelog-v${VERSION}"
 
           # Two ways the file can be here: ported verbatim from the tag commit
-          # (at_tag=true — the reviewed, already-published changelog reaching main
+          # (at_tag=true — the reviewed changelog finalize publishes, reaching main
           # for the first time), or freshly generated above. Either is valid.
           if [ ! -f "$CHANGELOG_FILE" ]; then
             echo "::error::Changelog file $CHANGELOG_FILE is absent — it was neither present at the tag nor produced by the Generate changelog using AI step"

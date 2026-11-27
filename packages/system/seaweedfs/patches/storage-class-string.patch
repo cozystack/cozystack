@@ -1,0 +1,128 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
+index ad112981f..1ce6f3cab 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
+@@ -330,7 +330,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.admin.data.storageClass }}
++        {{- with .Values.admin.data.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.admin.data.size }}
+@@ -344,7 +346,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.admin.logs.storageClass }}
++        {{- with .Values.admin.logs.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.admin.logs.size }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml
+index 4a402f318..f5329a24e 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml
+@@ -19,7 +19,7 @@ spec:
+   accessModes:
+   {{- toYaml (.Values.allInOne.data.accessModes | default (list "ReadWriteOnce")) | nindent 4 }}
+   {{- if .Values.allInOne.data.storageClass }}
+-  storageClassName: {{ .Values.allInOne.data.storageClass }}
++  storageClassName: {{ .Values.allInOne.data.storageClass | quote }}
+   {{- end }}
+   resources:
+     requests:
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
+index e505faf1c..ced2d597a 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
+@@ -451,7 +451,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.filer.data.storageClass }}
++        {{- with .Values.filer.data.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.filer.data.size }}
+@@ -467,7 +469,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.filer.logs.storageClass }}
++        {{- with .Values.filer.logs.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.filer.logs.size }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
+index 914f0dfd1..5df83e687 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
+@@ -336,7 +336,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.master.data.storageClass }}
++        {{- with .Values.master.data.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.master.data.size }}
+@@ -352,7 +354,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ .Values.master.logs.storageClass }}
++        {{- with .Values.master.logs.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ .Values.master.logs.size }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+index 04011d1d6..88b13822d 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+@@ -404,7 +404,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ $dir.storageClass }}
++        {{- with $dir.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ $dir.size }}
+@@ -422,7 +424,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ $volume.idx.storageClass }}
++        {{- with $volume.idx.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ $volume.idx.size }}
+@@ -438,7 +442,9 @@ spec:
+         {{- end }}
+       spec:
+         accessModes: [ "ReadWriteOnce" ]
+-        storageClassName: {{ $volume.logs.storageClass }}
++        {{- with $volume.logs.storageClass }}
++        storageClassName: {{ . | quote }}
++        {{- end }}
+         resources:
+           requests:
+             storage: {{ $volume.logs.size }}

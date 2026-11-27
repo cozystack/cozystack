@@ -101,8 +101,11 @@
       https://<bucket-host>.
     - provisionBucket: true + Secret missing (offline `helm template`/unit
       render, or pre-reconcile install where lookup returns nil) → fall back
-      to .Values.backupStorage.endpoint. On a live deploy Flux re-renders on
-      spec.interval once the Secret exists, promoting the derived endpoint.
+      to .Values.backupStorage.endpoint. Flux does not re-render on
+      spec.interval; the controller's DefaultObjectsGate forces the render
+      once the Secret exists, and again whenever the Secret's endpoint stops
+      matching the backups.cozystack.io/endpoint annotation every default
+      Strategy CR and the Velero BSL carry with this helper's output.
 
   Normalization of the decoded value: trim first (a trailing newline in the
   Secret data would otherwise ride into the URL and break it), then strip any

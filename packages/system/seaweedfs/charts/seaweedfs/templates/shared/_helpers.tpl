@@ -153,7 +153,7 @@ true
 {{- if .Values.worker.namespaceUrl -}}
 {{- .Values.worker.namespaceUrl -}}
 {{- else if and .Values.s3.enabled .Values.s3.lancePort -}}
-{{- printf "http://%s.%s:%d" (include "seaweedfs.componentName" (list . "s3")) .Release.Namespace (int .Values.s3.lancePort) -}}
+{{- printf "http://%s-s3.%s:%d" (include "seaweedfs.name" .) .Release.Namespace (int .Values.s3.lancePort) -}}
 {{- end -}}
 {{- end -}}
 

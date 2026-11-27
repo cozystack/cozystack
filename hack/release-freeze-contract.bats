@@ -204,6 +204,39 @@ step_line() {
   [ "${count:-0}" -eq 1 ]
 }
 
+@test "initial line build dispatch has Actions access and preserves failure recovery" {
+  step="$(STEP_NAME="Build the frozen line's packages artifact" yq -o=json '.jobs.cut.steps[] | select(.name == strenv(STEP_NAME))' "$CUT")"
+  script="$(printf '%s\n' "$step" | yq -r '.run')"
+  token="$(printf '%s\n' "$step" | yq -r '.env.GH_TOKEN')"
+  [ -n "$script" ] && [ "$script" != null ]
+  case "$token" in
+    '${{ github.token }}'|'${{ secrets.GITHUB_TOKEN }}') token=workflow-token ;;
+    '${{ steps.app-token.outputs.token }}') token=app-token ;;
+    *) echo "Unknown dispatch credential: $token"; return 1 ;;
+  esac
+  actions="$(yq -r '(.jobs.cut.permissions // .permissions).actions // "none"' "$CUT")"
+
+  # The installed CI app has no Actions permission; the workflow token only
+  # gets it when the effective job permissions request it.
+  gh() {
+    [ "$*" = 'workflow run build-release.yaml --ref release-1.7' ] || return 2
+    [ "$GH_TOKEN" = workflow-token ] && [ "$ACTIONS_PERMISSION" = write ] || return 1
+    return "$DISPATCH_STATUS"
+  }
+  export -f gh
+
+  run env GH_TOKEN="$token" ACTIONS_PERMISSION="$actions" BRANCH=release-1.7 \
+    DISPATCH_STATUS=0 bash -e -c "$script"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Dispatched build-release.yaml for release-1.7;'* ]]
+
+  run env GH_TOKEN="$token" ACTIONS_PERMISSION="$actions" BRANCH=release-1.7 \
+    DISPATCH_STATUS=1 bash -e -c "$script"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'::warning::Could not dispatch build-release.yaml for release-1.7'* ]]
+  [[ "$output" == *'Start it by hand: gh workflow run build-release.yaml --ref release-1.7'* ]]
+}
+
 @test "build-release refuses a dispatch from anything but a line branch" {
   BUILD_RELEASE="$REPO_ROOT/.github/workflows/build-release.yaml"
   [ -f "$BUILD_RELEASE" ]

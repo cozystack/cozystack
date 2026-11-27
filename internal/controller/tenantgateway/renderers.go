@@ -867,7 +867,8 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 
 // renderWildcardCertificate builds the cert-manager Certificate that
 // covers <apex> and *.<apex>, plus per-child-apex SANs for every
-// tenant inheriting through this Gateway. Only used in DNS-01 mode;
+// tenant inheriting through this Gateway, leaving out any apex that
+// another apex's wildcard already covers. Only used in DNS-01 mode;
 // the listeners rendered by renderGateway reference its secretName.
 //
 // childApexes is the deduplicated, sorted list of apex hostnames
@@ -878,29 +879,27 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 // route's hostname (harbor.alice.example.com is two labels deeper
 // than the wildcard accepts).
 func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway, childApexes []string) (*cmv1.Certificate, error) {
-	dnsNames := []string{tgw.Spec.Apex, "*." + tgw.Spec.Apex}
-	seen := map[string]struct{}{
-		tgw.Spec.Apex:        {},
-		"*." + tgw.Spec.Apex: {},
+	apexes := append([]string{tgw.Spec.Apex}, childApexes...)
+	// A child can use a custom domain whose wildcard covers the gateway apex.
+	wildcards := make(map[string]struct{}, len(apexes))
+	for _, apex := range apexes {
+		if apex != "" {
+			wildcards["*."+apex] = struct{}{}
+		}
 	}
-	for _, apex := range childApexes {
-		if apex == "" {
+	var dnsNames []string
+	seen := make(map[string]bool, len(apexes))
+	for _, apex := range apexes {
+		if apex == "" || seen[apex] {
 			continue
 		}
-		// Skip a child whose host label collides with the parent
-		// apex (mis-labelled namespace, or two tenants briefly
-		// sharing an apex during a rename). cert-manager rejects
-		// duplicate dnsNames; the inheriting tenant still attaches
-		// via the parent SANs already present.
-		if _, dup := seen[apex]; !dup {
+		seen[apex] = true
+		// Let's Encrypt refuses the whole order when it lists a name
+		// that a wildcard in the same order already covers.
+		if !coveredByWildcard(wildcards, apex) {
 			dnsNames = append(dnsNames, apex)
-			seen[apex] = struct{}{}
 		}
-		wildcard := "*." + apex
-		if _, dup := seen[wildcard]; !dup {
-			dnsNames = append(dnsNames, wildcard)
-			seen[wildcard] = struct{}{}
-		}
+		dnsNames = append(dnsNames, "*."+apex)
 	}
 	cert := &cmv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -923,6 +922,17 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 		return nil, err
 	}
 	return cert, nil
+}
+
+// coveredByWildcard mirrors Boulder's wildcardOverlap check. Unlike
+// hostnameCovers, a certificate wildcard spans exactly one label.
+func coveredByWildcard(wildcards map[string]struct{}, host string) bool {
+	_, parent, ok := strings.Cut(host, ".")
+	if !ok {
+		return false
+	}
+	_, covered := wildcards["*."+parent]
+	return covered
 }
 
 func ptrGroup(g string) *gatewayv1.Group {

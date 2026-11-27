@@ -57,9 +57,17 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: omits all redirects when monitoring-enabled is a bool false
+    set:
+      _cluster:
+        monitoring-enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
   # Guard: a null _cluster (missing cozystack-values Secret / dry-run) must not
-  # panic the render; `index (.Values._cluster | default dict) ...` falls back
-  # to the "true" default and keeps the redirects.
+  # panic the render; `index (.Values._cluster | default dict) ...` finds no
+  # key and keeps the redirects.
   - it: keeps the redirects (no panic) when _cluster is null
     set:
       _cluster: null

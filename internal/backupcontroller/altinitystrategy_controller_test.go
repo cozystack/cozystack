@@ -3,7 +3,9 @@ package backupcontroller
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -697,6 +700,7 @@ func TestBackupParameters_RoundTrip(t *testing.T) {
 			DriverMetadata: map[string]string{
 				altinityParamPrefix + "bucketName": "b1",
 				altinityParamPrefix + "endpoint":   "https://s3",
+				altinityArchiveMetaKey:             "clickhouse-ch-test-20260304T050607Z",
 				"job.batch/name":                   "ignored",
 				"":                                 "ignored",
 			},
@@ -706,7 +710,462 @@ func TestBackupParameters_RoundTrip(t *testing.T) {
 	if got["bucketName"] != "b1" || got["endpoint"] != "https://s3" {
 		t.Errorf("backupParameters = %v", got)
 	}
-	if _, ok := got["job.batch/name"]; ok {
+	if len(got) != 2 {
 		t.Errorf("non-parameter key leaked through: %v", got)
+	}
+}
+
+// newAltinityArchiveStrategy renders the archive name and the Backup's
+// takenAt where a test can read them back off the Job.
+func newAltinityArchiveStrategy(name string) *strategyv1alpha1.Altinity {
+	s := newAltinityStrategy(name)
+	s.Spec.Template.Spec.Containers[0].Args = []string{
+		"--mode={{ .Mode }}",
+		"--archive={{ .ArchiveName }}",
+		"--taken-at={{ .Backup.TakenAt }}",
+		"--bucket={{ .Parameters.bucketName }}",
+	}
+	return s
+}
+
+func TestAltinityArchiveName_FromStartedAtInUTC(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 8, 6, 7, 890000000, time.FixedZone("UTC+3", 3*3600)))
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{UID: "0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+	}
+	if got, want := altinityArchiveName(j), "ch-test-20260304050607-0f3c9a1e5b7d"; got != want {
+		t.Errorf("altinityArchiveName = %q, want %q", got, want)
+	}
+}
+
+// TestAltinityArchiveName_NoLongerThanTheNameWithoutUID pins the S3 key
+// budget: the archive name is part of every object key, a key may not exceed
+// 1024 bytes, and the legacy s3PathOverride prefix is unbounded, so a prefix
+// that fit the name without the UID must still fit this one.
+func TestAltinityArchiveName_NoLongerThanTheNameWithoutUID(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	for n := 1; n <= 63; n++ {
+		j := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{UID: "0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"},
+			Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef(strings.Repeat("a", n))},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+		}
+		name, legacy := altinityArchiveName(j), altinityArchiveNameBeforeUIDs(j)
+		if len(name) > len(legacy) {
+			t.Errorf("application name of %d characters: archive %q is longer than %q", n, name, legacy)
+		}
+		// The manifest key of a prefix that left the name without the UID
+		// exactly at the limit.
+		prefix := strings.Repeat("p", 1024-len("/"+legacy+"/metadata.json"))
+		if key := prefix + "/" + name + "/metadata.json"; len(key) > 1024 {
+			t.Errorf("application name of %d characters: manifest key is %d bytes", n, len(key))
+		}
+	}
+}
+
+// TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond pins that two
+// BackupJobs of one application started within the same second, as two Plans
+// on the same schedule are, write different archives. With a shared name, the
+// strategy takes the other run's finished upload for an earlier attempt of its
+// own and records an archive missing what changed since that upload.
+func TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	run := func(name, uid string) *backupsv1alpha1.BackupJob {
+		return &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test", UID: types.UID(uid)},
+			Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+		}
+	}
+	daily := altinityArchiveName(run("daily-1", "11111111-1111-1111-1111-111111111111"))
+	weekly := altinityArchiveName(run("weekly-1", "22222222-2222-2222-2222-222222222222"))
+	if daily == weekly {
+		t.Fatalf("two runs started in the same second share archive %q", daily)
+	}
+	for _, name := range []string{daily, weekly} {
+		if !strings.HasPrefix(name, "ch-test-20260304050607-") {
+			t.Errorf("archive %q does not start with the application and start time, so names stop sorting chronologically", name)
+		}
+	}
+}
+
+// TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven drives one BackupJob
+// through Job creation and completion in separate reconciles. The archive
+// name has to come out of the persisted StartedAt both times: the Pod is
+// told it on the first, the Backup records it on the second, and a restore
+// later reads back exactly that archive.
+func TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven(t *testing.T) {
+	app := newAltinityClickHouseApp("ch-test", "tenant-test")
+	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "test-bj-uid"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+		Parameters: map[string]string{"bucketName": "ch-bucket"},
+	}
+	r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
+	ctx := context.Background()
+	const want = "ch-test-20260304050607-testbjuid"
+
+	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileAltinity() creating the Job: %v", err)
+	}
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); err != nil {
+		t.Fatalf("get backup Job: %v", err)
+	}
+	if got := job.Spec.Template.Spec.Containers[0].Args[1]; got != "--archive="+want {
+		t.Fatalf("backup Pod was rendered with %q, want --archive=%s", got, want)
+	}
+
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := r.Status().Update(ctx, job); err != nil {
+		t.Fatalf("mark backup Job complete: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), backupJob); err != nil {
+		t.Fatalf("refresh BackupJob: %v", err)
+	}
+	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileAltinity() on the completed Job: %v", err)
+	}
+
+	created := &backupsv1alpha1.Backup{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: backupJob.Name}, created); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if got := created.Spec.DriverMetadata[altinityArchiveMetaKey]; got != want {
+		t.Errorf("Backup records archive %q, want %q", got, want)
+	}
+	if got := created.Spec.DriverMetadata[altinityParamPrefix+"bucketName"]; got != "ch-bucket" {
+		t.Errorf("expected driverMetadata[parameter/bucketName]=ch-bucket, got %q", got)
+	}
+}
+
+// TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs covers a backup
+// Job created by a controller that named archives without the BackupJob's UID
+// and still running when the controller is upgraded: the Job is not
+// re-rendered, so its archive carries the old name, and the Backup has to
+// record that name rather than none.
+func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) {
+	const legacy = "clickhouse-ch-test-20260304T050607Z"
+	cases := []struct {
+		name    string
+		archive string // archive the Job's Pod was rendered with
+		want    string
+	}{
+		{name: "the name without the UID", archive: legacy, want: legacy},
+		{name: "a longer name that starts with it", archive: legacy + "-copy", want: ""},
+		{name: "a longer name that ends with it", archive: "copy-" + legacy, want: ""},
+		{name: "a longer name that continues it after a period", archive: legacy + ".copy", want: ""},
+		{name: "a longer name that leads into it with a period", archive: "copy." + legacy, want: ""},
+		{name: "a longer name that continues it after an underscore", archive: legacy + "_copy", want: ""},
+		{name: "a longer name that leads into it with an underscore", archive: "copy_" + legacy, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recordAltinityArchiveOfJobRenderedWith(t, tc.archive); got != tc.want {
+				t.Errorf("Backup records archive %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// recordAltinityArchiveOfJobRenderedWith completes a backup Job whose Pod
+// carries the given archive in place of the one the controller rendered, and
+// returns the archive the resulting Backup records.
+func recordAltinityArchiveOfJobRenderedWith(t *testing.T, archive string) string {
+	t.Helper()
+	app := newAltinityClickHouseApp("ch-test", "tenant-test")
+	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "test-bj-uid"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+	}
+	r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
+	ctx := context.Background()
+
+	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileAltinity() creating the Job: %v", err)
+	}
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); err != nil {
+		t.Fatalf("get backup Job: %v", err)
+	}
+	job.Spec.Template.Spec.Containers[0].Args[1] = "--archive=" + archive
+	if err := r.Update(ctx, job); err != nil {
+		t.Fatalf("render the backup Job with archive %q: %v", archive, err)
+	}
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := r.Status().Update(ctx, job); err != nil {
+		t.Fatalf("mark backup Job complete: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), backupJob); err != nil {
+		t.Fatalf("refresh BackupJob: %v", err)
+	}
+	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileAltinity() on the completed Job: %v", err)
+	}
+
+	created := &backupsv1alpha1.Backup{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: backupJob.Name}, created); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	return created.Spec.DriverMetadata[altinityArchiveMetaKey]
+}
+
+// TestReconcileAltinity_RecordsNoArchiveTheJobWasNotGiven covers a Job whose
+// Pod never carried the driver's archive name: one created before the
+// upgrade that introduced the names, or rendered from a strategy that names
+// its own archives. Recording the name would send the restore after an
+// archive nobody wrote; recording none leaves it the fallback for Backups
+// without a name.
+func TestReconcileAltinity_RecordsNoArchiveTheJobWasNotGiven(t *testing.T) {
+	app := newAltinityClickHouseApp("ch-test", "tenant-test")
+	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	completedK8sJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobNameForBackupJob(backupJob), Namespace: backupJob.Namespace},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers: []corev1.Container{{
+					Name:  "clickhouse-backup",
+					Image: "altinity/clickhouse-backup:test",
+					Args:  []string{`target="clickhouse-ch-test-$(date -u +%Y%m%dT%H%M%SZ)"`},
+				}},
+			}},
+		},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}},
+		},
+	}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+		Parameters: map[string]string{"bucketName": "ch-bucket"},
+	}
+	r, _, _ := newAltinityTestEnv(t, app,
+		clientfake.NewClientBuilder().WithObjects(backupJob, strategy, completedK8sJob))
+	ctx := context.Background()
+
+	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileAltinity() error = %v", err)
+	}
+	created := &backupsv1alpha1.Backup{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: backupJob.Name}, created); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if got, ok := created.Spec.DriverMetadata[altinityArchiveMetaKey]; ok {
+		t.Errorf("Backup records archive %q its Job was never given", got)
+	}
+	if got := created.Spec.DriverMetadata[altinityParamPrefix+"bucketName"]; got != "ch-bucket" {
+		t.Errorf("expected driverMetadata[parameter/bucketName]=ch-bucket, got %q", got)
+	}
+}
+
+// TestReconcileAltinity_BackupNameAlreadyTaken covers a completed Job whose
+// Backup name is already in use. A Backup outlives its BackupJob, so a
+// BackupJob re-created under an earlier run's name finds that run's Backup,
+// and claiming it would point the new run at an archive it did not write.
+// A Backup recording this run's own archive is the one an earlier reconcile
+// created before its status write was lost, and is adopted.
+func TestReconcileAltinity_BackupNameAlreadyTaken(t *testing.T) {
+	const thisRun = "ch-test-20260305050607-testbjuid"
+	cases := []struct {
+		name          string
+		existing      string // archive the existing Backup records; empty for none
+		wantSucceeded bool
+	}{
+		{name: "earlier run's Backup records another archive", existing: "ch-test-20260304050607-earlierbjuid"},
+		{name: "earlier run's Backup records no archive", existing: ""},
+		{name: "this run's Backup from a reconcile whose status write was lost", existing: thisRun, wantSucceeded: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newAltinityClickHouseApp("ch-test", "tenant-test")
+			strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+			startedAt := metav1.NewTime(time.Date(2026, 3, 5, 5, 6, 7, 0, time.UTC))
+			backupJob := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "test-bj-uid"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+					BackupClassName: "clickhouse-backup",
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+			}
+			driverMD := map[string]string{altinityParamPrefix + "bucketName": "ch-bucket"}
+			if tc.existing != "" {
+				driverMD[altinityArchiveMetaKey] = tc.existing
+			}
+			existing := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: backupJob.Name, Namespace: backupJob.Namespace},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: newAltinityClickHouseRef("ch-test"),
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+						Kind:     strategyv1alpha1.AltinityStrategyKind,
+						Name:     "clickhouse-strategy",
+					},
+					TakenAt:        metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 22, 0, time.UTC)),
+					DriverMetadata: driverMD,
+				},
+			}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{
+					APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+					Kind:     strategyv1alpha1.AltinityStrategyKind,
+					Name:     "clickhouse-strategy",
+				},
+				Parameters: map[string]string{"bucketName": "ch-bucket"},
+			}
+			r, _, _ := newAltinityTestEnv(t, app,
+				clientfake.NewClientBuilder().WithObjects(backupJob, strategy, existing))
+			ctx := context.Background()
+
+			if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+				t.Fatalf("reconcileAltinity() creating the Job: %v", err)
+			}
+			job := &batchv1.Job{}
+			if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); err != nil {
+				t.Fatalf("get backup Job: %v", err)
+			}
+			if got := job.Spec.Template.Spec.Containers[0].Args[1]; got != "--archive="+thisRun {
+				t.Fatalf("backup Pod was rendered with %q, want --archive=%s", got, thisRun)
+			}
+			job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+			if err := r.Status().Update(ctx, job); err != nil {
+				t.Fatalf("mark backup Job complete: %v", err)
+			}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), backupJob); err != nil {
+				t.Fatalf("refresh BackupJob: %v", err)
+			}
+			if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
+				t.Fatalf("reconcileAltinity() on the completed Job: %v", err)
+			}
+
+			updated := &backupsv1alpha1.BackupJob{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), updated); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if tc.wantSucceeded {
+				if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+					t.Errorf("phase = %q (%s), want Succeeded", updated.Status.Phase, updated.Status.Message)
+				}
+				if updated.Status.BackupRef == nil || updated.Status.BackupRef.Name != existing.Name {
+					t.Errorf("BackupRef = %v, want %s", updated.Status.BackupRef, existing.Name)
+				}
+			} else {
+				if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+					t.Errorf("phase = %q, want Failed: the run would claim a Backup recording %q instead of %q", updated.Status.Phase, tc.existing, thisRun)
+				}
+				if updated.Status.BackupRef != nil {
+					t.Errorf("BackupRef = %v, want none", updated.Status.BackupRef)
+				}
+				if !strings.Contains(updated.Status.Message, thisRun) {
+					t.Errorf("failure message %q does not name the archive this run wrote", updated.Status.Message)
+				}
+			}
+			kept := &backupsv1alpha1.Backup{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(existing), kept); err != nil {
+				t.Fatalf("get existing Backup: %v", err)
+			}
+			if got := kept.Spec.DriverMetadata[altinityArchiveMetaKey]; got != tc.existing {
+				t.Errorf("existing Backup now records archive %q, want %q left in place", got, tc.existing)
+			}
+		})
+	}
+}
+
+func TestReconcileAltinityRestore_RendersTheBackupsArchive(t *testing.T) {
+	cases := []struct {
+		name        string
+		archive     string // recorded on the Backup; empty for a Backup taken before names were recorded
+		wantArchive string
+	}{
+		{name: "recorded archive", archive: "clickhouse-ch-test-20260304T050607Z", wantArchive: "--archive=clickhouse-ch-test-20260304T050607Z"},
+		{name: "no recorded archive", archive: "", wantArchive: "--archive="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			targetApp := newAltinityClickHouseApp("ch-test", "tenant-test")
+			strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+			driverMD := map[string]string{altinityParamPrefix + "bucketName": "ch-bucket"}
+			if tc.archive != "" {
+				driverMD[altinityArchiveMetaKey] = tc.archive
+			}
+			now := metav1.Now()
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "ch-backup", Namespace: "tenant-test"},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: newAltinityClickHouseRef("ch-test"),
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+						Kind:     strategyv1alpha1.AltinityStrategyKind,
+						Name:     "clickhouse-strategy",
+					},
+					TakenAt:        metav1.NewTime(time.Date(2026, 3, 4, 8, 6, 22, 0, time.FixedZone("UTC+3", 3*3600))),
+					DriverMetadata: driverMD,
+				},
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-test"},
+				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+				Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+			}
+			_, rr, _ := newAltinityTestEnv(t, targetApp,
+				clientfake.NewClientBuilder().WithObjects(strategy, backup, restoreJob))
+			ctx := context.Background()
+
+			if _, err := rr.reconcileAltinityRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileAltinityRestore: %v", err)
+			}
+			job := &batchv1.Job{}
+			if err := rr.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForRestoreJob(restoreJob)}, job); err != nil {
+				t.Fatalf("get restore Job: %v", err)
+			}
+			args := job.Spec.Template.Spec.Containers[0].Args
+			want := []string{"--mode=restore", tc.wantArchive, "--taken-at=20260304T050622Z", "--bucket=ch-bucket"}
+			for i, w := range want {
+				if i >= len(args) || args[i] != w {
+					t.Errorf("rendered restore args[%d]: want %q, got %q", i, w, args)
+				}
+			}
+		})
 	}
 }

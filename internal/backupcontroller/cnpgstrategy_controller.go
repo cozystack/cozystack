@@ -175,13 +175,11 @@ const (
 	// against an unreachable target reproduces the same FATAL.
 	cnpgRecoveryMaxInspectPods = 5
 
-	// Cap on the wall-clock time a BackupJob can spend observing a
-	// cnpg.io/Backup stuck in phase=failed before the driver gives up and
-	// marks the BackupJob Failed. CNPG can transition out of "failed" on
-	// internal retries (e.g. transient instance-manager restart), so we
-	// don't fail on the first observation. But without this cap, a
-	// permanently-broken Backup would pin the BackupJob in Running forever,
-	// blocking later runs and wedging the Plan-controller queue.
+	// Cap on the wall-clock time a BackupJob waits for the barman-cloud
+	// plugin rollout before the cnpg.io/Backup exists. A Backup that exists
+	// is not capped: CloudNativePG keeps a healthy one pending while another
+	// backup of the same Cluster runs, or while it restarts one on another
+	// instance, so no fixed deadline tells those apart from a stuck one.
 	cnpgDefaultBackupDeadline = 30 * time.Minute
 
 	cnpgClusterHealthyPhase = "Cluster in healthy state"
@@ -453,44 +451,46 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		return ctrl.Result{}, nil
 
 	case cnpgBackupPhaseFailed:
-		// CNPG can transition the same Backup CR back out of "failed" when it
-		// retries internally (e.g., after a transient instance-manager
-		// restart), so we don't fail the BackupJob on the first observation.
-		// But without a cap a permanently-broken Backup would pin the
-		// BackupJob in Running forever; once StartedAt + cnpgDefaultBackupDeadline
-		// has elapsed and the cnpg.io/Backup is still failed, we give up.
-		if cnpgBackupDeadlineExceeded(j.Status.StartedAt) {
-			final := message
-			if final == "" {
-				final = fmt.Sprintf(
-					"cnpg.io Backup remained in phase=failed past %s deadline",
-					cnpgDefaultBackupDeadline)
-			}
-			return r.markBackupJobFailed(ctx, j, final)
-		}
-		if message == "" {
-			message = "cnpg.io Backup reported phase=failed; awaiting recovery or retry"
-		}
-		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionFalse,
-			Reason:  "CNPGBackupTransientFailure",
-			Message: message,
-		})
-		if err := r.Status().Update(ctx, j); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		// CloudNativePG does not reconcile a Backup out of a terminal phase,
+		// so waiting on a failed one cannot change the outcome.
+		return r.markBackupJobFailed(ctx, j, cnpgBackupFailedMessage(cnpgBackup, message))
 
 	default:
+		waiting := fmt.Sprintf("waiting for cnpg.io/Backup %s/%s, phase %q",
+			cnpgBackup.Namespace, cnpgBackup.Name, phase)
+		if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "WaitingForCNPGBackup",
+			Message: waiting,
+		}) {
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 }
 
+// cnpgBackupFailedMessage carries the error CloudNativePG recorded. When the
+// plugin run itself failed that is only its exit status, and the storage
+// error behind it is logged by the plugin-barman-cloud sidecar.
+func cnpgBackupFailedMessage(b *cnpgtypes.Backup, errText string) string {
+	if errText == "" {
+		errText = "no error recorded"
+	}
+	message := fmt.Sprintf("cnpg.io/Backup %s/%s failed: %s", b.Namespace, b.Name, errText)
+	if strings.Contains(errText, "exit status") {
+		message += "; the cause is in the log of the plugin-barman-cloud sidecar of the instance that ran it"
+	}
+	return message
+}
+
 // cnpgBackupDeadlineExceeded reports whether enough wall-clock time has
-// elapsed since the BackupJob started that we should stop polling a stuck
-// cnpg.io/Backup and fail the run. Returns false when StartedAt is nil so
-// the very first reconcile (which sets StartedAt) does not trip the gate.
+// elapsed since the BackupJob started that we should stop waiting for the
+// barman-cloud plugin rollout and fail the run. Returns false when
+// StartedAt is nil so the very first reconcile (which sets StartedAt) does
+// not trip the gate.
 func cnpgBackupDeadlineExceeded(startedAt *metav1.Time) bool {
 	if startedAt == nil {
 		return false
@@ -2210,16 +2210,20 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 // cannot get right on its own.
 //
 // Resources: the plugin injects the sidecar with no resources. This ObjectStore
-// lands in the application's namespace, and a tenant with resourceQuotas set
-// carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults
-// every container to 128Mi; the sidecar is OOMKilled mid-backup under it,
-// leaving the ObjectStore healthy and the backup failed. Measured cgroup
+// lands in the application's namespace, and a tenant whose resourceQuotas bound
+// memory carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that
+// defaults every container to 128Mi; the sidecar is OOMKilled mid-backup under
+// it, leaving the ObjectStore healthy and the backup failed. Measured cgroup
 // high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
-// tenant that leaves resourceQuotas empty has no LimitRange, and there the
-// sidecar had no requests and no limit at all. 256Mi holds the measured working
-// set and 1Gi is four times the measurement. No CPU limit is set, matching the
-// entityOperator precedent in packages/apps/kafka: a throttled sidecar stalls
-// WAL archiving instead of failing it.
+// tenant whose resourceQuotas bound none of cpu, memory or ephemeral-storage has
+// no LimitRange, and there the sidecar had no requests and no limit at all.
+// 256Mi holds the measured working set and 1Gi is four times the measurement.
+// The CPU limit is explicit for the same reason: left unset, a LimitRange under
+// a cpu quota gives the sidecar its 250m default,
+// so gzip compression of full backups and WAL segments runs on a quarter of a
+// core (a 1.6 GB database took 30 minutes to back up). One core keeps the
+// sidecar from starving the instance while removing that ceiling; it counts
+// against the tenant's limits.cpu budget, one core per instance pod.
 //
 // Checksum: since botocore ~1.36 the default (when_supported) attaches a
 // flexible checksum to every PutObject, which non-AWS S3-compatible backends
@@ -2239,6 +2243,7 @@ func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
 				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
 				corev1.ResourceMemory: resource.MustParse("1Gi"),
 			},
 		},

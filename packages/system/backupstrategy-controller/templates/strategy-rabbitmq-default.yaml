@@ -26,6 +26,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Rabbitmq
 metadata:
   name: cozy-default-rabbitmq
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   # The driver defers the run until the RabbitmqCluster reports AllReplicasReady
   # (a Go-side precondition), so a not-yet-ready broker surfaces a precise
@@ -97,9 +99,6 @@ spec:
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
               value: {{ .Values.backupStorage.forcePathStyle | quote }}
-          # command is load-bearing: the reused platform-migrations image's
-          # ENTRYPOINT is run-migrations.sh. See rabbitmqBackupClientImage in
-          # ../values.yaml.
           command: ["/bin/sh", "-c"]
           args:
             - |

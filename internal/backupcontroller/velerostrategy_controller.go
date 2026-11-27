@@ -190,6 +190,23 @@ func resolveRestoreTarget(restoreJob *backupsv1alpha1.RestoreJob, backup *backup
 	}
 }
 
+// tenantSubtreeLabelPrefix is the prefix of the label cozystack stamps on every
+// tenant namespace for each of its ancestors including itself
+// (packages/apps/tenant/templates/_helpers.tpl). The Cilium egress and
+// tenant-namespace delete policies use the same marker to decide whether one
+// tenant namespace is within another's subtree.
+const tenantSubtreeLabelPrefix = "tenant.cozystack.io/"
+
+// namespaceInTenantSubtree reports whether target is tenantNamespace itself or a
+// descendant tenant namespace, by the tenant.cozystack.io/<tenantNamespace>
+// subtree label. tenant-root carries no tenant.cozystack.io/* label of its own,
+// so a target of tenant-root is reachable only as an in-place restore
+// (IsCopy=false), which never reaches this check.
+func namespaceInTenantSubtree(target *corev1.Namespace, tenantNamespace string) bool {
+	_, ok := target.Labels[tenantSubtreeLabelPrefix+tenantNamespace]
+	return ok
+}
+
 // vmInstanceResources contains VM-specific underlying resources discovered during backup.
 type vmInstanceResources struct {
 	DataVolumes []backupsv1alpha1.DataVolumeResource `json:"dataVolumes,omitempty"`
@@ -307,12 +324,12 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	if len(veleroBackupList.Items) > 1 {
-		logger.Error(fmt.Errorf("too many Velero backups for BackupJob"), "found more than one Velero Backup referencing a single BackupJob as owner")
-		j.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-		if err := r.Status().Update(ctx, j); err != nil {
-			logger.Error(err, "failed to update BackupJob status")
+		names := make([]string, 0, len(veleroBackupList.Items))
+		for _, vb := range veleroBackupList.Items {
+			names = append(names, vb.Name)
 		}
-		return ctrl.Result{}, nil
+		sort.Strings(names)
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("more than one Velero Backup references this BackupJob: %s", strings.Join(names, ", ")))
 	}
 
 	veleroBackup := veleroBackupList.Items[0].DeepCopy()
@@ -360,6 +377,8 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
+		// The Velero backup is deleted by deleteFailedJobVeleroBackups once
+		// the Failed phase written here triggers the next reconcile.
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
 		return r.markBackupJobFailed(ctx, j, message)
 	}
@@ -627,6 +646,20 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 					target.Namespace))
 			}
 			return ctrl.Result{}, fmt.Errorf("failed to check target namespace %q: %w", target.Namespace, err)
+		}
+
+		// The target namespace must be within the requesting tenant's subtree.
+		// A RestoreJob lives in its tenant's namespace, and every tenant
+		// namespace carries a tenant.cozystack.io/<ancestor> label for each of
+		// its ancestors including itself. A target lacking
+		// tenant.cozystack.io/<restoreJob.Namespace> is a different tenant, a
+		// parent, a sibling or a system namespace: refusing here keeps the
+		// Velero Restore, which runs with cluster privileges, from writing a
+		// tenant's backup into another tenant's namespace.
+		if !namespaceInTenantSubtree(targetNS, restoreJob.Namespace) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+				"target namespace %q is not within tenant %q; a cross-tenant restore is not allowed",
+				target.Namespace, restoreJob.Namespace))
 		}
 	}
 

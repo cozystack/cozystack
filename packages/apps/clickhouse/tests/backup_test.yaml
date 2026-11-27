@@ -292,3 +292,42 @@ tests:
       - notMatchRegex:
           path: stringData["backup.sh"]
           pattern: 'echo DB_LIST='
+
+  # A strategy attempt that fails mid-upload leaves its local backup behind,
+  # and with the upstream defaults the sidecar would keep it forever and push
+  # it to the bucket on its next start as an archive no Backup refers to. The
+  # sidecar must neither resume uploads at start nor keep local copies once an
+  # upload succeeds, on either S3 flow.
+  - it: "sidecar drops local backups after upload and does not resume uploads at start"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="BACKUPS_TO_KEEP_LOCAL")].value
+          value: "-1"
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="API_COMPLETE_RESUMABLE_AFTER_RESTART")].value
+          value: "false"
+
+  - it: "legacy flow: sidecar drops local backups after upload and does not resume uploads at start"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="BACKUPS_TO_KEEP_LOCAL")].value
+          value: "-1"
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="API_COMPLETE_RESUMABLE_AFTER_RESTART")].value
+          value: "false"

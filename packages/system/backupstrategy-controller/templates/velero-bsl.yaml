@@ -12,6 +12,8 @@ kind: BackupStorageLocation
 metadata:
   name: cozy-default
   namespace: {{ .Values.velero.namespace }}
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   provider: aws
   # default=false: do not silently displace an admin-provisioned default
