@@ -430,15 +430,7 @@ func (r *RestoreJobReconciler) createKubernetesHelmReleases(ctx context.Context,
 		if !force {
 			continue
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		patch, merr := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{
-			"reconcile.fluxcd.io/requestedAt": now,
-			"reconcile.fluxcd.io/forceAt":     now,
-		}}})
-		if merr != nil {
-			return merr
-		}
-		if _, err := r.Resource(helmReleaseGVR).Namespace(ns).Patch(ctx, obj.GetName(), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		if _, err := r.Resource(helmReleaseGVR).Namespace(ns).Patch(ctx, obj.GetName(), types.MergePatchType, helmForceUpgradePatch(time.Now()), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("force HelmRelease %s/%s to reconcile: %w", ns, obj.GetName(), err)
 		}
 	}
