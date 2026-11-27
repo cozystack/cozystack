@@ -1,0 +1,44 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: rustfs
+spec:
+  application:
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"host":{"description":"The hostname used to access the S3 endpoint externally (defaults to 's3' subdomain for the tenant host).","type":"string","default":""},"replicas":{"description":"Number of RustFS nodes. Distributed mode needs at least 2; the node count cannot be changed after the first deployment.","type":"integer","default":4},"size":{"description":"Persistent Volume size of each node.","default":"10Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":""},"resources":{"description":"Explicit CPU and memory configuration of each node. When omitted, the preset defined in `resourcesPreset` is applied.","type":"object","default":{},"properties":{"cpu":{"description":"Number of CPU cores allocated.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Amount of memory allocated.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"resourcesPreset":{"description":"Default sizing preset used when `resources` is omitted.","type":"string","default":"small","enum":["t1.nano","t1.micro","t1.small","t1.medium","t1.large","t1.xlarge","t1.2xlarge","t1.4xlarge","c1.nano","c1.micro","c1.small","c1.medium","c1.large","c1.xlarge","c1.2xlarge","c1.4xlarge","s1.nano","s1.micro","s1.small","s1.medium","s1.large","s1.xlarge","s1.2xlarge","s1.4xlarge","u1.nano","u1.micro","u1.small","u1.medium","u1.large","u1.xlarge","u1.2xlarge","u1.4xlarge","m1.nano","m1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m1.2xlarge","m1.4xlarge","nano","micro","small","medium","large","xlarge","2xlarge"]}}}
+    kind: RustFS
+    singular: rustfs
+    plural: rustfs
+  release:
+    prefix: ""
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-rustfs-application-default-rustfs
+      namespace: cozy-system
+    labels:
+      sharding.fluxcd.io/key: tenants
+      internal.cozystack.io/tenantmodule: "true"
+  dashboard:
+    description: RustFS
+    icon: PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiNjMjQxMGMiLz48cGF0aCBkPSJNMjAgNDhWMTZoMTRhOSA5IDAgMCAxIDMgMTcuNUw0NSA0OGgtN2wtNi41LTEySDI2djEyem02LTE4aDhhMy41IDMuNSAwIDAgMCAwLTdoLTh6IiBmaWxsPSIjZmZmIi8+PC9zdmc+Cg==
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "host"], ["spec", "replicas"], ["spec", "size"], ["spec", "storageClass"], ["spec", "resources"], ["spec", "resourcesPreset"]]
+    category: Administration
+    singular: RustFS
+    plural: RustFS
+    name: rustfs
+    module: true
+  secrets:
+    exclude: []
+    include:
+      - resourceNames:
+          - rustfs-credentials
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - rustfs-svc
+  ingresses:
+    exclude: []
+    include:
+      - resourceNames:
+          - rustfs

@@ -1,0 +1,10 @@
+1. Watch all pods come up
+  kubectl get pods -w -l app.kubernetes.io/name={{ include "rustfs.name" . }} -n {{ .Release.Namespace }}
+{{- if .Values.ingress.enabled }}
+2. Visit the dashboard
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- end }}

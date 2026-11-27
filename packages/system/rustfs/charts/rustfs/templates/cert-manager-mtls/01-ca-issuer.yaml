@@ -1,0 +1,9 @@
+{{- if and .Values.mtls.enabled (not .Values.mtls.existingIssuerRef.enabled) }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ include "rustfs.fullname" . }}-selfsigned-issuer
+spec:
+  selfSigned: {}
+{{- end }}
+

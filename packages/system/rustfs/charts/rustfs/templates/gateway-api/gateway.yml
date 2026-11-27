@@ -1,0 +1,40 @@
+{{- if and .Values.gatewayApi.enabled (empty .Values.gatewayApi.existingGateway.name) }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "rustfs.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+spec:
+  gatewayClassName: {{ .Values.gatewayApi.gatewayClass }}
+  {{- with .Values.gatewayApi.listeners }}
+  listeners:
+  {{- if .http }}
+    - name: {{ .http.name }}
+      port: {{ .http.port }}
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+  {{- end }}
+  {{- if .https }}
+    - name: {{ .https.name }}
+      port: {{ .https.port }}
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ include "rustfs.fullname" $ }}-tls
+            kind: Secret
+  {{- end }}
+  {{- if .tls.enabled }}
+    - name: {{ .tls.name }}
+      port: {{ .tls.port }}
+      protocol: TLS
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: Same
+  {{- end }}
+  {{- end }}
+{{- end }}
