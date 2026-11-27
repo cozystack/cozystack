@@ -355,6 +355,7 @@ func newTestRestoreJobReconcilerWithDynamic(t *testing.T, dynamicObjects []runti
 	fakeClient := clientfake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objects...).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
 		Build()
 
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme, dynamicObjects...)
@@ -1510,7 +1511,13 @@ func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
 				}
 				restoreJob.Spec.Options = &runtime.RawExtension{Raw: raw}
 			}
-			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			// The target namespace sits in the source tenant's subtree (it carries
+			// the tenant.cozystack.io/<sourceNS> label), so the cross-tenant guard
+			// admits it and these cases exercise the rename guard behind it.
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:   targetNS,
+				Labels: map[string]string{tenantSubtreeLabelPrefix + sourceNS: ""},
+			}}
 
 			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup, targetNamespace)
 			reconciler.Client = newRestoreJobTestClient(t, restoreJob, backup, targetNamespace)
@@ -1619,7 +1626,13 @@ func TestReconcileVeleroRestore_RenameGuard_InFlight(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "restore-modifiers-tenant-src-src-restore", Namespace: veleroNamespace, Labels: owningLabels},
 			}
 			strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
-			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+			// The target namespace sits in the source tenant's subtree (it carries
+			// the tenant.cozystack.io/<sourceNS> label), so the cross-tenant guard
+			// admits it and these cases exercise the rename guard behind it.
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:   targetNS,
+				Labels: map[string]string{tenantSubtreeLabelPrefix + sourceNS: ""},
+			}}
 
 			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil)
 			testScheme := runtime.NewScheme()
@@ -2053,5 +2066,147 @@ func TestPrepareForRestore_KeepOriginalPVC_CacheLagsBehindWrites(t *testing.T) {
 	}
 	if f.dataVolumeExists(t, r) {
 		t.Error("DataVolume was not deleted after the rename completed")
+	}
+}
+
+func TestNamespaceInTenantSubtree(t *testing.T) {
+	tests := []struct {
+		name            string
+		tenantNamespace string
+		targetLabels    map[string]string
+		want            bool
+	}{
+		{
+			name:            "the tenant's own namespace carries its self label",
+			tenantNamespace: "tenant-root-foo",
+			targetLabels:    map[string]string{"tenant.cozystack.io/tenant-root": "", "tenant.cozystack.io/tenant-root-foo": ""},
+			want:            true,
+		},
+		{
+			name:            "a descendant carries the ancestor label",
+			tenantNamespace: "tenant-root",
+			targetLabels:    map[string]string{"tenant.cozystack.io/tenant-root": "", "tenant.cozystack.io/tenant-root-child": ""},
+			want:            true,
+		},
+		{
+			name:            "a sibling lacks the ancestor label",
+			tenantNamespace: "tenant-root-a",
+			targetLabels:    map[string]string{"tenant.cozystack.io/tenant-root": "", "tenant.cozystack.io/tenant-root-b": ""},
+			want:            false,
+		},
+		{
+			name:            "a parent is not within the child's subtree",
+			tenantNamespace: "tenant-root-child",
+			targetLabels:    map[string]string{"tenant.cozystack.io/tenant-root": ""},
+			want:            false,
+		},
+		{
+			name:            "a system namespace carries no tenant label",
+			tenantNamespace: "tenant-root",
+			targetLabels:    nil,
+			want:            false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: tt.targetLabels}}
+			if got := namespaceInTenantSubtree(ns, tt.tenantNamespace); got != tt.want {
+				t.Errorf("namespaceInTenantSubtree() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileVeleroRestore_CrossTenantTargetRejected(t *testing.T) {
+	// A tenant may restore-copy only within its own namespace subtree
+	// (tenant.cozystack.io/<ancestor> label). A target outside it - a different
+	// tenant, a parent, a sibling or a system namespace - must be refused before
+	// any Velero Restore is created. GHSA-vq9c-8j6p-r6mp / GHSA-4295-xcmq-8h9h.
+	tests := []struct {
+		name         string
+		sourceNS     string
+		targetNS     string
+		targetLabels map[string]string
+	}{
+		{
+			name:         "a sibling tenant namespace",
+			sourceNS:     "tenant-root-a",
+			targetNS:     "tenant-root-b",
+			targetLabels: map[string]string{"tenant.cozystack.io/tenant-root": "", "tenant.cozystack.io/tenant-root-b": ""},
+		},
+		{
+			name:         "a system namespace",
+			sourceNS:     "tenant-root",
+			targetNS:     "kube-system",
+			targetLabels: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restoreJob, backup, _, _, opts := inPlaceVMRestoreWithoutKeep(tt.sourceNS)
+			opts.TargetNamespace = tt.targetNS
+			rawOpts, err := json.Marshal(opts)
+			if err != nil {
+				t.Fatalf("marshal options: %v", err)
+			}
+			restoreJob.Spec.Options = &runtime.RawExtension{Raw: rawOpts}
+			// StartedAt stays nil: without the tenant check the reconcile would
+			// advance to Running and requeue rather than fail, so a Failed phase
+			// carrying the refusal message is unambiguously this guard's doing.
+
+			targetNamespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.targetNS, Labels: tt.targetLabels},
+			}
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup, targetNamespace)
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("phase = %q, want %q (cross-tenant restore must be refused)", got.Status.Phase, backupsv1alpha1.RestoreJobPhaseFailed)
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil || !strings.Contains(ready.Message, "is not within tenant") {
+				t.Errorf("Ready condition = %+v, want a message containing %q", ready, "is not within tenant")
+			}
+		})
+	}
+}
+
+func TestReconcileVeleroRestore_DescendantTargetPassesTenantCheck(t *testing.T) {
+	// A copy into a descendant namespace must pass the tenant check and proceed,
+	// proving the guard does not break legitimate within-tenant cross-namespace
+	// restore. With StartedAt nil a passing check advances to Running+requeue.
+	restoreJob, backup, _, _, opts := inPlaceVMRestoreWithoutKeep("tenant-root")
+	opts.TargetNamespace = "tenant-root-child"
+	rawOpts, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal options: %v", err)
+	}
+	restoreJob.Spec.Options = &runtime.RawExtension{Raw: rawOpts}
+	targetNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "tenant-root-child",
+			Labels: map[string]string{"tenant.cozystack.io/tenant-root": "", "tenant.cozystack.io/tenant-root-child": ""},
+		},
+	}
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup, targetNamespace)
+	ctx := context.Background()
+	if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+		t.Fatalf("reconcileVeleroRestore() error = %v", err)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+		t.Fatalf("get RestoreJob: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+		t.Fatalf("within-tenant descendant restore was refused: phase=%q, ready=%+v", got.Status.Phase, ready)
 	}
 }
