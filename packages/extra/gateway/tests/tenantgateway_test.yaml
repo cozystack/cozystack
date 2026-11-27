@@ -259,6 +259,21 @@ tests:
             - cozy-dashboard
             - cozy-keycloak
 
+  - it: a tenant other than the publishing one never lists the platform namespaces
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-attached-namespaces: "cozy-cert-manager,cozy-dashboard,cozy-keycloak"
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - notExists:
+          path: spec.attachedNamespaces
+
   - it: the publishing tenant renders the default tlsPassthroughServices the platform exposes
     set:
       _cluster:
