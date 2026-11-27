@@ -299,6 +299,20 @@ step_line() {
 # merged close together must not finalize at once. The group is built from the
 # job's own condition, so a PR that skips finalize never joins it, and every
 # merged release waits its turn instead of the waiting one being cancelled.
+# Runs finalize's chart step as the workflow carries it, in <tmp>/tree, against
+# the stub skopeo, helm and yq in <tmp>/bin, and prints ok or failed: the
+# runner's translator makes every function here return 0, so the outcome has to
+# travel on stdout.
+#   run_chart_step <tmp> <case> <MAKE_LATEST> <CHART_EXISTS> [<PUSH_FAILS>]
+run_chart_step() {
+  if (cd "$1/tree" && PATH="$1/bin:$PATH" TMP_DIR="$1" CALLS="$1/$2" TAG=v1.2.3 REGISTRY=ghcr.io/example \
+    MAKE_LATEST="$3" CHART_EXISTS="$4" PUSH_FAILS="${5:-}" bash -e "$1/step.sh" > "$1/$2.out" 2>&1); then
+    echo ok
+  else
+    echo failed
+  fi
+}
+
 @test "finalize runs one release at a time, and only release PRs share the queue" {
   [ "$(yq '.jobs.finalize.concurrency.cancel-in-progress' "$FINALIZE")" = false ]
   [ "$(yq '.jobs.finalize.concurrency.queue' "$FINALIZE")" = max ]
@@ -307,6 +321,55 @@ step_line() {
   [ "$(yq '.jobs.finalize.concurrency.group' "$FINALIZE")" = "\${{ ($cond) && 'release-finalize' || format('release-finalize-skipped-{0}', github.event.pull_request.number) }}" ]
 }
 
+
+# helm package does not give the same bytes twice, so a re-run that pushed the
+# chart again would move cozy-installer:X.Y.Z to another digest.
+@test "finalize pushes the stable chart once, and a re-run keeps the first push" {
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/bin" "$tmp/tree"
+  yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" > "$tmp/step.sh"
+  cat > "$tmp/bin/helm" <<'EOF'
+#!/bin/sh
+echo "helm $*" >> "$CALLS"
+case "$1" in
+  package) echo "Successfully packaged chart and saved it to: $TMP_DIR/cozy-installer.tgz" ;;
+  push) [ -z "${PUSH_FAILS:-}" ] || exit 1 ;;
+esac
+EOF
+  # CHART_EXISTS: 1 finds the tag, unset answers as GHCR does for a missing tag,
+  # and error answers with any other failure.
+  cat > "$tmp/bin/skopeo" <<'EOF'
+#!/bin/sh
+echo "skopeo $*" >> "$CALLS"
+[ "$1" = inspect ] || exit 0
+case "${CHART_EXISTS:-}" in
+  1) echo '{"schemaVersion":2}' ;;
+  error) echo 'toomanyrequests: retry-after: 60s' >&2; exit 1 ;;
+  *) echo 'reading manifest 1.2.3 in ghcr.io/example/cozy-installer: manifest unknown' >&2; exit 2 ;;
+esac
+EOF
+  printf '#!/bin/sh\necho "yq $*" >> "$CALLS"\n' > "$tmp/bin/yq"
+  chmod +x "$tmp/bin/helm" "$tmp/bin/skopeo" "$tmp/bin/yq"
+
+  [ "$(run_chart_step "$tmp" first true '')" = ok ]
+  grep -qx "helm push $tmp/cozy-installer.tgz oci://ghcr.io/example" "$tmp/first"
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/first"
+
+  [ "$(run_chart_step "$tmp" rerun true 1)" = ok ]
+  if grep -q '^helm ' "$tmp/rerun"; then echo "FAIL: a re-run packaged or pushed the chart again"; false; fi
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/rerun"
+
+  [ "$(run_chart_step "$tmp" older false '')" = ok ]
+  grep -q '^helm push ' "$tmp/older"
+  if grep -qF 'cozy-installer:latest' "$tmp/older"; then echo "FAIL: an older patch moved cozy-installer:latest"; false; fi
+
+  [ "$(run_chart_step "$tmp" failing true '' 1)" = failed ]
+
+  # A lookup that fails for another reason says nothing about the tag.
+  [ "$(run_chart_step "$tmp" lookup-error true error)" = failed ]
+  if grep -q '^helm ' "$tmp/lookup-error"; then echo "FAIL: a failed lookup packaged or pushed the chart"; false; fi
+  rm -rf "$tmp"
+}
 @test "finalize checkout does not persist credentials so the app-token tag push triggers tags.yaml" {
   block="$(job_block finalize "$FINALIZE")"
   [ -n "$block" ]
