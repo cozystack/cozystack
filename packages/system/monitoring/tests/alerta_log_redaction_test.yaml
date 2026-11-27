@@ -1,0 +1,74 @@
+suite: alerta keeps its credentials out of the container log
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+    gateway-enabled: "false"
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+
+tests:
+  - it: ships an entrypoint without the environment dump and with key creation silenced
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - notMatchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^env'
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^  alertad key --all >/dev/null$'
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^    alertad key --username "\$\{ADMIN_USER\}" --key "\$\{ADMIN_KEY\}" --duration "\$\{MAXAGE\}" >/dev/null \|\| true$'
+
+  - it: ships an nginx config that masks the api-key parameter in the access log
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: 'map \$request \$request_redacted'
+      - matchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: '"\$request_redacted" \$status'
+      - notMatchRegex:
+          path: data["nginx.conf.j2"]
+          pattern: '"\$request" '
+
+  - it: mounts both files over the image's copies
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /usr/local/bin/docker-entrypoint.sh
+            subPath: docker-entrypoint.sh
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /app/nginx.conf.j2
+            subPath: nginx.conf.j2
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: alerta-entrypoint
+            configMap:
+              name: alerta-entrypoint
+              defaultMode: 0755

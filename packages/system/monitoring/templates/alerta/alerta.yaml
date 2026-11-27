@@ -166,6 +166,25 @@ data:
       })
       .constant('colors', {});
 ---
+{{- /*
+  The image's entrypoint prints the whole environment and the admin API keys
+  it creates, and its nginx logs the api-key query parameter, so Alerta's
+  credentials end up in the container log, which is readable at lower tenant
+  tiers than the credentials themselves. Both files are mounted over the
+  image's copies with that output removed; see the headers in files/alerta/.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alerta-entrypoint
+  labels:
+    app: alerta
+data:
+  docker-entrypoint.sh: |-
+{{ .Files.Get "files/alerta/docker-entrypoint.sh" | trimSuffix "\n" | indent 4 }}
+  nginx.conf.j2: |-
+{{ .Files.Get "files/alerta/nginx.conf.j2" | trimSuffix "\n" | indent 4 }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -298,6 +317,12 @@ spec:
             - name: alerta-server-config
               mountPath: /app/alertad.conf
               subPath: alertad.conf
+            - name: alerta-entrypoint
+              mountPath: /usr/local/bin/docker-entrypoint.sh
+              subPath: docker-entrypoint.sh
+            - name: alerta-entrypoint
+              mountPath: /app/nginx.conf.j2
+              subPath: nginx.conf.j2
       volumes:
         - name: alerta-config
           configMap:
@@ -308,6 +333,10 @@ spec:
             items:
               - key: alertad.conf
                 path: alertad.conf
+        - name: alerta-entrypoint
+          configMap:
+            name: alerta-entrypoint
+            defaultMode: 0755
 {{- if ne $gatewayEnabled "true" }}
 ---
 apiVersion: networking.k8s.io/v1

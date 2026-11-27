@@ -1,0 +1,77 @@
+{#- nginx.conf.j2 of docker.io/alerta/alerta-web:9.1.0
+    (sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39),
+    Apache-2.0, mounted over the image's copy by templates/alerta/alerta.yaml.
+    Changed from upstream only so that the access log masks the api-key query
+    parameter Alertmanager and the Telegram webhook authenticate with. #}
+
+worker_processes {{ env.NGINX_WORKER_PROCESSES }};
+pid /tmp/nginx.pid;
+
+daemon off;
+{%- if env.DEBUG %}
+error_log /dev/stderr debug;
+{%- else %}
+error_log /dev/stderr {{ env.LOG_LEVEL|lower or 'warn' }};
+{%- endif %}
+
+events {
+    worker_connections {{ env.NGINX_WORKER_CONNECTIONS }};
+}
+
+http {
+    client_body_temp_path /tmp/client_body;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    scgi_temp_path /tmp/scgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+
+    include /etc/nginx/mime.types;
+
+    server_tokens off;
+
+    gzip on;
+    gzip_disable "msie6";
+    client_max_body_size {{ env.NGINX_MAX_BODY_SIZE or '2M' }};
+
+    map $request $request_redacted {
+        "~*^(?<redact_pre>.*[?&]api-key=)[^&\s]*(?<redact_post>.*)$" "${redact_pre}REDACTED${redact_post}";
+        default $request;
+    }
+
+    log_format main '$remote_addr - $remote_user [$time_local] '
+        '"$request_redacted" $status $body_bytes_sent '
+        '"$http_referer" "$http_user_agent" - $request_time '
+        'x_forwarded_for=$http_x_forwarded_for host=$host '
+        '$request_id $sent_http_x_request_id';
+
+    default_type application/octet-stream;
+
+    upstream backend {
+        server 127.0.0.1:29000;
+    }
+
+    server {
+        listen 8080 default_server;
+        {%- if env.ENABLE_IPV6 is defined and env.ENABLE_IPV6|lower == 'true' %}
+        listen [::]:8080 default_server;
+        {%- endif %}
+
+        access_log /dev/stdout main;
+
+        location /api {
+            include /etc/nginx/uwsgi_params;
+            uwsgi_pass backend;
+
+            uwsgi_param Host $host;
+            uwsgi_param X-Real-IP $remote_addr;
+            uwsgi_param X-Forwarded-For $proxy_add_x_forwarded_for;
+            uwsgi_param X-Forwarded-Proto $http_x_forwarded_proto;
+        }
+
+        root /web;
+        index index.html;
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}
