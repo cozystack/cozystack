@@ -189,6 +189,61 @@ step_line() {
   printf '%s\n' "$chart_run" | code_lines | grep -A3 -F 'if [ "${MAKE_LATEST}" = "true" ]; then' | grep -qF 'cozy-installer:latest'
 }
 
+# helm package does not give the same bytes twice, so a re-run that pushed the
+# chart again would move cozy-installer:X.Y.Z to another digest. The step runs
+# here as the workflow carries it, against stub skopeo, helm and yq.
+@test "finalize pushes the stable chart once, and a re-run keeps the first push" {
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/bin" "$tmp/tree"
+  yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" > "$tmp/step.sh"
+  cat > "$tmp/bin/helm" <<'EOF'
+#!/bin/sh
+echo "helm $*" >> "$CALLS"
+case "$1" in
+  package) echo "Successfully packaged chart and saved it to: $TMP_DIR/cozy-installer.tgz" ;;
+  push) [ -z "${PUSH_FAILS:-}" ] || exit 1 ;;
+esac
+EOF
+  # CHART_EXISTS: 1 finds the tag, unset answers as GHCR does for a missing tag,
+  # and error answers with any other failure.
+  cat > "$tmp/bin/skopeo" <<'EOF'
+#!/bin/sh
+echo "skopeo $*" >> "$CALLS"
+[ "$1" = inspect ] || exit 0
+case "${CHART_EXISTS:-}" in
+  1) echo '{"schemaVersion":2}' ;;
+  error) echo 'toomanyrequests: retry-after: 60s' >&2; exit 1 ;;
+  *) echo 'reading manifest 1.2.3 in ghcr.io/example/cozy-installer: manifest unknown' >&2; exit 2 ;;
+esac
+EOF
+  printf '#!/bin/sh\necho "yq $*" >> "$CALLS"\n' > "$tmp/bin/yq"
+  chmod +x "$tmp/bin/helm" "$tmp/bin/skopeo" "$tmp/bin/yq"
+  # run_chart_step <case> <MAKE_LATEST> <CHART_EXISTS> [<PUSH_FAILS>]
+  run_chart_step() {
+    (cd "$tmp/tree" && PATH="$tmp/bin:$PATH" TMP_DIR="$tmp" CALLS="$tmp/$1" TAG=v1.2.3 REGISTRY=ghcr.io/example \
+      MAKE_LATEST="$2" CHART_EXISTS="$3" PUSH_FAILS="${4:-}" bash -e "$tmp/step.sh")
+  }
+
+  run_chart_step first true ''
+  grep -qx 'helm push .*/cozy-installer.tgz oci://ghcr.io/example' "$tmp/first"
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/first"
+
+  run_chart_step rerun true 1
+  if grep -q '^helm ' "$tmp/rerun"; then echo "FAIL: a re-run packaged or pushed the chart again"; false; fi
+  grep -qF 'docker://ghcr.io/example/cozy-installer:1.2.3 docker://ghcr.io/example/cozy-installer:latest' "$tmp/rerun"
+
+  run_chart_step older false ''
+  grep -q '^helm push ' "$tmp/older"
+  if grep -qF 'cozy-installer:latest' "$tmp/older"; then echo "FAIL: an older patch moved cozy-installer:latest"; false; fi
+
+  if run_chart_step failing true '' 1; then echo "FAIL: a failed helm push did not fail the step"; false; fi
+
+  # A lookup that fails for another reason says nothing about the tag.
+  if run_chart_step lookup-error true error; then echo "FAIL: a failed lookup did not fail the step"; false; fi
+  if grep -q '^helm ' "$tmp/lookup-error"; then echo "FAIL: a failed lookup packaged or pushed the chart"; false; fi
+  rm -rf "$tmp"
+}
+
 @test "promote rejects an old target base before publishing a candidate" {
   validate="$(step_block 'Validate rc is promotable' "$PROMOTE")"
   prepare_line="$(step_line 'Prepare stable branch' "$PROMOTE")"
