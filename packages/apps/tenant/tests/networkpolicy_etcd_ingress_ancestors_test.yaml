@@ -1,0 +1,336 @@
+suite: tenant etcd and ingress egress reaches all ancestors
+templates:
+  - templates/networkpolicy.yaml
+set:
+  etcd: false
+  ingress: false
+tests:
+  - it: allows tenant-root at depth one
+    release:
+      name: tenant-team
+      namespace: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+
+  - it: allows root and parent at depth two
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    set:
+      _namespace.etcd: tenant-root
+      _namespace.ingress: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: allows all three ancestors at depth three
+    release:
+      name: tenant-leaf
+      namespace: tenant-team-child
+    set:
+      _namespace.etcd: tenant-team
+      _namespace.ingress: tenant-team-child
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-leaf-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child-leaf": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team-child
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team-child
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team-child
+
+  - it: keeps root reachable with locally owned services at depth one
+    release:
+      name: tenant-team
+      namespace: tenant-root
+    set:
+      etcd: true
+      ingress: true
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+
+  - it: keeps every ancestor reachable with locally owned services
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    set:
+      etcd: true
+      ingress: true
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: keeps ancestors reachable with local etcd
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    set:
+      etcd: true
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: keeps ancestors reachable with local ingress
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    set:
+      ingress: true
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: allows ancestors when owners are missing
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: allows ancestors with a null namespace map
+    release:
+      name: tenant-child
+      namespace: tenant-team
+    set:
+      _namespace: null
+    documentSelector:
+      path: metadata.name
+      value: tenant-team-child-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-team-child": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vminsert
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": etcd
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-team
+
+  - it: omits ancestor rules for tenant-root
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    set:
+      etcd: true
+      ingress: true
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-egress
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-root": ""

@@ -54,30 +54,19 @@ spec:
     {{- end }}
     {{- end }}
   {{- end }}    
-  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  {{- $ancestors := include "tenant.ancestorNamespaces" (include "tenant.name" .) | fromJsonArray }}
+  {{- with $ancestors }}
   - toEndpoints:
-    {{- if hasPrefix "tenant-" .Release.Namespace }}
-    {{- $parts := splitList "-" .Release.Namespace }}
-    {{- range $i, $v := $parts }}
-    {{- if ne $i 0 }}
+    {{- range . }}
     - matchLabels:
         "k8s:app.kubernetes.io/instance": "etcd"
-        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+        "k8s:io.kubernetes.pod.namespace": {{ . }}
     {{- end }}
-    {{- end }}
-    {{- end }}
-  {{- end }}
-  {{- if ne (include "tenant.name" .) "tenant-root" }}
   - toEndpoints:
-    {{- if hasPrefix "tenant-" .Release.Namespace }}
-    {{- $parts := splitList "-" .Release.Namespace }}
-    {{- range $i, $v := $parts }}
-    {{- if ne $i 0 }}
+    {{- range . }}
     - matchLabels:
         cozystack.io/service: ingress
-        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
-    {{- end }}
-    {{- end }}
+        "k8s:io.kubernetes.pod.namespace": {{ . }}
     {{- end }}
   {{- end }}
 ---
