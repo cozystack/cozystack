@@ -210,6 +210,19 @@ spec:
           spec:
             description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
             properties:
+              addressReuseGracePeriodSeconds:
+                description: |-
+                  AddressReuseGracePeriodSeconds is the duration in seconds for which an
+                  IP address should be kept reserved after being released, preventing
+                  immediate reuse. This helps avoid IP conflicts during rolling upgrades
+                  where old and new nodes may briefly coexist, and prevents ARP cache
+                  issues on network switches.
+                  If not set or set to 0, addresses are available for reuse immediately.
+                  During the grace period the IPAddress and claim deletions are held, the downstream consumers using foreground cascading
+                  deletion through the claim will see deletion of upstream resources delayed by up to AddressReuseGracePeriodSeconds.
+                format: int32
+                minimum: 0
+                type: integer
               addresses:
                 description: |-
                   Addresses is a list of IP addresses that can be assigned. This set of
@@ -270,6 +283,157 @@ spec:
                   used:
                     description: |-
                       Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    clusterctl.cluster.x-k8s.io/move-hierarchy: ""
+  name: globalinclusterprefixpools.ipam.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capi-ipam-in-cluster-webhook-service
+          namespace: capi-ipam-in-cluster-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+  group: ipam.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: GlobalInClusterPrefixPool
+    listKind: GlobalInClusterPrefixPoolList
+    plural: globalinclusterprefixpools
+    singular: globalinclusterprefixpool
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: List of prefixes to allocate sub-prefixes from
+      jsonPath: .spec.prefixes
+      name: Prefixes
+      type: string
+    - description: Count of allocatable sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GlobalInClusterPrefixPool is the Schema for the global inclusterprefixpools API.
+          This pool type is cluster scoped. IPAddressClaims can reference
+          pools of this type from any namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterPrefixPoolSpec defines the desired state of InClusterPrefixPool.
+            properties:
+              allocationPrefixLength:
+                default: 64
+                description: |-
+                  AllocationPrefixLength is the prefix length of each allocated
+                  sub-prefix (e.g. 64 means /64 allocations). Defaults to 64.
+                  Must be >= the prefix length of each entry in Prefixes and <= 128.
+                maximum: 128
+                minimum: 1
+                type: integer
+              excludedPrefixes:
+                description: |-
+                  ExcludedPrefixes lists IPs/CIDRs/ranges to exclude from allocation.
+                  Any candidate sub-prefix overlapping an excluded entry is skipped.
+                items:
+                  type: string
+                type: array
+              gateway:
+                description: |-
+                  Gateway is the next-hop IPv6 address carried unchanged to every
+                  allocated IPAddress.Spec.Gateway. Unlike IP pools, the gateway does
+                  NOT block any prefix from being allocated — it is informational only.
+                type: string
+              prefixes:
+                description: |-
+                  Prefixes is a list of IPv6 CIDRs from which sub-prefixes are allocated.
+                  Each entry must be a network-aligned CIDR (e.g. "fd00::/48").
+                items:
+                  type: string
+                type: array
+            required:
+            - prefixes
+            type: object
+          status:
+            description: InClusterPrefixPoolStatus defines the observed state of InClusterPrefixPool.
+            properties:
+              ipAddresses:
+                description: |-
+                  Addresses reports the count of total, free, and used prefixes in the pool.
+                  The JSON tag is "ipAddresses" to match the InClusterIPPool status shape,
+                  keeping a consistent status contract across pool types.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated sub-prefixes.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      OutOfRange is the count of allocated prefixes currently non-allocatable
+                      under spec (outside spec.Prefixes, overlapped by spec.ExcludedPrefixes,
+                      or with the wrong prefix length).
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of allocatable sub-prefixes in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated sub-prefixes.
                       Counts greater than int can contain will report as math.MaxInt.
                     type: integer
                 required:
@@ -487,6 +651,19 @@ spec:
           spec:
             description: InClusterIPPoolSpec defines the desired state of InClusterIPPool.
             properties:
+              addressReuseGracePeriodSeconds:
+                description: |-
+                  AddressReuseGracePeriodSeconds is the duration in seconds for which an
+                  IP address should be kept reserved after being released, preventing
+                  immediate reuse. This helps avoid IP conflicts during rolling upgrades
+                  where old and new nodes may briefly coexist, and prevents ARP cache
+                  issues on network switches.
+                  If not set or set to 0, addresses are available for reuse immediately.
+                  During the grace period the IPAddress and claim deletions are held, the downstream consumers using foreground cascading
+                  deletion through the claim will see deletion of upstream resources delayed by up to AddressReuseGracePeriodSeconds.
+                format: int32
+                minimum: 0
+                type: integer
               addresses:
                 description: |-
                   Addresses is a list of IP addresses that can be assigned. This set of
@@ -547,6 +724,155 @@ spec:
                   used:
                     description: |-
                       Used is the count of allocated IPs in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                required:
+                - free
+                - outOfRange
+                - total
+                - used
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    cluster.x-k8s.io/provider: ipam-in-cluster
+    clusterctl.cluster.x-k8s.io/move-hierarchy: ""
+  name: inclusterprefixpools.ipam.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capi-ipam-in-cluster-webhook-service
+          namespace: capi-ipam-in-cluster-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+  group: ipam.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: InClusterPrefixPool
+    listKind: InClusterPrefixPoolList
+    plural: inclusterprefixpools
+    singular: inclusterprefixpool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: List of prefixes to allocate sub-prefixes from
+      jsonPath: .spec.prefixes
+      name: Prefixes
+      type: string
+    - description: Count of allocatable sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.total
+      name: Total
+      type: integer
+    - description: Count of unallocated sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.free
+      name: Free
+      type: integer
+    - description: Count of allocated sub-prefixes in the pool
+      jsonPath: .status.ipAddresses.used
+      name: Used
+      type: integer
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: InClusterPrefixPool is the Schema for the inclusterprefixpools
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: InClusterPrefixPoolSpec defines the desired state of InClusterPrefixPool.
+            properties:
+              allocationPrefixLength:
+                default: 64
+                description: |-
+                  AllocationPrefixLength is the prefix length of each allocated
+                  sub-prefix (e.g. 64 means /64 allocations). Defaults to 64.
+                  Must be >= the prefix length of each entry in Prefixes and <= 128.
+                maximum: 128
+                minimum: 1
+                type: integer
+              excludedPrefixes:
+                description: |-
+                  ExcludedPrefixes lists IPs/CIDRs/ranges to exclude from allocation.
+                  Any candidate sub-prefix overlapping an excluded entry is skipped.
+                items:
+                  type: string
+                type: array
+              gateway:
+                description: |-
+                  Gateway is the next-hop IPv6 address carried unchanged to every
+                  allocated IPAddress.Spec.Gateway. Unlike IP pools, the gateway does
+                  NOT block any prefix from being allocated — it is informational only.
+                type: string
+              prefixes:
+                description: |-
+                  Prefixes is a list of IPv6 CIDRs from which sub-prefixes are allocated.
+                  Each entry must be a network-aligned CIDR (e.g. "fd00::/48").
+                items:
+                  type: string
+                type: array
+            required:
+            - prefixes
+            type: object
+          status:
+            description: InClusterPrefixPoolStatus defines the observed state of InClusterPrefixPool.
+            properties:
+              ipAddresses:
+                description: |-
+                  Addresses reports the count of total, free, and used prefixes in the pool.
+                  The JSON tag is "ipAddresses" to match the InClusterIPPool status shape,
+                  keeping a consistent status contract across pool types.
+                properties:
+                  free:
+                    description: |-
+                      Free is the count of unallocated sub-prefixes.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  outOfRange:
+                    description: |-
+                      OutOfRange is the count of allocated prefixes currently non-allocatable
+                      under spec (outside spec.Prefixes, overlapped by spec.ExcludedPrefixes,
+                      or with the wrong prefix length).
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  total:
+                    description: |-
+                      Total is the total number of allocatable sub-prefixes in the pool.
+                      Counts greater than int can contain will report as math.MaxInt.
+                    type: integer
+                  used:
+                    description: |-
+                      Used is the count of allocated sub-prefixes.
                       Counts greater than int can contain will report as math.MaxInt.
                     type: integer
                 required:
@@ -629,7 +955,9 @@ rules:
   - ipam.cluster.x-k8s.io
   resources:
   - globalinclusterippools
+  - globalinclusterprefixpools
   - inclusterippools
+  - inclusterprefixpools
   - ipaddresses
   verbs:
   - create
@@ -643,7 +971,9 @@ rules:
   - ipam.cluster.x-k8s.io
   resources:
   - globalinclusterippools/finalizers
+  - globalinclusterprefixpools/finalizers
   - inclusterippools/finalizers
+  - inclusterprefixpools/finalizers
   - ipaddressclaims/finalizers
   - ipaddresses/finalizers
   verbs:
@@ -652,7 +982,9 @@ rules:
   - ipam.cluster.x-k8s.io
   resources:
   - globalinclusterippools/status
+  - globalinclusterprefixpools/status
   - inclusterippools/status
+  - inclusterprefixpools/status
   - ipaddressclaims/status
   - ipaddresses/status
   verbs:
@@ -828,7 +1160,7 @@ spec:
         - --leader-elect
         command:
         - /manager
-        image: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.0.3
+        image: registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -871,6 +1203,11 @@ spec:
           type: RuntimeDefault
       serviceAccountName: capi-ipam-in-cluster-controller-manager
       terminationGracePeriodSeconds: 10
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
       volumes:
       - name: cert
         secret:
@@ -916,7 +1253,6 @@ metadata:
 webhooks:
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: capi-ipam-in-cluster-webhook-service
@@ -938,7 +1274,27 @@ webhooks:
   sideEffects: None
 - admissionReviewVersions:
   - v1
-  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /mutate-ipam-cluster-x-k8s-io-v1alpha2-globalinclusterprefixpool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.globalinclusterprefixpool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - globalinclusterprefixpools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
   clientConfig:
     service:
       name: capi-ipam-in-cluster-webhook-service
@@ -958,6 +1314,27 @@ webhooks:
     resources:
     - inclusterippools
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /mutate-ipam-cluster-x-k8s-io-v1alpha2-inclusterprefixpool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.inclusterprefixpool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - inclusterprefixpools
+  sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
@@ -970,7 +1347,6 @@ metadata:
 webhooks:
 - admissionReviewVersions:
   - v1
-  - v1beta1
   clientConfig:
     service:
       name: capi-ipam-in-cluster-webhook-service
@@ -993,7 +1369,28 @@ webhooks:
   sideEffects: None
 - admissionReviewVersions:
   - v1
-  - v1beta1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /validate-ipam-cluster-x-k8s-io-v1alpha2-globalinclusterprefixpool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: validation.globalinclusterprefixpool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - globalinclusterprefixpools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
   clientConfig:
     service:
       name: capi-ipam-in-cluster-webhook-service
@@ -1013,4 +1410,26 @@ webhooks:
     - DELETE
     resources:
     - inclusterippools
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capi-ipam-in-cluster-webhook-service
+      namespace: capi-ipam-in-cluster-system
+      path: /validate-ipam-cluster-x-k8s-io-v1alpha2-inclusterprefixpool
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: validation.inclusterprefixpool.ipam.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - ipam.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - inclusterprefixpools
   sideEffects: None

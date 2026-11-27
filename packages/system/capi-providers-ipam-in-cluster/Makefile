@@ -1,12 +1,12 @@
 export NAME=capi-providers-ipam-in-cluster
 export NAMESPACE=cozy-cluster-api
 
-CAIP_VERSION=v1.0.3
+CAIP_VERSION=v1.1.1
 CAIP_URL=https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/$(CAIP_VERSION)
 # SHA-256 of the two release assets at CAIP_VERSION. A release tag can be moved;
 # these cannot. Bumping the version means recording the new sums here.
-CAIP_SHA256_COMPONENTS=e3247a458e66e1eeca8bda05a6dfaa882dae29785072f41e7cf071ff8c70f695
-CAIP_SHA256_METADATA=dc1ebd036645e0e87e99dab275c312cf8f8f38aa68a12bc01ad2b1dd1d6bf20e
+CAIP_SHA256_COMPONENTS=8a0656a39d9e85ee07219702254669b7e543d09957e86315f3d20b4bf6aebfa5
+CAIP_SHA256_METADATA=eb280ab315f478324973a7b65739a655d57e3c22a1356efd9f5127534d3502b7
 
 include ../../../hack/package.mk
 
