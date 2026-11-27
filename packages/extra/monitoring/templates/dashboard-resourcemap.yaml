@@ -17,6 +17,7 @@ rules:
   - secrets
   resourceNames:
   - grafana-admin-password
+  - alerta-admin-password
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
