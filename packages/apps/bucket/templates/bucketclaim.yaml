@@ -1,4 +1,7 @@
 {{- $seaweedfs := .Values._namespace.seaweedfs }}
+{{- if not $seaweedfs }}
+{{- fail "a bucket needs S3, and neither this tenant nor a tenant above it runs SeaweedFS" }}
+{{- end }}
 {{- $pool := .Values.storagePool }}
 {{- /*
 COSI classes are cluster-scoped and named after the namespace of the instance

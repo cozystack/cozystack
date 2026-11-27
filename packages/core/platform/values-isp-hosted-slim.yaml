@@ -26,3 +26,7 @@ bundles:
 # into it would dead-end; see monitoring.rootEnabled in values.yaml.
 monitoring:
   rootEnabled: false
+# Tenant/root does not run SeaweedFS here either, so tenants must not take it
+# as their S3. See seaweedfs.rootEnabled in values.yaml.
+seaweedfs:
+  rootEnabled: false

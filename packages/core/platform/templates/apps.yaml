@@ -290,6 +290,7 @@ stringData:
              (Tenant/root spec.ingress). `dig`, as for monitoring-enabled
              above, so an explicit false survives. */}}
       ingress-enabled: {{ dig "rootEnabled" true (.Values.ingress | default dict) | quote }}
+      seaweedfs-enabled: {{ dig "rootEnabled" true (.Values.seaweedfs | default dict) | quote }}
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
