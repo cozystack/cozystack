@@ -1,0 +1,44 @@
+suite: info dashboard resource access
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: info
+  namespace: tenant-root
+
+# The tenant ServiceAccount is named after the namespace, which already starts
+# with "tenant-". Without OIDC the dashboard signs in with that ServiceAccount's
+# token, so the RoleBinding has to name exactly that subject.
+
+tests:
+  - it: binds the tenant ServiceAccount by its real name without OIDC
+    set:
+      _cluster:
+        oidc-enabled: "false"
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: tenant-root
+            namespace: tenant-root
+      - notContains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: tenant-tenant-root
+            namespace: tenant-tenant-root
+
+  - it: grants the token Secret by name without OIDC
+    set:
+      _cluster:
+        oidc-enabled: "false"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - tenant-root
