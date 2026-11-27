@@ -10,6 +10,7 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
+- [ ] If the change implements a design proposal, the proposal is merged in cozystack/community; until then the PR stays draft ([CONTRIBUTING.md](../../CONTRIBUTING.md#where-do-i-file))
 - [ ] Walked the [Downstream Repositories](#downstream-repositories) trigger map against the diff, and linked a follow-up (a PR, or an issue when the PR is out of scope) in every repository the change reaches
 
 ## Regenerate Artifacts Before Committing

@@ -50,6 +50,8 @@ Cozystack work is split across two repositories. Use this table to land in the r
 
 Rule of thumb: **bugs and concrete features live here; "what or whether we should build it" lives in [community](https://github.com/cozystack/community)** as a design proposal or discussion. A large feature often starts as a Discussion, graduates to a design-proposal PR, then spawns implementation issues here.
 
+A pull request that implements a design proposal waits for that proposal to be accepted, that is, merged into [community](https://github.com/cozystack/community). Until then it stays in draft, however clean the code is: code merged ahead of its design becomes the contract the design then has to follow. Opening the implementation early as a proof of concept is welcome, and linking it from the proposal helps the review. If the proposal is closed without being accepted, the implementation is closed with it.
+
 ## Raising Issues
 
 When raising issues, please specify the following:
