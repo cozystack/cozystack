@@ -281,6 +281,114 @@ func TestValidateTenantResourceQuotas(t *testing.T) {
 	}
 }
 
+// TestValidateTenantResourceQuotas_PrefixedKeys verifies that naming a
+// resource through a requests./limits. prefixed key cannot carve more out of
+// the parent than the shorthand key would. The tenant chart renders one budget
+// per resource, so "cpu", "requests.cpu" and "limits.cpu" all name the same
+// one.
+func TestValidateTenantResourceQuotas_PrefixedKeys(t *testing.T) {
+	tests := []struct {
+		name        string
+		parent      *helmv2.HelmRelease
+		siblings    []*helmv2.HelmRelease
+		childQuotas map[string]string
+		wantDenied  bool
+	}{
+		{
+			// 6 + 6 carved out of a parent that holds 10.
+			name:        "sibling stored with requests.cpu counts against the parent's cpu",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"}),
+			siblings:    []*helmv2.HelmRelease{tenantHelmRelease(t, "bar", "tenant-foo", map[string]string{"requests.cpu": "6"})},
+			childQuotas: map[string]string{"cpu": "6"},
+			wantDenied:  true,
+		},
+		{
+			name:        "sibling stored with requests.cpu leaves the rest of the parent's cpu",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"}),
+			siblings:    []*helmv2.HelmRelease{tenantHelmRelease(t, "bar", "tenant-foo", map[string]string{"requests.cpu": "6"})},
+			childQuotas: map[string]string{"cpu": "4"},
+			wantDenied:  false,
+		},
+		{
+			name:        "sibling naming cpu through two keys counts at the larger figure",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"}),
+			siblings:    []*helmv2.HelmRelease{tenantHelmRelease(t, "bar", "tenant-foo", map[string]string{"cpu": "2", "limits.cpu": "6"})},
+			childQuotas: map[string]string{"cpu": "5"},
+			wantDenied:  true,
+		},
+		{
+			name:        "parent stored with requests.cpu bounds a child's cpu",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"requests.cpu": "10"}),
+			childQuotas: map[string]string{"cpu": "11"},
+			wantDenied:  true,
+		},
+		{
+			name:        "parent stored with requests.cpu admits a child's cpu within it",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"requests.cpu": "10"}),
+			childQuotas: map[string]string{"cpu": "6"},
+			wantDenied:  false,
+		},
+		{
+			name:        "parent naming cpu through two keys is bounded by the smaller figure",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10", "limits.cpu": "4"}),
+			childQuotas: map[string]string{"cpu": "5"},
+			wantDenied:  true,
+		},
+		{
+			name:        "child declaring requests.cpu is rejected",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"}),
+			childQuotas: map[string]string{"requests.cpu": "1"},
+			wantDenied:  true,
+		},
+		{
+			// The key cannot render, whatever the parent declares.
+			name:        "child declaring limits.memory is rejected under an unbounded parent",
+			parent:      tenantHelmRelease(t, "foo", "tenant-root", nil),
+			childQuotas: map[string]string{"limits.memory": "1Gi"},
+			wantDenied:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			objects := []client.Object{tc.parent}
+			for _, s := range tc.siblings {
+				objects = append(objects, s)
+			}
+			r := newTenantREST(t, objects...)
+
+			app := childApplication(t, "baz", "tenant-foo", tc.childQuotas)
+			errs := r.validateTenantResourceQuotas(context.Background(), app)
+			gotDenied := len(errs) > 0
+			if gotDenied != tc.wantDenied {
+				t.Fatalf("validateTenantResourceQuotas denied=%v, want %v (errors: %v)", gotDenied, tc.wantDenied, errs)
+			}
+		})
+	}
+}
+
+func TestPrefixedQuotaKey(t *testing.T) {
+	cases := []struct {
+		key          string
+		wantShort    string
+		wantPrefixed bool
+	}{
+		{"cpu", "cpu", false},
+		{"requests.cpu", "cpu", true},
+		{"limits.memory", "memory", true},
+		{"requests.storage", "storage", true},
+		{"requests.nvidia.com/gpu", "nvidia.com/gpu", true},
+		{"services.loadbalancers", "services.loadbalancers", false},
+		{"requests.", "requests.", false},
+	}
+	for _, tc := range cases {
+		short, prefixed := prefixedQuotaKey(tc.key)
+		if short != tc.wantShort || prefixed != tc.wantPrefixed {
+			t.Errorf("prefixedQuotaKey(%q) = (%q, %v), want (%q, %v)", tc.key, short, prefixed, tc.wantShort, tc.wantPrefixed)
+		}
+	}
+}
+
 // TestValidateTenantResourceQuotas_UpdateExcludesSelf verifies that raising a
 // tenant's own quota does not double-count its existing carve-out as a sibling.
 func TestValidateTenantResourceQuotas_UpdateExcludesSelf(t *testing.T) {
