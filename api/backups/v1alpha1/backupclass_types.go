@@ -21,6 +21,12 @@ func init() {
 	})
 }
 
+// BackupClassFragmentLabel marks a BackupClass as a fragment of the class its
+// value names. A class resolves over its own strategies and those of its
+// fragments, so each package can ship the binding for its application kind
+// without sharing one object with the others.
+const BackupClassFragmentLabel = thisGroup + "/class"
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status
