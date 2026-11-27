@@ -23,6 +23,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -63,6 +64,76 @@ type gpuValues struct {
 	MaxReplicas *int64     `json:"maxReplicas"`
 }
 
+// decodeGPUValues reads the GPU-related values of an application with the
+// chart defaults applied.
+func decodeGPUValues(kind string, raw []byte) (gpuValues, error) {
+	var v gpuValues
+	values := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &values); err != nil {
+			return v, fmt.Errorf("decode %s values: %w", kind, err)
+		}
+	}
+	if s, ok := specSchemas.Load(kind); ok {
+		if err := defaultLikeKubernetes(&values, s.(*structuralschema.Structural)); err != nil {
+			return v, fmt.Errorf("default %s values: %w", kind, err)
+		}
+	}
+	defaulted, err := json.Marshal(values)
+	if err != nil {
+		return v, err
+	}
+	if err := json.Unmarshal(defaulted, &v); err != nil {
+		return v, fmt.Errorf("decode %s gpus: %w", kind, err)
+	}
+	return v, nil
+}
+
+// workerReplicaBounds refuses minReplicas above maxReplicas on a pool with
+// class entries: CAPI starts a new pool at its min-size annotation without
+// comparing it with the max, so the pool would run more GPUs than count
+// times maxReplicas. minReplicas is read apart from gpuDemand's values so
+// that an unreadable one cannot hide the pool's GPU demand, and a value that
+// is not a whole number is refused rather than read as in range.
+func workerReplicaBounds(raw []byte) field.ErrorList {
+	values, err := decodeGPUValues(kubernetesNodesKind, raw)
+	if err != nil || values.MaxReplicas == nil {
+		return nil
+	}
+	var bounds struct {
+		MinReplicas any `json:"minReplicas"`
+	}
+	if json.Unmarshal(raw, &bounds) != nil || bounds.MinReplicas == nil {
+		return nil
+	}
+	path := field.NewPath("spec", "minReplicas")
+	lowest, ok := wholeNumber(bounds.MinReplicas)
+	if !ok {
+		return field.ErrorList{field.Invalid(path, bounds.MinReplicas, "must be a whole number")}
+	}
+	if lowest <= *values.MaxReplicas {
+		return nil
+	}
+	return field.ErrorList{field.Invalid(path, lowest,
+		fmt.Sprintf("must not exceed maxReplicas (%d) on a pool with GPU class entries", *values.MaxReplicas))}
+}
+
+// wholeNumber reads a decoded JSON number, or a string of digits, as the
+// integer the chart renders; 5 and 5.0 are the same value to it.
+func wholeNumber(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n != math.Trunc(n) || math.Abs(n) > 1<<53 {
+			return 0, false
+		}
+		return int64(n), true
+	case string:
+		i, err := strconv.ParseInt(n, 10, 64)
+		return i, err == nil
+	}
+	return 0, false
+}
+
 // gpuDemand returns the GPU budget units an application's values reserve,
 // by budget key: every class entry reserves its count under its class key
 // and under the all-class key, times maxReplicas for a worker pool. Raw
@@ -71,24 +142,9 @@ func gpuDemand(kind string, raw []byte) (map[string]int64, error) {
 	if kind != vmInstanceKind && kind != kubernetesNodesKind {
 		return nil, nil
 	}
-	values := map[string]any{}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &values); err != nil {
-			return nil, fmt.Errorf("decode %s values: %w", kind, err)
-		}
-	}
-	if s, ok := specSchemas.Load(kind); ok {
-		if err := defaultLikeKubernetes(&values, s.(*structuralschema.Structural)); err != nil {
-			return nil, fmt.Errorf("default %s values: %w", kind, err)
-		}
-	}
-	defaulted, err := json.Marshal(values)
+	v, err := decodeGPUValues(kind, raw)
 	if err != nil {
 		return nil, err
-	}
-	var v gpuValues
-	if err := json.Unmarshal(defaulted, &v); err != nil {
-		return nil, fmt.Errorf("decode %s gpus: %w", kind, err)
 	}
 	classEntries := slices.ContainsFunc(v.GPUs, func(e gpuEntry) bool { return e.ClassName != "" })
 	replicas := int64(1)
@@ -210,6 +266,11 @@ func (r *REST) validateGPUBudget(ctx context.Context, app, old *appsv1alpha1.App
 	demand, err := gpuDemand(r.kindName, specRaw(app))
 	if err != nil {
 		return field.ErrorList{field.Invalid(fldPath, "", err.Error())}
+	}
+	if r.kindName == kubernetesNodesKind && len(demand) > 0 {
+		if errs := workerReplicaBounds(specRaw(app)); len(errs) > 0 {
+			return errs
+		}
 	}
 	var previous map[string]int64
 	if old != nil {
