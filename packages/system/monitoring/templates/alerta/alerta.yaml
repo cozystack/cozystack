@@ -115,9 +115,38 @@
 {{- end }}
 
 {{- $apiKey := randAlphaNum 32 }}
+{{- /*
+  Alerta signs its session JWTs with SECRET_KEY. The upstream image never
+  wires a real value into it: the entrypoint renders the generated key into
+  alertad.conf under the name SECRET (which the application never reads) and
+  unsets SECRET_KEY before exec, so at runtime the built-in default from
+  alerta.settings ("changeme") is used to sign and verify every token. We
+  generate a strong key here, persist it in this Secret so it survives
+  upgrades and pod restarts, and feed it to the application as a mounted
+  alertad.conf under the name the application actually reads.
+*/}}
+{{- $secretKey := randAlphaNum 64 }}
+{{- /*
+  Alerta's admin account must not share Grafana's credentials: Alerta exposes
+  the whole process environment through /api/management/properties to any
+  admin-scoped caller, so a shared password would hand Grafana's admin over
+  with it. Its own login lives in a Secret apart from this one, so tenants can
+  be shown it (monitoring-rd lists it) without the signing key and API key.
+  The entrypoint resets the admin user's password to it on every start, which
+  also replaces the Grafana password on installations that predate this.
+*/}}
+{{- $adminPassword := randAlphaNum 32 }}
+{{- with lookup "v1" "Secret" .Release.Namespace "alerta-admin-password" }}
+{{- with index .data "password" }}
+{{- $adminPassword = b64dec . }}
+{{- end }}
+{{- end }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace "alerta" }}
 {{- if $existingSecret }}
 {{- $apiKey = index $existingSecret.data "alerta-api-key" | b64dec }}
+{{- if index $existingSecret.data "secret-key" }}
+{{- $secretKey = index $existingSecret.data "secret-key" | b64dec }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: v1
@@ -129,6 +158,19 @@ metadata:
 type: Opaque
 data:
   alerta-api-key: {{ $apiKey | b64enc }}
+  secret-key: {{ $secretKey | b64enc }}
+  alertad.conf: {{ printf "DEBUG = False\nSECRET_KEY = %s\n" ($secretKey | quote) | b64enc }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alerta-admin-password
+  labels:
+    app: alerta
+type: Opaque
+data:
+  user: {{ b64enc "admin" }}
+  password: {{ $adminPassword | b64enc }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -191,13 +233,13 @@ spec:
             - name: ADMIN_USERS
               valueFrom:
                 secretKeyRef:
+                  name: alerta-admin-password
                   key: user
-                  name: grafana-admin-password
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
+                  name: alerta-admin-password
                   key: password
-                  name: grafana-admin-password
             - name: ADMIN_KEY
               valueFrom:
                 secretKeyRef:
@@ -279,10 +321,19 @@ spec:
             - name: alerta-config
               mountPath: /app/config.js
               subPath: config.js
+            - name: alerta-server-config
+              mountPath: /app/alertad.conf
+              subPath: alertad.conf
       volumes:
         - name: alerta-config
           configMap:
             name: alerta
+        - name: alerta-server-config
+          secret:
+            secretName: alerta
+            items:
+              - key: alertad.conf
+                path: alertad.conf
 {{- if ne $gatewayEnabled "true" }}
 ---
 apiVersion: networking.k8s.io/v1

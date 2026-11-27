@@ -22,6 +22,13 @@ RUN apt-get update \
  && /venv/bin/pip check \
  && pip install --no-cache-dir --upgrade virtualenv 'filelock>=4.2.1'
 
+# Keeps Alerta's credentials out of the container log and the admin password in
+# step with ADMIN_PASSWORD; see patch-upstream.sh.
+COPY sync-admin-password.py /app/sync-admin-password.py
+COPY patch-upstream.sh /tmp/patch-upstream.sh
+RUN sh /tmp/patch-upstream.sh /usr/local/bin/docker-entrypoint.sh /app/nginx.conf.j2 \
+ && rm /tmp/patch-upstream.sh
+
 # A purge on top of the upstream layers hides files without removing them, so
 # the result is copied into an empty image. That drops the image config with
 # the layers; it is restated below exactly as the upstream image declares it,
