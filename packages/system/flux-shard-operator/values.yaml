@@ -1,5 +1,5 @@
 fluxShardOperator:
-  image: ghcr.io/cozystack/cozystack/flux-shard-operator:v1.7.2-rc.2@sha256:b2de63737ef1e9402df26d52c16a21afdf22f498575e95c1d45c79c9abd5eb7d
+  image: ghcr.io/cozystack/cozystack/flux-shard-operator:v1.7.2@sha256:b2de63737ef1e9402df26d52c16a21afdf22f498575e95c1d45c79c9abd5eb7d
   debug: false
   replicas: 2
   ## Number of helm-controller shards to provision and distribute tenants

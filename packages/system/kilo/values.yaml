@@ -1,7 +1,7 @@
 kilo:
   image:
     pullPolicy: IfNotPresent
-    tag: v1.7.2-rc.2@sha256:473427df1f90ec0513cd51fbee7cd3bf0a14777c40a635874e23ba1363bea09e
+    tag: v1.7.2@sha256:473427df1f90ec0513cd51fbee7cd3bf0a14777c40a635874e23ba1363bea09e
     repository: ghcr.io/cozystack/cozystack/kilo
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
