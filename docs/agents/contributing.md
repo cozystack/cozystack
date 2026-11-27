@@ -11,6 +11,7 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
 - [ ] Walked the [Downstream Repositories](#downstream-repositories) trigger map against the diff, and linked a follow-up (a PR, or an issue when the PR is out of scope) in every repository the change reaches
+- [ ] Every downstream patch the PR adds or changes links its upstream counterpart, or the PR says why there is none (see [Patches to other projects' code](../../CONTRIBUTING.md#patches-to-other-projects-code))
 
 ## Regenerate Artifacts Before Committing
 

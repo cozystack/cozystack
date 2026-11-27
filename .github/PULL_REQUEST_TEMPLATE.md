@@ -14,6 +14,8 @@
 ## What this PR does
 
 <!-- Link the issues this PR addresses. For a complete fix targeting the default branch, use Closes #N (Closes owner/repository#N for another repository). Otherwise use a non-closing reference; release-branch PRs need manual issue linking and closure when appropriate. -->
+<!-- Uncomment the next line when this PR adds or changes a downstream patch: https://github.com/cozystack/cozystack/blob/main/CONTRIBUTING.md#patches-to-other-projects-code -->
+<!-- Upstream: link to the upstream pull request, or to the issue or thread where the change was raised -->
 
 ### Screenshots
 
