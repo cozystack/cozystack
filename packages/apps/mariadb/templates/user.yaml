@@ -1,6 +1,15 @@
+{{- /*
+  Each User reads the mysql_native_password hash from its account Secret,
+  which cozystack-controller keeps for the CredentialTemplate in
+  credentials.yaml. The hash reference is there from the first reconcile: a
+  User with no credential reference is created ACCOUNT LOCK PASSWORD EXPIRE
+  and never unlocked. While the Secret does not exist yet, mariadb-operator
+  fails the reconcile on the missing reference, sets the User Ready=False and
+  leaves the SQL account untouched.
+*/ -}}
 {{- range $name, $u := .Values.users }}
-{{ if not (eq $name "root") }}
-{{ $dnsName := replace "_" "-" $name }}
+{{- if ne $name "root" }}
+{{- $dnsName := replace "_" "-" $name }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: User
@@ -10,9 +19,9 @@ spec:
   name: {{ $name | quote }}
   mariaDbRef:
     name: {{ $.Release.Name }}
-  passwordSecretKeyRef:
-    name: {{ $.Release.Name }}-credentials
-    key: {{ $name | quote }}
+  passwordHashSecretKeyRef:
+    name: {{ include "mariadb.accountSecret" (list $ $name) | quote }}
+    key: password
   maxUserConnections: {{ $u.maxUserConnections }}
 {{- end }}
 {{- end }}
