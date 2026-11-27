@@ -1,0 +1,42 @@
+suite: seaweedfs zone pool base class collision regression
+release:
+  name: seaweedfs
+  namespace: tenant-root
+set:
+  topology: MultiZone
+  replicationFactor: 1
+  filer:
+    grpcHost: seaweedfs-filer.tenant-other.svc
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: rejects a zone pool named exactly lock
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        zones:
+          a:
+            pools:
+              lock:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorPattern: "storage pool 'lock' renders BucketClass tenant-root-lock, also rendered by the base classes"
+
+  - it: rejects a zone pool named exactly readonly
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        zones:
+          a:
+            pools:
+              readonly:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorPattern: "storage pool 'readonly' renders BucketAccessClass tenant-root-readonly, also rendered by the base classes"
