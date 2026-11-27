@@ -13,6 +13,12 @@ spec:
   - podLogs:
       selector: app.kubernetes.io/instance=redis-test
       tail: 50
+  # The scale-down step waits on the operator deleting a PDB, which leaves its
+  # trace in the operator's log and nowhere in the tenant namespace.
+  - podLogs:
+      namespace: cozy-redis-operator
+      selector: app.kubernetes.io/name=redis-operator
+      tail: 100
   steps:
   - name: create-redis
     try:
@@ -74,6 +80,68 @@ spec:
             name: rfr-redis-test
           status:
             readyReplicas: 2
+
+  # One replica runs one Sentinel with its PDB disabled. The PDB the operator
+  # created for the three Sentinels of two replicas has to go with it, or its
+  # minAvailable: 1 pins the only Sentinel against every eviction.
+  - name: scale-down-drops-sentinel-pdb
+    try:
+    # Positive control: the absence asserted below is also what an operator
+    # that never created the PDB looks like.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: rfs-redis-test
+    - apply:
+        file: redis-single.yaml
+    # The upgraded chart reaching the RedisFailover is what starts the
+    # operator's part; asserting it first tells a chart that never disabled
+    # the PDB apart from an operator that left it behind.
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: databases.spotahome.com/v1
+          kind: RedisFailover
+          metadata:
+            name: redis-test
+          spec:
+            sentinel:
+              replicas: 1
+              disablePodDisruptionBudget: true
+    # 2m: a RedisFailover change triggers a reconcile, and the operator
+    # resyncs every 30s besides.
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: rfs-redis-test
+    # The data pods' PDB is still enabled and must stay.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: policy/v1
+          kind: PodDisruptionBudget
+          metadata:
+            name: rfr-redis-test
+    # The upgrade holds the release until the StatefulSet has scaled, and
+    # cleanup cannot uninstall it before then. Same 11m as the install wait;
+    # matching generations keep the Ready left from the install from passing.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-test
+          (status.observedGeneration == metadata.generation): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
 ---
 # TLS on. Everything the unit tests can only render runs live here: the
 # rebuilt operator with the TLS patch, the CRD and ClusterRole patches on its
