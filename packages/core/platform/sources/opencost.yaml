@@ -1,0 +1,35 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.opencost
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    # victoria-metrics-operator provides the VMServiceScrape CRD the chart
+    # ships. OpenCost queries the tenant-root vmselect, which
+    # monitoring-application defines, for the kube-state-metrics series
+    # monitoring-agents scrapes. bundles/system.yaml checks at render time that
+    # every Package of the dependsOn closure is emitted and not disabled, and
+    # that monitoring.rootEnabled is set, since the vmselect itself is not a
+    # package.
+    #
+    # OpenCost is OPTIONAL (enabled via bundles.enabledPackages) and must never
+    # appear in a default package's dependsOn, or the platform HelmRelease would
+    # stay DependenciesNotReady whenever it is not enabled.
+    dependsOn:
+    - cozystack.networking
+    - cozystack.victoria-metrics-operator
+    - cozystack.monitoring-application
+    - cozystack.monitoring-agents
+    components:
+    - name: opencost
+      path: system/opencost
+      install:
+        namespace: cozy-opencost
+        releaseName: opencost

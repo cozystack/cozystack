@@ -517,6 +517,59 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.keda" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
+{{- /* OpenCost exits after its startup retries without its Prometheus
+       endpoint, the tenant-root vmselect, and allocates from the
+       kube-state-metrics series cozystack.monitoring-agents scrapes. The
+       operator installs it only once every Package in its dependsOn closure
+       is Ready, and a missing one leaves it in DependenciesNotReady without
+       naming which, so name it here, every problem in one message.
+       $opencostNeeds is that closure for the current OIDC mode and
+       $opencostSlimOptIn the part of it the slim variants emit only on
+       request. hack/check-opencost-prerequisites.bats compares both with
+       sources/ and with what tests/bundles_opencost_default_test.yaml shows
+       a slim render emits, and fails when they drift.
+       cozystack.networking is left out: listing it in disabledPackages is how
+       a CNI managed by hand is kept, the live Package then still satisfies
+       dependsOn, and every other package in the closure depends on it too. */ -}}
+{{- $pkgEnabled := default (list) .Values.bundles.enabledPackages -}}
+{{- $pkgDisabled := default (list) .Values.bundles.disabledPackages -}}
+{{- if and (has "cozystack.opencost" $pkgEnabled) (not (has "cozystack.opencost" $pkgDisabled)) -}}
+{{- $opencostNeeds := list "cozystack.cert-manager" "cozystack.cozystack-engine" "cozystack.gateway-api-crds" "cozystack.grafana-operator" "cozystack.metrics-server" "cozystack.monitoring-agents" "cozystack.monitoring-application" "cozystack.postgres-operator" "cozystack.prometheus-operator-crds" "cozystack.vertical-pod-autoscaler" "cozystack.victoria-metrics-operator" -}}
+{{- $opencostSlimOptIn := list "cozystack.grafana-operator" "cozystack.metrics-server" "cozystack.monitoring-agents" "cozystack.monitoring-application" "cozystack.vertical-pod-autoscaler" -}}
+{{- if .Values.authentication.oidc.enabled -}}
+{{- $opencostNeeds = concat $opencostNeeds (list "cozystack.keycloak" "cozystack.keycloak-operator") -}}
+{{- else -}}
+{{- $opencostSlimOptIn = append $opencostSlimOptIn "cozystack.postgres-operator" -}}
+{{- end -}}
+{{- $problems := list -}}
+{{- $disabledNeeds := list -}}
+{{- range $opencostNeeds -}}
+{{- if has . $pkgDisabled -}}
+{{- $disabledNeeds = append $disabledNeeds . -}}
+{{- end -}}
+{{- end -}}
+{{- if $disabledNeeds -}}
+{{- $problems = append $problems (printf "it depends on %s, listed in bundles.disabledPackages: remove it from there" (join ", " $disabledNeeds)) -}}
+{{- end -}}
+{{- if include "cozystack.platform.slim" $ -}}
+{{- $missing := list -}}
+{{- range $opencostSlimOptIn -}}
+{{- if not (has . $pkgEnabled) -}}
+{{- $missing = append $missing . -}}
+{{- end -}}
+{{- end -}}
+{{- if $missing -}}
+{{- $problems = append $problems (printf "on a slim variant it also needs %s in bundles.enabledPackages, which the slim variants install only on request" (join ", " $missing)) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (dig "rootEnabled" true (.Values.monitoring | default dict)) -}}
+{{- $problems = append $problems "it requires monitoring.rootEnabled: OpenCost queries the tenant-root vmselect, which exists only while Tenant/root runs monitoring" -}}
+{{- end -}}
+{{- if $problems -}}
+{{- fail (printf "cozystack.opencost cannot be installed: %s. Fix these, or drop cozystack.opencost from bundles.enabledPackages." (join "; " $problems)) -}}
+{{- end -}}
+{{- end }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.opencost" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
