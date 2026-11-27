@@ -3,8 +3,9 @@
 // Package credential serves core.cozystack.io/credentials, a view over the
 // CredentialTemplates a kind's chart renders, with the mint and revoke
 // subresources. The view shows the account's record as the template's status
-// mirrors it, and never reads a Secret. See design-proposals/user-secrets-api
-// in cozystack/community.
+// mirrors it, and reads no Secret but the one a mint of an engine-issued
+// account waits on. See design-proposals/user-secrets-api in
+// cozystack/community.
 package credential
 
 import (
@@ -56,6 +57,11 @@ type REST struct {
 	direct client.Client
 	gvr    schema.GroupVersionResource
 	now    func() time.Time
+	// cosiWait bounds how long a mint or a revoke of an engine-issued
+	// credential waits for the controller to serve it; cosiPoll is how often
+	// it looks.
+	cosiWait time.Duration
+	cosiPoll time.Duration
 }
 
 // NewREST creates the credentials storage.
@@ -68,9 +74,15 @@ func NewREST(c, direct client.Client) *REST {
 			Version:  "v1alpha1",
 			Resource: "credentials",
 		},
-		now: time.Now,
+		now:      time.Now,
+		cosiWait: DefaultCOSIWait,
+		cosiPoll: 500 * time.Millisecond,
 	}
 }
+
+// SetCOSIWait sets how long a mint or a revoke of an engine-issued credential
+// waits for its new grant.
+func (r *REST) SetCOSIWait(d time.Duration) { r.cosiWait = d }
 
 func (*REST) NamespaceScoped() bool   { return true }
 func (*REST) GetSingularName() string { return singularName }

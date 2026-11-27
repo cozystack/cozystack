@@ -87,6 +87,16 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
 			"credential %s has a Secret it did not create; a platform administrator has to remove it first", name))
 	}
+	// A template that names a BucketAccess is engine-issued: the COSI driver,
+	// not the API, chooses its keys.
+	engineIssued := tmpl.Spec.BucketAccess != nil
+	if engineIssued && meta.IsStatusConditionTrue(tmpl.Status.Conditions, cozyv1alpha1.CredentialTemplateBucketAccessConflict) {
+		// The controller leaves a BucketAccess it did not create alone, so
+		// it could serve neither operation, and the request would only wait
+		// out its timeout.
+		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
+			"credential %s has a BucketAccess it did not create; a platform administrator has to remove it first", name))
+	}
 	if !format.Known(tmpl.Spec.Format.Name) {
 		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
 			"credential %s names the format %q, which is not built in", name, tmpl.Spec.Format.Name))
@@ -115,6 +125,10 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		}, nil
 	}
 
+	if engineIssued {
+		return o.regrant(ctx, name, res, user.GetName(), mirrored)
+	}
+
 	password, err := format.GeneratePassword()
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
@@ -126,26 +140,8 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 	now := metav1.NewTime(r.now())
 	by := user.GetName()
 	sec := buildSecret(tmpl, stored, recordOf(tmpl).Apply(o.op, now, by))
-
-	// The status is all the API knows of the Secret. A status that lags the
-	// Secret, or a Secret written since the status was read, makes the write
-	// fail rather than overwrite it, and the caller gets a conflict and no
-	// password.
-	if mirrored == "" {
-		if err := r.direct.Create(ctx, sec); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s is being seeded; retry", name))
-			}
-			return nil, err
-		}
-	} else {
-		sec.ResourceVersion = mirrored
-		if err := r.direct.Update(ctx, sec); err != nil {
-			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
-				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s changed while the request was in flight; retry", name))
-			}
-			return nil, err
-		}
+	if err := o.write(ctx, name, sec, mirrored); err != nil {
+		return nil, err
 	}
 
 	reason := ReasonCredentialIssued
@@ -166,6 +162,32 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 			IssuedAt: now,
 		},
 	}, nil
+}
+
+// write stores the account Secret under the version the template's status
+// mirrors, or creates it when the account has none. The status is all the
+// API knows of the Secret. A status that lags the Secret, or a Secret written
+// since the status was read, makes the write fail rather than overwrite it,
+// and the caller gets a conflict and no password.
+func (o *OperationREST) write(ctx context.Context, name string, sec *corev1.Secret, mirrored string) error {
+	r := o.parent
+	if mirrored == "" {
+		if err := r.direct.Create(ctx, sec); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s is being seeded; retry", name))
+			}
+			return err
+		}
+		return nil
+	}
+	sec.ResourceVersion = mirrored
+	if err := r.direct.Update(ctx, sec); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s changed while the request was in flight; retry", name))
+		}
+		return err
+	}
+	return nil
 }
 
 // recordOf returns the record the template's status mirrors, which the mint

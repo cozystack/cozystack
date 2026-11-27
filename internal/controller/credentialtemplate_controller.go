@@ -49,6 +49,7 @@ const CredentialControllerActor = "system:serviceaccount:cozy-system:cozystack-c
 const (
 	reasonCredentialReset   = "CredentialReset"
 	reasonCredentialAdopted = "CredentialAdopted"
+	reasonCredentialRevoked = "CredentialRevoked"
 )
 
 // CredentialTemplateReconciler keeps each CredentialTemplate and its account
@@ -85,6 +86,10 @@ func (r *CredentialTemplateReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !tmpl.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	if engineIssued(tmpl) {
+		// The engine issues these keys; COSICredentialReconciler keeps them.
 		return ctrl.Result{}, nil
 	}
 	status := tmpl.Status.DeepCopy()
@@ -312,12 +317,17 @@ func mirror(status *cozyv1alpha1.CredentialTemplateStatus, sec *corev1.Secret) {
 }
 
 func (r *CredentialTemplateReconciler) writeStatus(ctx context.Context, tmpl *cozyv1alpha1.CredentialTemplate, status *cozyv1alpha1.CredentialTemplateStatus) error {
+	return writeTemplateStatus(ctx, r.Client, tmpl, status)
+}
+
+// writeTemplateStatus writes a template's status when it changed.
+func writeTemplateStatus(ctx context.Context, c client.Client, tmpl *cozyv1alpha1.CredentialTemplate, status *cozyv1alpha1.CredentialTemplateStatus) error {
 	if equality.Semantic.DeepEqual(&tmpl.Status, status) {
 		return nil
 	}
 	updated := tmpl.DeepCopy()
 	updated.Status = *status
-	return r.Status().Update(ctx, updated)
+	return c.Status().Update(ctx, updated)
 }
 
 // SetupWithManager registers the reconciler. accountSecrets is a metadata

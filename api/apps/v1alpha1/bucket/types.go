@@ -41,6 +41,8 @@ type ConfigSpec struct {
 }
 
 type User struct {
+	// Marks a platform account, such as the `system` user of the backup bucket, which backupstrategy-controller sets. Its keys stay in the `<bucket>-<user>-credentials` Secret, which no tenant can read, and are never minted. Clearing it drops the chart-rendered BucketAccess, which revokes those keys, and the user becomes a normal account whose keys are minted through its Credential. Leave it unset for your own users.
+	Platform bool `json:"platform,omitempty"`
 	// Whether the user has read-only access.
 	Readonly bool `json:"readonly,omitempty"`
 }

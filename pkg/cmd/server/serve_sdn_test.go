@@ -63,7 +63,7 @@ func startStaticGroupsServer(t *testing.T, serveSDN bool) *httptest.Server {
 	}
 	cli := fake.NewClientBuilder().Build()
 	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
-	if err := apiserver.InstallStaticAPIGroups(srv, cli, cli, dyn, serveSDN); err != nil {
+	if err := apiserver.InstallStaticAPIGroups(srv, cli, cli, dyn, serveSDN, 0); err != nil {
 		t.Fatal(err)
 	}
 	srv.PrepareRun()

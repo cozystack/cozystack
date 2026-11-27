@@ -3,15 +3,29 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}-dashboard-resources
 rules:
+{{- /*
+  A tenant user's <bucket>-<user>-credentials Secret holds the endpoint and
+  bucket name only; a platform user's holds its keys and is not granted. The
+  rule is left out when no tenant user exists: a rule with no resourceNames
+  would grant every Secret in the namespace.
+*/}}
+{{- $names := list }}
+{{- range $name, $user := .Values.users }}
+{{- if not (default false $user.platform) }}
+{{- $names = append $names (printf "%s-%s-credentials" $.Release.Name $name) }}
+{{- end }}
+{{- end }}
+{{- if $names }}
 - apiGroups:
   - ""
   resources:
   - secrets
   resourceNames:
-  {{- range $name, $user := .Values.users }}
-  - {{ $.Release.Name }}-{{ $name }}-credentials
+  {{- range $names }}
+  - {{ . }}
   {{- end }}
   verbs: ["get", "list", "watch"]
+{{- end }}
 {{- if .Values.ui }}
 - apiGroups:
   - networking.k8s.io

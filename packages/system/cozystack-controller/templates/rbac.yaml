@@ -39,6 +39,14 @@ rules:
 # writes their Ready status. It never creates or deletes a sentinel; that is
 # the chart's (helm-controller's) job. No tenant role grants any verb on
 # internal.cozystack.io, which is what keeps sentinels out of tenant reach.
+# COSICredentialReconciler creates the BucketAccess an engine-issued
+# CredentialTemplate names, adopts one the conversion marked, and deletes it on
+# a mint or a revoke, which makes the COSI sidecar revoke the old keys,
+# re-creating it for a mint. No tenant role grants any verb on
+# objectstorage.k8s.io.
+- apiGroups: ["objectstorage.k8s.io"]
+  resources: ["bucketaccesses"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
 - apiGroups: ["internal.cozystack.io"]
   resources: ["tenantprojections"]
   verbs: ["get", "list", "watch"]

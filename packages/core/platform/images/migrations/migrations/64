@@ -48,21 +48,16 @@ set -euo pipefail
 
 # shellcheck source=lib/cozystack-version.sh
 . "$(dirname "$0")/lib/cozystack-version.sh"
+# shellcheck source=lib/credential-crd.sh
+. "$(dirname "$0")/lib/credential-crd.sh"
 
 NAMESPACE="${NAMESPACE:-cozy-system}"
 
 # The converted postgres chart renders CredentialTemplates, whose CRD ships
 # with cozystack-controller. That release can upgrade minutes after the tenant
 # releases switch charts, and every render in between fails on the unknown
-# kind, so apply the CRD baked into this image first, owned by the
-# cozystack-controller release as its later upgrade expects to find it.
-CRD_FILE="${CREDENTIAL_CRD_FILE:-/credential-crds/cozystack.io_credentialtemplates.yaml}"
-kubectl apply --server-side --force-conflicts --filename "$CRD_FILE"
-kubectl label crd credentialtemplates.cozystack.io app.kubernetes.io/managed-by=Helm --overwrite
-kubectl annotate crd credentialtemplates.cozystack.io \
-  meta.helm.sh/release-name=cozystack-controller \
-  meta.helm.sh/release-namespace=cozy-system --overwrite
-kubectl wait --for=condition=established crd/credentialtemplates.cozystack.io --timeout=60s
+# kind, so apply the CRD baked into this image first.
+apply_credential_crd
 
 credentials-migrate seed \
   --migration 64 \

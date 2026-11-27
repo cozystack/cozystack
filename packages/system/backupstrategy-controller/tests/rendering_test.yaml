@@ -42,6 +42,14 @@ tests:
           path: metadata.namespace
           value: tenant-root
         template: templates/bucket.yaml
+      # The system user is a platform account: its keys stay in the Secret
+      # this controller reads, and no tenant credential can rotate them.
+      - equal:
+          path: spec.users.system
+          value:
+            readonly: false
+            platform: true
+        template: templates/bucket.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-cnpg-default.yaml

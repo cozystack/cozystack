@@ -16,6 +16,7 @@ publicRead: false
 
 ## @typedef {struct} User - Bucket user configuration.
 ## @field {bool} [readonly] - Whether the user has read-only access.
+## @field {bool} [platform] - Marks a platform account, such as the `system` user of the backup bucket, which backupstrategy-controller sets. Its keys stay in the `<bucket>-<user>-credentials` Secret, which no tenant can read, and are never minted. Clearing it drops the chart-rendered BucketAccess, which revokes those keys, and the user becomes a normal account whose keys are minted through its Credential. Leave it unset for your own users.
 
 ## @param {map[string]User} users - Users configuration map.
 users: {}
