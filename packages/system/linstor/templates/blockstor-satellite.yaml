@@ -251,6 +251,9 @@ spec:
             - --stream-tls-cert-file=/etc/blockstor/stream-tls/tls.crt
             - --stream-tls-key-file=/etc/blockstor/stream-tls/tls.key
             - --stream-tls-ca-file=/etc/blockstor/stream-tls/ca.crt
+            {{- if .Values.blockstorSatellite.stalledResyncAct }}
+            - --drbd-workaround-stalled-resync-act
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}

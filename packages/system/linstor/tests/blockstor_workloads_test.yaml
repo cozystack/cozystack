@@ -577,3 +577,27 @@ tests:
           path: spec.template.spec.containers[0].resources
           value:
             requests: {cpu: 50m, memory: 128Mi}
+
+  # Without the act flag the satellite only reports a stalled resync, and a
+  # replica caught in LINBIT/drbd#149 stays Inconsistent for good.
+  - it: lets the satellite act on a stalled resync by default
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --drbd-workaround-stalled-resync-act
+
+  - it: keeps the stalled-resync check report-only when turned off
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      blockstorSatellite.stalledResyncAct: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --drbd-workaround-stalled-resync-act

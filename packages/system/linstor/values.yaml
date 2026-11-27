@@ -54,6 +54,16 @@ blockstorSatellite:
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {memory: 2Gi}
+  # Lets the satellite act on a stalled resync (LINBIT/drbd#149) instead
+  # of only reporting it as a Warning Event: after the stall has lasted
+  # several passes it disconnects the peer whose resync waits on the
+  # stalled one, on a replica that is an Inconsistent SyncTarget. With a
+  # Primary in sight it never reconnects a peer to break the stall, since
+  # such a reconnect left two Secondaries with different data while DRBD
+  # reported both UpToDate. On by default: a replica stuck Inconsistent
+  # does not recover without it. The flag exists from blockstor 0.4.0 on;
+  # an older satellite exits on it.
+  stalledResyncAct: true
   # How a change to the satellite pod template reaches the nodes. The
   # satellite turns Ready once its caches have synced, seconds after
   # start; its first pass over the node's DRBD resources ends later and
