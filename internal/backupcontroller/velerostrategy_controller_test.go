@@ -29,10 +29,12 @@ import (
 
 // mockRESTMapper implements meta.RESTMapper for testing
 type mockRESTMapper struct {
-	mapping *meta.RESTMapping
+	mapping   *meta.RESTMapping
+	requested []schema.GroupKind
 }
 
 func (m *mockRESTMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	m.requested = append(m.requested, gk)
 	return m.mapping, nil
 }
 
@@ -58,6 +60,50 @@ func (m *mockRESTMapper) ResourcesFor(input schema.GroupVersionResource) ([]sche
 
 func (m *mockRESTMapper) ResourceSingularizer(resource string) (singular string, err error) {
 	return resource, nil
+}
+
+// applicationRef.apiGroup is optional and Reconcile defaults it when it
+// resolves the BackupClass, so the Velero strategy has to apply the same
+// default when it looks the application up.
+func TestCreateVeleroBackup_DefaultsApplicationAPIGroup(t *testing.T) {
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+	_ = velerov1.AddToScheme(testScheme)
+
+	testApp := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vdtest", Namespace: "default"}}
+	mapper := &mockRESTMapper{mapping: &meta.RESTMapping{
+		Resource:         schema.GroupVersionResource{Version: "v1", Resource: "pods"},
+		GroupVersionKind: schema.GroupVersionKind{Version: "v1", Kind: "Pod"},
+		Scope:            meta.RESTScopeNamespace,
+	}}
+
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "bj-vdtest", Namespace: "default"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  corev1.TypedLocalObjectReference{Kind: "VMDisk", Name: "vdtest"},
+			BackupClassName: "cozy-default",
+		},
+	}
+	veleroStrategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "velero-strategy"}}
+
+	reconciler := &BackupJobReconciler{
+		Client:     clientfake.NewClientBuilder().WithScheme(testScheme).WithObjects(backupJob, veleroStrategy).Build(),
+		Interface:  dynamicfake.NewSimpleDynamicClient(testScheme, testApp),
+		RESTMapper: mapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}
+
+	if err := reconciler.createVeleroBackup(context.Background(), backupJob, veleroStrategy, &ResolvedBackupConfig{}); err != nil {
+		t.Fatalf("createVeleroBackup() error = %v", err)
+	}
+
+	want := schema.GroupKind{Group: backupsv1alpha1.DefaultApplicationAPIGroup, Kind: "VMDisk"}
+	if len(mapper.requested) == 0 || mapper.requested[0] != want {
+		t.Errorf("RESTMapping requested %v, want %v first", mapper.requested, want)
+	}
 }
 
 func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
