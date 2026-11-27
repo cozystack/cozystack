@@ -15,7 +15,9 @@
 # reads sit in loops and one loop polls, so it carries a step budget that
 # every kubectl call is clamped to, and the guard holds that budget under the
 # op. Its failure messages are checked by running the step's script against a
-# stubbed kubectl.
+# stubbed kubectl. The bucket verify-s3-access step is held the same way: its
+# script runs against a stubbed kubectl and mc, and only an S3 AccessDenied
+# counts as the read-only denial.
 #
 # CI runs this file under Bats. It stays compatible with the legacy cozytest.sh
 # translator, whose awk parser recognizes only @test blocks and a bare `}` on its
@@ -32,6 +34,8 @@ GATEWAY_STEP="parent-child-and-route-drive-listener-set"
 REDIS_SUITE="hack/e2e-chainsaw/redis/chainsaw-test.yaml"
 REDIS_STEP="verify-tenant-ca-projection"
 COMPUTEPLANE_SUITE="hack/e2e-chainsaw/computeplane/chainsaw-test.yaml"
+BUCKET_SUITE="hack/e2e-chainsaw/bucket/chainsaw-test.yaml"
+BUCKET_STEP="verify-s3-access"
 
 # Seconds the gateway op keeps above its summed waits for what carries no cap
 # of its own: three applies and one label read.
@@ -162,6 +166,55 @@ run_redis_step() {
   rs_rc=0
   rs_out=$(cd "$1" && PATH="$1:$PATH" NAMESPACE=tenant-test STUB_FAIL="${STUB_FAIL:-}" STUB_FAIL_FROM="${STUB_FAIL_FROM:-1}" STUB_RC="${STUB_RC:-1}" STUB_ERR="${STUB_ERR:-}" STUB_OUT="${STUB_OUT:-}" STUB_SLEEP_ON="${STUB_SLEEP_ON:-}" STUB_SLEEP="${STUB_SLEEP:-}" STUB_PROJ_KEY="${STUB_PROJ_KEY:-}" "$rs_shell" "$1/step.sh" 2>&1) || rs_rc=$?
   printf '%s\nrc=%s\n' "$rs_out" "$rs_rc"
+}
+
+# Stubs for the bucket verify-s3-access step. kubectl serves the two BucketInfo
+# secrets and parks the port-forward; nc reports the port open. mc answers the
+# read-only user's upload with STUB_RO_OUT on stderr and exit STUB_RO_RC, and
+# accepts every other call.
+write_bucket_stubs() {
+  cat > "$1/kubectl" <<'STUB'
+#!/bin/sh
+args="$*"
+case "$args" in
+  *"get secret bucket-test-admin"*|*"get secret bucket-test-viewer"*)
+    printf '%s' '{"spec":{"bucketName":"b","secretS3":{"accessKeyID":"k","accessSecretKey":"s"}}}' | base64 | tr -d '\n' ;;
+  *"port-forward"*) exec sleep 300 ;;
+  *) echo "kubectl stub: unexpected call: $args" >&2; exit 99 ;;
+esac
+STUB
+  cat > "$1/nc" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+  cat > "$1/mc" <<'STUB'
+#!/bin/sh
+for last; do :; done
+case "$1" in
+  alias) exit 0 ;;
+  cp)
+    case "$last" in
+      ro-user/*) printf '%s\n' "${STUB_RO_OUT:-}" >&2; exit "${STUB_RO_RC:-1}" ;;
+      rw-user/*) exit 0 ;;
+      *) : > "$last"; exit 0 ;;
+    esac ;;
+  ls|rm) exit 0 ;;
+  *) echo "mc stub: unexpected call: $*" >&2; exit 99 ;;
+esac
+STUB
+  chmod +x "$1/kubectl" "$1/nc" "$1/mc"
+}
+
+# Run the bucket verify-s3-access step's script, as its op's shell would,
+# against the stubs in $1. Prints the script's combined output and then
+# `rc=<status>`.
+run_bucket_step() {
+  bs_op=$(op_lines "$BUCKET_SUITE" "$BUCKET_STEP")
+  bs_shell=$(op_shell "$bs_op")
+  op_content "$bs_op" > "$1/step.sh"
+  bs_rc=0
+  bs_out=$(cd "$1" && PATH="$1:$PATH" NAMESPACE=tenant-test STUB_RO_OUT="${STUB_RO_OUT:-}" STUB_RO_RC="${STUB_RO_RC:-1}" "$bs_shell" "$1/step.sh" 2>&1) || bs_rc=$?
+  printf '%s\nrc=%s\n' "$bs_out" "$bs_rc"
 }
 
 @test "the gateway listener-set op outlasts the waits inside it" {
@@ -338,6 +391,68 @@ rc=0") printf '%s\n' "$rt_out" >&2; echo "the step passed with a hung read" >&2;
     case "$rt_out" in *"ran into its "[12]"s bound: -n tenant-test get secret redis-secure.tenant-ca"*) ;; *) printf '%s\n' "$rt_out" >&2; echo "the hung read did not name itself at the budget's bound" >&2; exit 1 ;; esac
     [ "$rt_took" -lt 15 ] || { echo "the step took ${rt_took}s against a 2s budget; the read was not clamped" >&2; exit 1; }
     rm -rf "$rt_dir"
+}
+
+@test "the bucket read-only upload check passes when S3 answers Access Denied" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='mc: <ERROR> Failed to copy `x`. Access Denied.' STUB_RO_RC=1 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") ;; *) printf '%s\n' "$bs_out" >&2; echo "the step failed although S3 answered AccessDenied" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
+}
+
+@test "the bucket read-only upload check also passes on the AccessDenied code spelling with another exit status" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='{"status":"error","error":{"cause":{"error":{"Code":"AccessDenied"}}}}' STUB_RO_RC=2 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") ;; *) printf '%s\n' "$bs_out" >&2; echo "the step failed although S3 answered AccessDenied" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
+}
+
+@test "the bucket read-only upload check fails on a refused connection" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='mc: <ERROR> Failed to copy `x`. Put "https://localhost:8333/b/ro-test.txt": dial tcp 127.0.0.1:8333: connect: connection refused' STUB_RO_RC=1 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
+    case "$bs_out" in *"without an S3 AccessDenied"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: without an S3 AccessDenied" >&2; exit 1 ;; esac
+    case "$bs_out" in *"connection refused"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the mc output of the refused connection was lost" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
+}
+
+@test "the bucket read-only upload check fails on a gateway 5xx" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='mc: <ERROR> Failed to copy `x`. Server error: 503 Service Unavailable.' STUB_RO_RC=1 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
+    case "$bs_out" in *"without an S3 AccessDenied"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: without an S3 AccessDenied" >&2; exit 1 ;; esac
+    case "$bs_out" in *"503 Service Unavailable"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the mc output of the gateway 5xx was lost" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
+}
+
+@test "the bucket read-only upload check fails when the upload succeeds" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='mc: stub upload accepted' STUB_RO_RC=0 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
+    case "$bs_out" in *"read-only user must NOT be able to upload"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: read-only user must NOT be able to upload" >&2; exit 1 ;; esac
+    case "$bs_out" in *"stub upload accepted"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the output of the unexpectedly successful upload was lost" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
+}
+
+@test "the bucket read-only upload check fails when the upload times out" {
+    bs_dir=$(mktemp -d)
+    write_bucket_stubs "$bs_dir"
+    bs_out=$(STUB_RO_OUT='mc: <ERROR> Access Denied.' STUB_RO_RC=124 run_bucket_step "$bs_dir")
+    case "$bs_out" in *"
+rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
+    case "$bs_out" in *"timed out at its 45s cap"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: timed out at its 45s cap" >&2; exit 1 ;; esac
+    case "$bs_out" in *"Access Denied."*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the output of the timed-out upload was lost" >&2; exit 1 ;; esac
+    rm -rf "$bs_dir"
 }
 
 @test "every kubectl in the computeplane scripts runs under its own timeout" {
