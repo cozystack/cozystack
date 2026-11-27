@@ -33,7 +33,6 @@ spec:
         name: {{ .Values.provider | quote }}
       sources:
         - ingress
-        - service
         {{- if .Values.gatewayAPI }}
         - gateway-httproute
         - gateway-tlsroute

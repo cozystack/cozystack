@@ -1,0 +1,23 @@
+suite: external-dns sources stay within what the namespaced Role grants
+templates:
+  - templates/external-dns.yaml
+
+# Namespaced mode renders a Role without the nodes rule, so the service source,
+# which starts a Node informer, would exit on "failed to sync *v1.Node".
+set:
+  provider: inmemory
+
+tests:
+  - it: enables only the ingress source by default
+    asserts:
+      - equal:
+          path: spec.values.external-dns.sources
+          value: [ingress]
+
+  - it: adds the Gateway API route sources when gatewayAPI is on
+    set:
+      gatewayAPI: true
+    asserts:
+      - equal:
+          path: spec.values.external-dns.sources
+          value: [ingress, gateway-httproute, gateway-tlsroute]
