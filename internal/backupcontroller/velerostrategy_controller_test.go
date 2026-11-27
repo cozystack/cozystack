@@ -355,6 +355,7 @@ func newTestRestoreJobReconcilerWithDynamic(t *testing.T, dynamicObjects []runti
 	fakeClient := clientfake.NewClientBuilder().
 		WithScheme(testScheme).
 		WithObjects(objects...).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
 		Build()
 
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme, dynamicObjects...)
