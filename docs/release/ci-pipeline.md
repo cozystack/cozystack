@@ -12,7 +12,7 @@ The numbered process of a [regular release](./regular-releases.md#regular-releas
 
 ### Phase 1 — `build-amd64`, `build-arm64` and `prepare-release` (hard gate)
 
-On an rc tag push: builds images for both architectures, commits digest pins, creates the draft release, and pushes the `release-X.Y.Z-rc.N` staging branch. `build-amd64` holds the release-exists no-op and the rejection of a hand-pushed stable tag, and builds the amd64 images and the release assets (its `make build` also pushes the packages artifact and the installer chart, pinned on amd64 digests); `prepare-release` stitches, gates, republishes those two from the repinned tree, and publishes the release. (The stable promote PR is opened later by `promote-rc.yaml`, not here. When the stable tag itself is pushed by finalize, a draft already exists, so this job is a no-op — see [Phase 5](#phase-5--pull-requests-releaseyaml-finalize).)
+On an rc tag push: builds images for both architectures, commits digest pins, creates the draft release, and pushes the `release-X.Y.Z-rc.N` staging branch. `build-amd64` holds the release-exists no-op and the rejection of a hand-pushed stable tag, and builds the amd64 images and the release assets (its `make build-parallel` also pushes the packages artifact and the installer chart, pinned on amd64 digests); `prepare-release` stitches, gates, republishes those two from the repinned tree, and publishes the release. (The stable promote PR is opened later by `promote-rc.yaml`, not here. When the stable tag itself is pushed by finalize, a draft already exists, so this job is a no-op — see [Phase 5](#phase-5--pull-requests-releaseyaml-finalize).)
 
 The commit (`Prepare release vX.Y.Z`, authored by `cozystack-ci[bot]`) is **digest pins and image tags only**:
 

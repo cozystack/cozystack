@@ -101,6 +101,9 @@ jobs:
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
+          # The runner is thrown away after the job; removing the builder only
+          # costs time.
+          cleanup: false
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
@@ -108,14 +111,13 @@ jobs:
         if: steps.check_release.outputs.release_exists == 'false'
         run: |
           set -euo pipefail
-          # Assigned and checked before the loop: a build-matrix.sh failure
-          # inside `for unit in $(...)` would run no iteration and leave a
-          # green job that built nothing.
-          units="$(MATRIX_ARCH=arm64 hack/build-matrix.sh | jq -r '.[]')"
-          [ -n "$units" ]
-          for unit in $units; do
-            make -C "$unit" image
-          done
+          # The rc builds are the only arm64 builds a release line has, so they
+          # keep the line's arm64 cache themselves. They import main's nightly
+          # cache too, which is all the first rc of a line has.
+          line="release-$(echo "${GITHUB_REF_NAME#v}" | cut --delimiter=. --fields=1-2)"
+          export CACHE_TAG="buildcache-arm64-$line"
+          export CACHE_FROM_TAGS="buildcache-arm64-$line buildcache-arm64"
+          MATRIX_ARCH=arm64 hack/build-units.sh
           make -C packages/core/installer image-operator
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
@@ -123,10 +125,7 @@ jobs:
           SBOM: '1'
           PLATFORM: linux/arm64
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
-          # Read the arm64 cache build-arm64-nightly.yaml keeps warm; a release
-          # build never writes one.
-          CACHE_TAG: buildcache-arm64
-          WRITE_CACHE: '0'
+          WRITE_CACHE: '1'
           IMAGE_TAG: ${{ github.ref_name }}-arm64
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
@@ -143,8 +142,8 @@ jobs:
     if: github.repository == 'cozystack/cozystack'
     name: Build amd64 images and assets
     # Ephemeral pool, not the dedicated self-hosted runner (#2937 decommission).
-    # Serial `make build` + `make assets` is CPU-bound, so use the large shape —
-    # same as the main cache warmer (build-main.yaml).
+    # `make build-parallel` runs several image builds at once, so use the large
+    # shape, as the main cache warmer (build-main.yaml) does.
     runs-on: oracle-vm-24cpu-96gb-x86-64
     # The budget prepare-release had while it also built; the stitch and the
     # uploads it no longer runs moved to prepare-release with their own.
@@ -305,6 +304,9 @@ jobs:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
           use: false
+          # The runner is thrown away after the job; removing the builder only
+          # costs time.
+          cleanup: false
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
@@ -313,7 +315,7 @@ jobs:
         if: steps.check_release.outputs.release_exists == 'false'
         run: |
           mkdir -p "${PUSHED_TAGS_LOG%/*}"
-          make build
+          make build-parallel
           # The arm64 assets published below install this image, and building
           # its arm64 half needs no QEMU, so it is pushed again as both arches.
           make -C packages/core/talos image-talos PLATFORM=linux/amd64,linux/arm64
@@ -329,6 +331,9 @@ jobs:
           # them from OCIR while pushing images to GHCR. A missing :buildcache
           # ref 404s harmlessly into a cold build.
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # The line's own cache, which build-release.yaml writes on every push
+          # to the line, and main's.
+          CACHE_FROM_TAGS: buildcache-release-${{ steps.tag.outputs.line }} buildcache
           # amd64 here; build-arm64 builds arm64 natively.
           PLATFORM: linux/amd64
           # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
