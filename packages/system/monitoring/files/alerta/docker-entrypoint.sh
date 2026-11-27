@@ -3,8 +3,9 @@
 # (sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39),
 # Apache-2.0, mounted over the image's copy by templates/alerta/alerta.yaml.
 # Changed from upstream only so that Alerta's credentials stay out of the
-# container log: the environment dump is removed and the output of the two
-# `alertad key` calls is discarded.
+# container log (the environment dump is removed and the output of the two
+# `alertad key` calls is discarded), and so that existing admin users take
+# ADMIN_PASSWORD on every start through sync-admin-password.py.
 set -e
 
 JINJA2="import os, sys, jinja2; sys.stdout.write(jinja2.Template(sys.stdin.read()).render(env=os.environ)+'\n')"
@@ -33,6 +34,7 @@ fi
 if [ -n "${ADMIN_USERS}" ]; then
   echo "# Create admin users."
   alertad user --all --password "${ADMIN_PASSWORD}" || true
+  /venv/bin/python /app/sync-admin-password.py
   echo "# Create admin API keys."
   alertad key --all >/dev/null
 

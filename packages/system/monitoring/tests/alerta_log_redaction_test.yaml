@@ -33,6 +33,18 @@ tests:
           path: data["docker-entrypoint.sh"]
           pattern: '(?m)^    alertad key --username "\$\{ADMIN_USER\}" --key "\$\{ADMIN_KEY\}" --duration "\$\{MAXAGE\}" >/dev/null \|\| true$'
 
+  - it: resets the admin users' password to ADMIN_PASSWORD right after creating them
+    documentSelector:
+      path: metadata.name
+      value: alerta-entrypoint
+    asserts:
+      - matchRegex:
+          path: data["docker-entrypoint.sh"]
+          pattern: '(?m)^  alertad user --all --password "\$\{ADMIN_PASSWORD\}" \|\| true\n  /venv/bin/python /app/sync-admin-password\.py$'
+      - matchRegex:
+          path: data["sync-admin-password.py"]
+          pattern: 'user\.update\(password=password\)'
+
   - it: ships an nginx config that masks the api-key parameter in the access log
     documentSelector:
       path: metadata.name
@@ -65,6 +77,12 @@ tests:
             name: alerta-entrypoint
             mountPath: /app/nginx.conf.j2
             subPath: nginx.conf.j2
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: alerta-entrypoint
+            mountPath: /app/sync-admin-password.py
+            subPath: sync-admin-password.py
       - contains:
           path: spec.template.spec.volumes
           content:
