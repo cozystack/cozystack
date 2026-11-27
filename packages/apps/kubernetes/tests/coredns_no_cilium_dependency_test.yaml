@@ -1,0 +1,30 @@
+suite: CoreDNS HelmRelease dependency tests
+templates:
+  - templates/helmreleases/coredns.yaml
+values:
+  - values-ci.yaml
+tests:
+  # When Hubble Relay is enabled at cluster creation, hubble-relay resolves
+  # hubble-peer.cozy-cilium.svc.cluster.local before the Cilium HelmRelease can
+  # report Ready. CoreDNS must not declare dependsOn on Cilium, otherwise both
+  # HelmReleases deadlock; without a CNI CoreDNS pods stay Pending and retry
+  # until Cilium comes up.
+  - it: does not depend on the Cilium HelmRelease so cluster DNS can bootstrap alongside CNI
+    set:
+      addons:
+        cilium:
+          valuesOverride:
+            cilium:
+              hubble:
+                enabled: true
+                relay:
+                  enabled: true
+    asserts:
+      - isNull:
+          path: spec.dependsOn
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1

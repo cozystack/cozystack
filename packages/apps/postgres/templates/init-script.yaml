@@ -75,7 +75,7 @@ stringData:
 
     echo "== delete databases"
     MANAGED_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm'")
-    DEFINED_DBS="{{ join " " (keys .Values.databases) }}"
+    DEFINED_DBS="{{ join " " (keys .Values.databases | sortAlpha) }}"
     DELETE_DBS=$(for db in $MANAGED_DBS; do case " $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
 
     echo "databases to delete: $DELETE_DBS"
@@ -229,4 +229,16 @@ stringData:
     EOT
     {{- end }}
     {{- end }}
+{{- end }}
+{{- if hasKey (.Values.users | default dict) "app" }}
+---
+{{- /* The bootstrap secret db.yaml gives CNPG for its "app" owner; see there. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-app-owner
+type: kubernetes.io/basic-auth
+stringData:
+  username: app
+  password: {{ quote (index $passwords "app") }}
 {{- end }}

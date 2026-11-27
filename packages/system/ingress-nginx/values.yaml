@@ -46,7 +46,19 @@ ingress-nginx:
       upstream-keepalive-time: '1m'
       upstream-keepalive-timeout: "60"
       upstream-keepalive-connections: "320"
-      ssl-session-tickets: "true"
+      # Off for CVE-2026-97629: with tickets on and no ssl-session-ticket-key,
+      # nginx rotates its ticket keys and before 1.30.6 leaves one of them
+      # uninitialized in the workers. Resumption keeps working through the
+      # shared session cache; with no fixed key each pod had its own ticket
+      # keys, so tickets never resumed across replicas anyway.
+      ssl-session-tickets: "false"
+      # Client-side keepalive_time has no ConfigMap key, so nginx keeps its
+      # 1h default and sends GOAWAY to any HTTP/2 connection older than that.
+      # A long S3 operation (kopia maintenance behind Velero) multiplexes its
+      # requests over one connection, and the in-flight object listing fails
+      # instead of being retried. Idle connections still close after
+      # keep-alive (75s).
+      http-snippet: "keepalive_time 12h;"
     resources:
       limits:
         cpu: "1"

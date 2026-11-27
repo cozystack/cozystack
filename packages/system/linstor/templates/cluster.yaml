@@ -92,6 +92,17 @@ spec:
         containers:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+  {{- /* The NFS server DaemonSet runs one init container on the CSI image.
+         Left unset it follows the operator's default image and tag, not
+         linstorCSI.image. An absent nfsServer means enabled to the operator,
+         so enabled is stated explicitly to keep that unchanged. */}}
+  nfsServer:
+    enabled: true
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-node-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
   patches:
     - target:
         kind: Deployment
@@ -110,6 +121,13 @@ spec:
     - target:
         kind: DaemonSet
         name: linstor-csi-node
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: Deployment
+        name: linstor-affinity-controller
       patch: |-
         - op: add
           path: /metadata/annotations/reloader.stakater.com~1auto

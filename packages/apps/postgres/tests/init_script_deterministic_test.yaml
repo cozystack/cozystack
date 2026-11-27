@@ -1,0 +1,37 @@
+suite: init-script renders the same for the same values
+
+# keys returns a map's keys in Go's randomized iteration order, so a release with
+# several databases rendered DEFINED_DBS in a different order on each upgrade. The
+# init-script Secret then changed on upgrades that changed nothing in the
+# databases, and so did the checksum the init Job carries.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: lists the declared databases in a stable order
+    set:
+      databases:
+        hotel: {}
+        alpha: {}
+        golf: {}
+        charlie: {}
+        foxtrot: {}
+        bravo: {}
+        echo: {}
+        delta: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DEFINED_DBS="alpha bravo charlie delta echo foxtrot golf hotel"'
