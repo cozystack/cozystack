@@ -1,0 +1,78 @@
+{{- /*
+  Only Harbor's own core, jobservice and trivy talk to the inner registry
+  (5000) and its controller (8080); every client goes through core, which
+  enforces projects, robot accounts, quotas and the audit log. The tenant
+  base policy admits ingress from the whole namespace and from the cluster,
+  and Cilium allow rules are additive, so a narrower allow here would change
+  nothing: the rest has to be denied explicitly. Deny wins over allow in
+  Cilium, and NotIn also matches a pod that lacks the key, so a pod without
+  Harbor's labels falls under the deny.
+
+  The metrics port (8001) stays reachable for scraping, and kubelet probes
+  come from the host entity, which no rule here selects.
+
+  Without Cilium there is no tenant base policy to narrow either; such a
+  cluster gets no policy rather than a failed install.
+*/}}
+{{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy" }}
+{{- $ports := list (dict "port" "5000" "protocol" "TCP") (dict "port" "8080" "protocol" "TCP") }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-registry-ingress
+spec:
+  endpointSelector:
+    matchLabels:
+      release: {{ .Release.Name }}
+      app: harbor
+      component: registry
+  ingressDeny:
+  - fromEndpoints:
+    # pods in any other namespace; Exists keeps the host identity, which has
+    # no namespace label and would otherwise match NotIn, out of the deny
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: NotIn
+        values:
+        - {{ .Release.Namespace }}
+    # pods in this namespace that belong to another release or another app
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: In
+        values:
+        - {{ .Release.Namespace }}
+      - key: release
+        operator: NotIn
+        values:
+        - {{ .Release.Name }}
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: In
+        values:
+        - {{ .Release.Namespace }}
+      - key: app
+        operator: NotIn
+        values:
+        - harbor
+    # Harbor components that have no business with the registry
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: In
+        values:
+        - {{ .Release.Namespace }}
+      - key: component
+        operator: NotIn
+        values:
+        - core
+        - jobservice
+        - trivy
+    toPorts:
+    - ports: {{- toYaml $ports | nindent 6 }}
+  - fromEntities:
+    - world
+    - remote-node
+    toPorts:
+    - ports: {{- toYaml $ports | nindent 6 }}
+{{- end }}

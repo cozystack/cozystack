@@ -1,0 +1,72 @@
+suite: inner registry reachable only from Harbor's own components
+
+# The tenant base policy admits the whole cluster and Cilium allow rules are
+# additive, so only an explicit deny narrows who reaches the registry ports.
+
+templates:
+  - templates/registry-networkpolicy.yaml
+
+release:
+  name: harbor-test-system
+  namespace: tenant-test
+
+tests:
+  - it: denies the registry ports to everything but core, jobservice and trivy of this release
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    asserts:
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchLabels
+          value:
+            release: harbor-test-system
+            app: harbor
+            component: registry
+      - notExists:
+          path: spec.ingress
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints
+          content:
+            matchExpressions:
+              - key: k8s:io.kubernetes.pod.namespace
+                operator: Exists
+              - key: k8s:io.kubernetes.pod.namespace
+                operator: NotIn
+                values: [tenant-test]
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints
+          content:
+            matchExpressions:
+              - key: k8s:io.kubernetes.pod.namespace
+                operator: In
+                values: [tenant-test]
+              - key: release
+                operator: NotIn
+                values: [harbor-test-system]
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints
+          content:
+            matchExpressions:
+              - key: k8s:io.kubernetes.pod.namespace
+                operator: In
+                values: [tenant-test]
+              - key: component
+                operator: NotIn
+                values: [core, jobservice, trivy]
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          value:
+            - port: "5000"
+              protocol: TCP
+            - port: "8080"
+              protocol: TCP
+      - equal:
+          path: spec.ingressDeny[1].fromEntities
+          value: [world, remote-node]
+
+  - it: renders nothing without Cilium
+    asserts:
+      - hasDocuments:
+          count: 0
