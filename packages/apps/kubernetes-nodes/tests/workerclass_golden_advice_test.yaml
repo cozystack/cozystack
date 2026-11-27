@@ -1,0 +1,151 @@
+suite: golden-image errors on a pool whose WorkerClass fixes a builtin image
+
+# A class that fixes a builtin image refuses every other image source, so the
+# pool-level advice (switch to osImage.factory, point osImage.builtin elsewhere)
+# would lead the operator into that refusal.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+    "cozystack.io/v1alpha1/WorkerClass":
+      gvr: {group: cozystack.io, version: v1alpha1, resource: workerclasses}
+      namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated}
+    # Registers the DataVolume LIST kind; no golden DataVolume exists in this file.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: unrelated, namespace: tenant-test}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-pvconly-v1.13.6, namespace: cozy-public}
+      spec:
+        storageClassName: replicated
+        resources: {requests: {storage: 6Gi}}
+    - kind: WorkerClass
+      apiVersion: cozystack.io/v1alpha1
+      metadata: {name: acme-builtin}
+      spec:
+        bootstrap: talos
+        substrates: {kubevirt: {osImage: {builtin: {schematicID: pvconly, version: v1.13.6}}}}
+    - kind: WorkerClass
+      apiVersion: cozystack.io/v1alpha1
+      metadata: {name: acme-missing}
+      spec:
+        bootstrap: talos
+        substrates: {kubevirt: {osImage: {builtin: {schematicID: missing, version: v1.13.6}}}}
+    - kind: WorkerClass
+      apiVersion: cozystack.io/v1alpha1
+      metadata: {name: acme-factory}
+      spec:
+        bootstrap: talos
+        substrates: {kubevirt: {osImage: {factory: {version: v1.13.6}}}}
+
+tests:
+  - it: names the class when the golden a class fixes is missing
+    set:
+      workerClassName: acme-missing
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-missing" fixes this pool.s image to golden image "talos-worker-missing-v1\.13\.6", which is not found in cozy-public.* or move this pool to another Talos WorkerClass\.$'
+
+  - it: names the class when the pool's StorageClass differs from the golden a class fixes
+    set:
+      workerClassName: acme-builtin
+      storageClass: local
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "local" differs from golden image "talos-worker-pvconly-v1\.13\.6" storageClass "replicated".* WorkerClass "acme-builtin" fixes this pool.s image to that golden, .* recreate it on that class\.$'
+
+  - it: names the class when the pool repeats the image its class fixes
+    set:
+      workerClassName: acme-builtin
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: pvconly
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-builtin" fixes this pool.s image to that golden'
+
+  - it: keeps the pool-level advice when the class fixes no builtin image
+    set:
+      workerClassName: acme-factory
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: pvconly
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'point this pool.s osImage\.builtin at it; .* Switching this pool to osImage\.factory also resolves it\.$'
+
+  - it: keeps the pool-level advice for a missing golden when the class fixes no builtin image
+    set:
+      workerClassName: acme-factory
+      osImage:
+        builtin:
+          schematicID: missing
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'osImage\.builtin requested golden image "talos-worker-missing-v1\.13\.6" not found in cozy-public.* or switch this pool to osImage\.factory\.$'
+
+  - it: refuses a pool's own factory image on a class that fixes a builtin one
+    set:
+      workerClassName: acme-builtin
+      osImage:
+        factory:
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-builtin": osImage conflicts with the fixed builtin image/version/schematic contract'

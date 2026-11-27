@@ -66,7 +66,7 @@ render_pool() {
     return 1
   fi
   printf '%s\n' "$out" | grep -qF 'Kubernetes v1.30 is not supported by Talos v1.13.0.' \
-    && printf '%s\n' "$out" | grep -qF 'nodeGroup md0 reaches this Talos release through its osImage override' \
+    && printf '%s\n' "$out" | grep -qF 'nodeGroup md0 reaches this Talos release through an osImage version' \
     || { echo "$out" >&2; return 1; }
 }
 
@@ -76,6 +76,6 @@ render_pool() {
     return 1
   fi
   printf '%s\n' "$out" | grep -qF 'Kubernetes v1.30 is not supported by Talos v1.13.0.' \
-    && printf '%s\n' "$out" | grep -qF 'nodeGroup md0 reaches this Talos release through its osImage override' \
+    && printf '%s\n' "$out" | grep -qF 'nodeGroup md0 reaches this Talos release through an osImage version' \
     || { echo "$out" >&2; return 1; }
 }

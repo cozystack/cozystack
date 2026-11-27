@@ -61,7 +61,8 @@ jobs:
   # diff. hack/build-matrix.sh parses the root Makefile `build:` target (the
   # single source of truth) and emits only the units whose package dir changed,
   # escalating to the full set on a shared-dependency change. talos + installer
-  # are handled by dedicated jobs (see build-matrix.sh for why).
+  # and the Kairos worker disks are handled by dedicated jobs (see
+  # build-matrix.sh and the build-kairos-worker job for why).
   plan:
     name: Plan build
     runs-on: ubuntu-latest
@@ -81,6 +82,7 @@ jobs:
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
       talos: ${{ steps.p.outputs.talos }}
+      kairos-worker: ${{ steps.p.outputs.kairos-worker }}
     steps:
       # Claim the required context for THIS run before anything can be merged on
       # the strength of the last one. Commit statuses are latest-wins per (sha,
@@ -107,11 +109,11 @@ jobs:
         if: ${{ !github.event.pull_request.head.repo.fork }}
         # A transient status-API failure here must not take the run with it.
         # This step is the first in `plan`, and `plan` is what `checks`,
-        # `build`, `build-talos`, `finalize` and `e2e` all hang off, so a
-        # failure costs a full rebuild for nothing. Skipping the opener only
-        # degrades to the behaviour that preceded it — the terminal status
-        # still gets posted by `e2e-report`, and a run that dies before that
-        # leaves the merge blocked either way.
+        # `build`, `build-talos`, `build-kairos-worker`, `finalize` and `e2e`
+        # all hang off, so a failure costs a full rebuild for nothing.
+        # Skipping the opener only degrades to the behaviour that preceded
+        # it — the terminal status still gets posted by `e2e-report`, and a
+        # run that dies before that leaves the merge blocked either way.
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -196,6 +198,17 @@ jobs:
           talos="$(hack/build-talos-needed.sh /tmp/changed_norenames.txt)"
           echo "Talos build needed: $talos"
           echo "talos=$talos" >> "$GITHUB_OUTPUT"
+          # Taken against main's fork point when the base is another pull
+          # request: see hack/build-kairos-worker-paths.sh. A list it cannot
+          # compute builds the disks.
+          if hack/build-kairos-worker-paths.sh "$BASE_REF" /tmp/changed_kairos.txt; then
+            kairos_worker="$(hack/build-kairos-worker-needed.sh /tmp/changed_kairos.txt)"
+          else
+            echo "::warning title=kairos-worker::could not list the disk inputs against the base; building the disks"
+            kairos_worker=true
+          fi
+          echo "Kairos worker disk build needed: $kairos_worker"
+          echo "kairos-worker=$kairos_worker" >> "$GITHUB_OUTPUT"
           # Package dirs the PR edited (packages/<area>/<name>). Their committed
           # refs are the PR's intent and must survive the current-main overlay —
           # otherwise an upstream image bump in a non-build-unit package would be
@@ -347,23 +360,21 @@ jobs:
           done
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. The plugin embeds its own Helm, so its
-      # version is pinned: a plugin release must not change test results. Bats is
-      # installed whenever a Bats lane runs, docs-only ones included.
+      # version is pinned: a plugin release must not change test results. Bats and
+      # the plugin are installed whenever a Bats lane runs, docs-only ones
+      # included, because a Bats file renders a chart through helm unittest.
       - name: Set up test toolchain
         if: needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'
         env:
-          CODE_CHANGED: ${{ needs.plan.outputs.code }}
           HELM_UNITTEST_VERSION: "1.1.2"
           BATS_VERSION: "1.14.0"
           BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
         run: |
           set -euo pipefail
-          if [ "$CODE_CHANGED" = true ]; then
-            installed="$(helm plugin list 2>/dev/null | awk '$1 == "unittest" { print $2 }' || true)"
-            if [ "$installed" != "$HELM_UNITTEST_VERSION" ]; then
-              [ -z "$installed" ] || helm plugin uninstall unittest
-              helm plugin install https://github.com/helm-unittest/helm-unittest --version "v${HELM_UNITTEST_VERSION}"
-            fi
+          installed="$(helm plugin list 2>/dev/null | awk '$1 == "unittest" { print $2 }' || true)"
+          if [ "$installed" != "$HELM_UNITTEST_VERSION" ]; then
+            [ -z "$installed" ] || helm plugin uninstall unittest
+            helm plugin install https://github.com/helm-unittest/helm-unittest --version "v${HELM_UNITTEST_VERSION}"
           fi
           # Source archive bytes can change; verify the tag's commit before install.
           if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
@@ -535,6 +546,9 @@ jobs:
           # --binary so vendored binary provider bundles (components*.gz),
           # which some package image targets regenerate, survive reassembly
           # in finalize (a plain "Binary files differ" stub is unappliable).
+          # intent-to-add brings in the files the build created under the
+          # package, which a plain diff against HEAD leaves out.
+          git add --intent-to-add -- "$PKG"
           git diff --binary HEAD > "_out/fragments/${safe}.patch"
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
@@ -652,6 +666,88 @@ jobs:
           path: _out/oci/*.oci.tar
           if-no-files-found: error
 
+  # The Kairos worker disks are their own leg: each Kubernetes minor compiles
+  # kubelet, then AuroraBoot builds a raw disk in a privileged container that
+  # drives the runner's docker daemon, which outgrows a matrix job. The plan job
+  # classifies the rename-blind changed-path list with
+  # build-kairos-worker-needed.sh. A successful run stamps
+  # packages/apps/kubernetes-nodes/images/kairos-worker-*.tag, and finalize
+  # keeps those refs when it overlays base-branch images.
+  build-kairos-worker:
+    name: Build Kairos worker disks
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+      && needs.plan.outputs.kairos-worker == 'true'
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build Kairos worker disks
+        run: |
+          mkdir -p _out/oci
+          make -C packages/apps/kubernetes-nodes image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/amd64
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
+      - name: Capture Kairos worker patch fragment
+        run: |
+          mkdir -p _out/fragments
+          # Every minor's disk and base .tag is committed (kairos-worker-tags_test.bats
+          # refuses a missing one in checks, which finalize waits on), so this
+          # normally captures edits only; intent-to-add still keeps a .tag the
+          # build created in the diff.
+          git add --intent-to-add packages/apps/kubernetes-nodes/images/
+          git diff --binary HEAD > _out/fragments/kairos-worker.patch
+          echo "Kairos worker fragment:"; git --no-pager diff --stat HEAD
+      - name: Upload Kairos worker patch fragment
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pr-patch-fragment-kairos-worker
+          path: _out/fragments/kairos-worker.patch
+          if-no-files-found: error
+      - name: Upload Kairos worker OCI image archives (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pr-oci-kairos-worker
+          path: _out/oci/*.oci.tar
+          if-no-files-found: error
+
   # Reassemble the unified pr.patch from every fragment, then build the installer
   # LAST: `make -C packages/core/installer image` runs `flux push artifact
   # --path=packages`, which bundles the WHOLE digest-patched tree into the OCI
@@ -663,7 +759,7 @@ jobs:
     # to e2e (which needs finalize), so a red unit test skips the expensive
     # install+e2e path instead of wasting ~1h on it. Restores the gating the old
     # in-build-job tests gave, without re-coupling the cheap parallel builds.
-    needs: ["plan", "checks", "build", "build-talos"]
+    needs: ["plan", "checks", "build", "build-talos", "build-kairos-worker"]
     if: |
       !cancelled()
       && needs.plan.outputs.code == 'true'
@@ -671,6 +767,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
+      && (needs.build-kairos-worker.result == 'success' || needs.build-kairos-worker.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
@@ -796,12 +893,9 @@ jobs:
           # applies uniformly.
           BASE_REF: ${{ github.base_ref }}
       - name: Overlay base-branch refs for unbuilt packages
-        # Best-effort: this only improves WHICH images e2e and the installer use,
-        # so an unexpected failure must degrade to the committed refs (prior
-        # behaviour), never block the PR. overlay-main-images.sh already handles
-        # the expected paths (missing artifact, drift, absent unit) internally —
-        # including the empty directory the step above leaves when a line has no
-        # artifact yet.
+        # Missing artifacts, broken base payloads and non-reference drift keep
+        # committed refs inside the overlay script. A payload-integrity failure
+        # in the pull request itself must stop publication.
         run: |
           rebuilt="$BUILD_MATRIX"
           if [ "$TALOS_RESULT" = "success" ]; then
@@ -810,8 +904,13 @@ jobs:
               *) rebuilt="${rebuilt%]},\"packages/extra/bootbox\"]" ;;
             esac
           fi
-          hack/overlay-main-images.sh _out/mainpkgs "$rebuilt" "$PR_TOUCHED" \
-            || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
+          if [ "$KAIROS_WORKER_RESULT" = "success" ]; then
+            case "$rebuilt" in
+              '[]') rebuilt='["packages/apps/kubernetes-nodes"]' ;;
+              *) rebuilt="${rebuilt%]},\"packages/apps/kubernetes-nodes\"]" ;;
+            esac
+          fi
+          hack/overlay-main-images.sh _out/mainpkgs "$rebuilt" "$PR_TOUCHED"
         env:
           # The set of packages THIS PR rebuilt; their pr-<N>-<sha> refs are
           # authoritative, so overlay-main-images.sh skips them. Computed by the
@@ -822,6 +921,8 @@ jobs:
           # own package. Preserve that generated ref only when the job actually
           # succeeded; when it was skipped, the base-branch ref should overlay.
           TALOS_RESULT: ${{ needs.build-talos.result }}
+          # Same for the Kairos worker disk refs build-kairos-worker stamps.
+          KAIROS_WORKER_RESULT: ${{ needs.build-kairos-worker.result }}
           # Packages THIS PR edited (changed-file dirs from the plan job's git
           # diff). Their committed refs are the PR's intent — an upstream image
           # bump in a non-build-unit package would otherwise be silently reverted
@@ -1001,7 +1102,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 265
+    timeout-minutes: 305
     permissions:
       contents: read
       packages: read
@@ -1272,7 +1373,7 @@ jobs:
 
       # ▸ Collect debug information (always runs)
       #
-      #   A ceiling of its own, not the job's 265 minutes. `Upload
+      #   A ceiling of its own, not the job's 305 minutes. `Upload
       #   cozyreport.tgz` is the next step and the collector writes its tarball
       #   at the very end of its run, so a read that never returns spends what
       #   is left of the job budget, the job is cancelled, and the upload never
@@ -1283,7 +1384,7 @@ jobs:
       #   30 minutes is measured against the step: it takes 3-42s across sampled
       #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
       #   `timeout-minutes` caps a step, it does not carve budget out of the job,
-      #   so a suite that has already burned 260 of the 265 leaves this step five
+      #   so a suite that has already burned 300 of the 305 leaves this step five
       #   minutes and the upload is cancelled with everything else. What the cap
       #   buys is that a hung read cannot be the reason.
       #   `continue-on-error` because the ceiling must not change what the job

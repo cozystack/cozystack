@@ -7,7 +7,8 @@
 # only the installer written into the worker machineconfig. The chart compares
 # the two only through the talos-<version> tag this script adds, so the template
 # is built here from the same talos.version and talos.schematicID the chart
-# renders, read from its values.yaml.
+# renders for a pool without class overrides, read from the platform defaults
+# in files/worker-defaults.json.
 #
 # Two images that look right are not:
 # - the platform release's nocloud-amd64.raw.xz is the bare-metal node image.
@@ -32,8 +33,9 @@
 # Optional overrides:
 #   COZY_TALOS_VERSION, COZY_TALOS_SCHEMATIC_ID, COZY_TALOS_FACTORY_URL
 #     default to talos.version, talos.schematicID and talos.imageFactoryURL of
-#     packages/apps/kubernetes-nodes/values.yaml. A pool that overrides those
-#     needs a template built with the same values.
+#     packages/apps/kubernetes-nodes/files/worker-defaults.json. A pool, or the
+#     WorkerClass it uses, that overrides those needs a template built with the
+#     same values.
 #   COZY_TEMPLATE_TAGS       comma-separated, default
 #                            cozystack,talos,talos-<version>,schematic-<8 chars>
 #   COZY_TEMPLATE_DISK_SIZE  default 20G. capmox clones the disk at the size the
@@ -49,7 +51,7 @@
 #   COZY_PVE_SSH_KEY         default ~/.ssh/id_ed25519
 set -eu
 
-VALUES="$(cd "$(dirname "$0")/.." && pwd)/packages/apps/kubernetes-nodes/values.yaml"
+VALUES="$(cd "$(dirname "$0")/.." && pwd)/packages/apps/kubernetes-nodes/files/worker-defaults.json"
 
 die() { printf 'proxmox-talos-template: %s\n' "$*" >&2; exit 1; }
 
@@ -57,13 +59,13 @@ usage() {
   die "usage: $0 print|create <vmid> <storage>"
 }
 
-# The talos block of values.yaml is flat, two-space indented and quoted, so awk
-# reads it without making yq a requirement of an operator's workstation.
+# These defaults are generated with stable JSON indentation; awk keeps the
+# operator helper independent of yq on the hoster's workstation.
 chart_talos() {
   awk -v key="$1" '
-    /^talos:/ { in_block = 1; next }
-    in_block && /^[^ #]/ { exit }
-    in_block && $1 == key ":" { v = $2; gsub(/"/, "", v); print v; exit }
+    /^  "talos":/ { in_block = 1; next }
+    in_block && /^  }/ { exit }
+    in_block && $1 == "\"" key "\":" { v = $2; gsub(/[",]/, "", v); print v; exit }
   ' "$VALUES"
 }
 

@@ -1,0 +1,15 @@
+## @param {string} defaultWorkerClass="talos" - Platform-selected class assigned to new standalone worker pools. Changing it does not classify legacy pools or move an existing pool.
+defaultWorkerClass: talos
+## @param {[]string} valuesNamespaces - Existing non-tenant namespaces whose Secret and ConfigMap values the controller may GET. A managed tenant namespace grants it only the `cozystack-values` Secret, which an Application's HelmRelease reads its values from; a pool whose HelmRelease takes values from other Secrets or ConfigMaps needs a Role granting GET on them to the `kubernetes-worker-classes` ServiceAccount in `cozy-system`, or the controller reports that it cannot resolve the pool's values. Empty grants no additional namespaces.
+valuesNamespaces: []
+## @param {int} replicas=2 - Admission replicas. Controllers use leader election. Admission fails closed, so with one replica a node drain evicts the only webhook pod and every pool write fails until it runs again.
+## @minimum 1
+replicas: 2
+## @param {object} resources - Controller and webhook resource requests and limits.
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

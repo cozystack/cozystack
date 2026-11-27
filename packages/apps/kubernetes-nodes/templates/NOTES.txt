@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
 
 This pool is a separate release from the control plane. Three operational notes:
@@ -10,7 +11,8 @@ This pool is a separate release from the control plane. Three operational notes:
 2. Version skew. This pool's `version` may lag the parent cluster's Kubernetes
    minor during an upgrade but may not lead it: a worker kubelet ahead of the
    apiserver is refused at render time. Upgrade the parent Kubernetes CR first,
-   then each pool.
+   then each pool. A pool on a Kairos WorkerClass that names an image takes
+   its exact release from the class.
 
 3. Pool name. The pool's objects are named `kubernetes-<cluster>-<pool>`. When a
    MachineDeployment of that name already exists and belongs to another Helm

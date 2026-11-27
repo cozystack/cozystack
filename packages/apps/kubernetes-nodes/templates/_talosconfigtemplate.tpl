@@ -1,3 +1,58 @@
+{{- /* Kubelet reservations for one node group, shared by every worker
+       configuration: auto-computed system/kube reserved memory is
+       5% of effective memory clamped to [256Mi, 1Gi], auto-computed
+       system/kube reserved CPU is 5% of effective CPU clamped to [50m, 500m].
+       Effective resources come from resources.cpu / resources.memory, else
+       from the instanceType, else the floors apply, as in the MachineDeployment
+       validator.
+       Input: dict with `root` and `group`. Output: a YAML map of six strings. */}}
+{{- define "kubernetes-nodes.kubeletReservations" -}}
+{{- $root := .root }}
+{{- $group := .group }}
+{{- $instanceType := dict }}
+{{- if $group.instanceType }}
+{{-   $instanceType = lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType }}
+{{-   $instanceType = $instanceType | default dict }}
+{{- end }}
+{{- $effectiveMemory := "" }}
+{{- if and $group.resources $group.resources.memory }}
+{{-   $effectiveMemory = $group.resources.memory | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
+{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $effectiveCpu := "" }}
+{{- if and $group.resources $group.resources.cpu }}
+{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
+{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
+{{- end }}
+{{- $autoReservedMi := 256 }}
+{{- if $effectiveMemory }}
+{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
+{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
+{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
+{{- end }}
+{{- $autoReservedMillicores := 50 }}
+{{- if $effectiveCpu }}
+{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
+{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
+{{- end }}
+{{- $kubeletOverride := $group.kubelet | default dict }}
+{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
+{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+systemReservedMemory: {{ $systemReservedMemory | quote }}
+kubeReservedMemory: {{ $kubeReservedMemory | quote }}
+systemReservedCpu: {{ $systemReservedCpu | quote }}
+kubeReservedCpu: {{ $kubeReservedCpu | quote }}
+evictionHardMemory: {{ $evictionHardMemory | quote }}
+evictionSoftMemory: {{ $evictionSoftMemory | quote }}
+{{- end }}
+
 {{- /*
   Talos worker machine config for one node group, rendered as the `spec:`
   block of a TalosConfigTemplate.
@@ -64,9 +119,10 @@
 {{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
        in-guest Talos installer image matches the OS this pool actually booted.
-       Defaults to the pool's talos.*; a pool with osImage.builtin / osImage.factory
-       pins its own flavor and version so an in-guest upgrade does not flip it back to
-       the pool default. */}}
+       Defaults to the resolved talos.*, the WorkerClass's merged under the pool's; an
+       osImage.builtin / osImage.factory source, the pool's or its WorkerClass's, pins
+       its own flavor and version so an in-guest upgrade does not flip it back to that
+       default. */}}
 {{- /* Shared with nodegroup.yaml's boot-disk source rather than mirrored here:
        a disk booted from one Talos flavor and an installer pinned to another is
        the silently-broken pairing this chart's support matrix was factored out
@@ -77,6 +133,7 @@
 {{- include "kubernetes-nodes.resolveOsImage" (dict
       "osImage" $group.osImage
       "talos" $root.Values.talos
+      "substrate" ($root.Values.substrate | default "kubevirt")
       "out" $resolvedImage
       "groupName" (include "kubernetes-nodes.groupName" $root)) }}
 {{- $talosSchematicID := $resolvedImage.schematicID }}
@@ -99,50 +156,13 @@
        *management* cluster-domain, sourced from .Values._cluster
        (populated by cozystack-controller from the platform config). */}}
 {{- $mgmtClusterDomain := (index ($root.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
-{{- /* Kubelet reservations, mirroring the computation the MachineDeployment
-       side validates: auto-computed system/kube reserved memory = 5% of
-       effective memory clamped to [256Mi, 1Gi]; auto-computed system/kube
-       reserved CPU = 5% of effective CPU clamped to [50m, 500m].
-       instanceType lookup is optional — operators that override
-       resources.cpu / resources.memory on the nodeGroup get those, otherwise
-       the chart falls back to the same static-defaults pair the
-       MachineDeployment validator uses on a no-instanceType setup. */}}
-{{- $instanceType := dict }}
-{{- if $group.instanceType }}
-{{-   $instanceType = lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType }}
-{{-   $instanceType = $instanceType | default dict }}
-{{- end }}
-{{- $effectiveMemory := "" }}
-{{- if and $group.resources $group.resources.memory }}
-{{-   $effectiveMemory = $group.resources.memory | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
-{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
-{{- end }}
-{{- $effectiveCpu := "" }}
-{{- if and $group.resources $group.resources.cpu }}
-{{-   $effectiveCpu = $group.resources.cpu | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
-{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
-{{- end }}
-{{- $autoReservedMi := 256 }}
-{{- if $effectiveMemory }}
-{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
-{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
-{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
-{{- end }}
-{{- $autoReservedMillicores := 50 }}
-{{- if $effectiveCpu }}
-{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
-{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
-{{- end }}
-{{- $kubeletOverride := $group.kubelet | default dict }}
-{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
-{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" -}}
+{{- $reservations := include "kubernetes-nodes.kubeletReservations" (dict "root" $root "group" $group) | fromYaml }}
+{{- $systemReservedMemory := $reservations.systemReservedMemory }}
+{{- $kubeReservedMemory := $reservations.kubeReservedMemory }}
+{{- $systemReservedCpu := $reservations.systemReservedCpu }}
+{{- $kubeReservedCpu := $reservations.kubeReservedCpu }}
+{{- $evictionHardMemory := $reservations.evictionHardMemory }}
+{{- $evictionSoftMemory := $reservations.evictionSoftMemory -}}
 {{- /* The spec proper. Everything above only computes inputs; nothing above
        this line may emit output, or the leading newline lands in the caller's
        heredoc and in the hash. */ -}}

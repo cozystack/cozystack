@@ -1,0 +1,59 @@
+suite: Proxmox ignores unused HTTP import settings
+templates:
+  - templates/talos-reconcile-job.yaml
+  - templates/image-factory-ca.yaml
+release:
+  name: kubernetes-nodes-k-md0
+  namespace: tenant-test
+set:
+  cluster: k
+  _cluster:
+    cluster-domain: cozy.local
+  version: v1.35
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [talos-worker]
+    network:
+      bridge: vmbr0
+    dnsServers: [192.0.2.53]
+  talos:
+    version: v1.13.6
+    schematicID: abc123
+    installerRepository: registry.example.com/installer
+tests:
+  - it: renders bootstrap without an HTTP import URL
+    template: templates/talos-reconcile-job.yaml
+    set:
+      talos:
+        imageFactoryURL: ""
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+
+  - it: does not validate a URL the substrate does not consume
+    template: templates/talos-reconcile-job.yaml
+    set:
+      talos:
+        imageFactoryURL: not-an-http-url
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+
+  - it: does not render or validate a CDI import CA without an HTTP importer
+    template: templates/image-factory-ca.yaml
+    set:
+      talos:
+        imageFactoryCA: not-a-pem
+    asserts:
+      - hasDocuments:
+          count: 0

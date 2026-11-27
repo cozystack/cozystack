@@ -251,6 +251,8 @@ tests:
           version: v1.31
           images:
             kubectl: evil.example.com/kubectl:latest
+          # the worker OS is the module's choice, not the tenant's
+          workerClassName: acme-kairos
           # platform-injected object (cluster-domain/oidc/dns01/proxy) delivered via
           # the cozystack-values Secret: a tenant key must NOT reach the pool values
           # (the allowlist splice drops anything it does not name — regression guard
@@ -279,6 +281,8 @@ tests:
           path: spec.values._cluster
       - notExists:
           path: spec.values.nameOverride
+      - notExists:
+          path: spec.values.workerClassName
 
   # kubernetes-nodes drains a worker only once its replacement is up; a pool
   # without room for one extra VM needs maxUnavailable 1 to finish a rollout,

@@ -49,10 +49,10 @@
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
-  sid=$(yq '.talos.schematicID' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
-  ver=$(yq '.talos.version' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
+  sid=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.schematicID' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
+  ver=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.version' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
   if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
-    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/values.yaml — skipping mirror (fallback to public factory)"
+    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/files/worker-defaults.json — skipping mirror (fallback to public factory)"
     return 0
   fi
   # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
@@ -481,11 +481,12 @@ spec:
     # (kubernetes-latest, kubernetes-previous) don't run into
     # ResourceQuota during CDI's second-phase scratch PVC allocation.
     # Each tenant provisions 2 worker VMs × 20Gi disk + 21Gi CDI scratch
-    # during import; when kubernetes-latest teardown's DRBD detach lags
-    # past cozy_wait_tenant_drained, the leftover 40Gi of latest's worker
-    # PVCs stays counted against tenant-quota while kubernetes-previous
-    # is already asking for its own 40Gi + ~21Gi scratch: the scratch
-    # PVC create call trips the 100Gi ceiling and the second worker's
+    # during import, and kubernetes-latest adds a 20Gi Kairos pool disk;
+    # when kubernetes-latest teardown's DRBD detach lags past
+    # cozy_wait_tenant_drained, the leftover 60Gi of latest's worker PVCs
+    # stays counted against tenant-quota while kubernetes-previous is
+    # already asking for its own 40Gi + ~21Gi scratch: the scratch PVC
+    # create call trips a 100Gi ceiling and the second worker's
     # DataVolume stalls in ImportInProgress indefinitely.
     storage: "200Gi"
   seaweedfs: false

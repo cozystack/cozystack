@@ -28,7 +28,8 @@ jobs:
     name: Build main arm64 images
     runs-on: oracle-vm-24cpu-96gb-arm64
     # Starts from the rc leg's budget; re-measure after the first runs.
-    timeout-minutes: 120
+    # Includes the Kairos worker disks, which build-kairos-worker budgets at 90m.
+    timeout-minutes: 210
     permissions:
       contents: read
 
@@ -97,6 +98,7 @@ jobs:
           for unit in $units; do
             make -C "$unit" image
           done
+          make -C packages/apps/kubernetes-nodes image
           make -C packages/core/installer image-operator
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker

@@ -137,7 +137,7 @@ assert_file_contains() {
 # put in them.
 run_capture() {
   local _rc=0
-  ( set +x; cozy_capture_tenant_serial_console "${1:-capture staged by a unit test}" "${2:-6}" ) || _rc=$?
+  ( set +x; cozy_capture_tenant_serial_console "${1:-capture staged by a unit test}" "${2:-6}" "${3:-}" ) || _rc=$?
   return "${_rc}"
 }
 
@@ -364,6 +364,62 @@ run_capture() {
 
   assert_file_contains '-k 5 30 kubectl -n tenant-test logs virt-launcher-worker-a-11111 -c guest-console-log' "$timeout_calls"
   assert_file_contains '[capture exit code: 0]' "$COZY_REPORT_DIR/snapshots/console-bounded/tenant-serial-console/virt-launcher-worker-a-11111.log"
+  rm -rf "$tmp"
+}
+
+@test "a caller that names its Pods reads only those" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-kubernetes-t-md0-a virt-launcher-kubernetes-t-md0-b virt-launcher-kubernetes-t-zz-kairos-c"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-only
+
+  run_capture "staged" 2 "kubernetes-t-zz-kairos"
+
+  dir="$COZY_REPORT_DIR/snapshots/console-only/tenant-serial-console"
+  [ -f "$dir/virt-launcher-kubernetes-t-zz-kairos-c.log" ]
+  [ ! -f "$dir/virt-launcher-kubernetes-t-md0-a.log" ]
+  [ ! -f "$dir/virt-launcher-kubernetes-t-md0-b.log" ]
+  rm -rf "$tmp"
+}
+
+@test "a caller whose Pods are not listed reads no console and says so" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-kubernetes-t-md0-a virt-launcher-kubernetes-t-md0-b"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-none
+
+  rc=0
+  run_capture "staged" 1 "kubernetes-t-zz-kairos" 2>/dev/null || rc=$?
+
+  [ "$rc" -ne 0 ]
+  dir="$COZY_REPORT_DIR/snapshots/console-none/tenant-serial-console"
+  [ ! -f "$dir/virt-launcher-kubernetes-t-md0-a.log" ]
+  assert_file_contains 'no virt-launcher Pod matching kubernetes-t-zz-kairos' "$dir/setup-error.log"
+  if grep -qF 'guest-console-log' "$timeout_calls" 2>/dev/null; then echo "read a console of a Pod the caller did not name" >&2; false; fi
+  rm -rf "$tmp"
+}
+
+@test "without a name the cap keeps the name order" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_pod_names="virt-launcher-kubernetes-t-md0-a virt-launcher-kubernetes-t-md0-b virt-launcher-kubernetes-t-zz-kairos-c"
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=console-order
+
+  run_capture "staged" 2
+
+  dir="$COZY_REPORT_DIR/snapshots/console-order/tenant-serial-console"
+  [ -f "$dir/virt-launcher-kubernetes-t-md0-a.log" ]
+  [ -f "$dir/virt-launcher-kubernetes-t-md0-b.log" ]
+  [ ! -f "$dir/virt-launcher-kubernetes-t-zz-kairos-c.log" ]
   rm -rf "$tmp"
 }
 

@@ -28,7 +28,8 @@
 # mirror can only help, never make CI worse.
 #
 # The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
-# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes-nodes/values.yaml.
+# time by hack/e2e-install-cozystack.bats from
+# packages/apps/kubernetes-nodes/files/worker-defaults.json.
 #
 # CI band-aid, not a product artifact. The durable fix is the overridable
 # `talos.imageFactoryURL` chart value this manifest exercises; a self-hosted

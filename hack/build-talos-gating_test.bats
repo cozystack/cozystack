@@ -30,6 +30,8 @@ run_workflow_overlay() {
   [ -n "$step" ]
   mkdir -p "$fixture/hack"
   ln -s "$ROOT/hack/overlay-main-images.sh" "$fixture/hack/overlay-main-images.sh"
+  mkdir "$fixture/hack/lib"
+  cp "$ROOT/hack/lib/image-refs.sh" "$fixture/hack/lib/image-refs.sh"
   (
     cd "$fixture"
     BUILD_MATRIX="$matrix"

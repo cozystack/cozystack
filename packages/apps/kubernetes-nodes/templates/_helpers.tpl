@@ -291,22 +291,23 @@ versions and both reach a worker. `talos.version` is the pool default, and
 AND for the in-guest installer the reconcile Job writes. Checking only the first
 leaves an asymmetry a reader would not expect: a known-bad pairing set through
 `talos.version` is rejected, while the same pairing reached through an
-`image.*.version` override renders clean. The matrix literal lives here, once, so
-the two call sites cannot drift apart.
+`image.*.version` override renders clean. The matrix lives in
+files/worker-defaults.json; admission embeds internal/kubernetesworker/config/
+defaults.json, and hack/check-worker-image-catalog-defaults.bats holds the two
+byte-equal, so the chart and admission cannot drift apart.
 
 A Talos minor the matrix does not list passes. That is deliberate and unchanged:
 the matrix is a hand-maintained table, and failing closed on it would block every
-operator who moves to a newer Talos before this file is updated. What the guard
+operator who moves to a newer Talos before that table is updated. What the guard
 promises is that a pairing it KNOWS to be bad is refused, not that every pairing
 is known.
 
-Arguments: talosVersion, kubernetesVersion, remedy (what the operator should
-change, appended to the message).
+Arguments: root (the chart context, to read the table), talosVersion,
+kubernetesVersion, remedy (what the operator should change, appended to the
+message).
 */}}
 {{- define "kubernetes-nodes.assertTalosSupportsKubernetes" -}}
-{{- $talosK8sSupportMatrix := dict
-      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
--}}
+{{- $talosK8sSupportMatrix := (.root.Files.Get "files/worker-defaults.json" | fromJson).talosKubernetesSupport -}}
 {{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" (.talosVersion | toString) -}}
 {{- with index $talosK8sSupportMatrix $talosMinor -}}
 {{-   if not (has ($.kubernetesVersion | toString) .) -}}
@@ -321,9 +322,9 @@ the three strings that reach a rendered manifest -- a schematic, a Talos release
 and an Image Factory URL -- plus whether the boot disk is a clone of a golden or
 an HTTP import.
 
-Two templates need that answer: nodegroup.yaml builds the worker disk source from
-it, and talos-reconcile-job.yaml builds the in-guest installer reference from it.
-They must agree, because a disk booted from one Talos flavor and an installer
+Every template that needs that answer takes it from here. nodegroup.yaml builds
+the worker disk source from it, and talos-reconcile-job.yaml builds the in-guest
+installer reference from it. Those two must agree, because a disk booted from one Talos flavor and an installer
 pinned to another is exactly the silently-broken pairing this chart's support
 matrix was factored out to prevent, and it would surface only as a node that
 upgrades itself onto the wrong OS. So the resolution lives here once rather than
@@ -331,22 +332,24 @@ being mirrored by hand in both files.
 
 The result comes back through the caller's `out` dict rather than as text,
 because four values have to return and a delimited string would need parsing at
-both call sites.
+every call site.
 
 The three format checks live here too, for the same reason. The values are
 tenant-controlled strings that land unquoted in a KubevirtMachineTemplate and in
 a DataVolume name, and the schema types all three as a bare string and cannot
 narrow them: the pinned cozyvalues-gen derives `pattern` from the value TYPE
-(quantity) and has no annotation for a custom one. So the check is at render
-time, which is where this chart already validates the kubelet reservation fields
-for the same class of hazard. The resolved values are checked, not just the
+(quantity) and has no annotation for a custom one. Package admission checks the
+resolved values for API writes; a raw HelmRelease write bypasses it, so the
+check also runs at render time, which is where this chart already validates
+the kubelet reservation fields for the same class of hazard. The resolved values are checked, not just the
 overridden ones -- an override and the pool default reach the same interpolation.
 The patterns accept every form the chart ships and every form a Talos Image
 Factory produces (a 64-character hex schematic, a vN.N.N release, an http(s) URL)
 and reject the bytes that would break out of a YAML scalar.
 
 Arguments: osImage (the pool's .Values.osImage), talos (.Values.talos), out (the
-dict the result is written into), groupName (named in every error message).
+dict the result is written into), groupName (named in every error message),
+substrate (optional, default kubevirt; proxmox builds no HTTP import).
 */ -}}
 {{- define "kubernetes-nodes.resolveOsImage" -}}
 {{- $img := .osImage | default dict -}}
@@ -385,13 +388,17 @@ dict the result is written into), groupName (named in every error message).
        somebody moving to osImage.builtin to stop depending on the Factory is
        exactly the person likely to blank imageFactoryURL, and the message they
        got named a source URL this path never builds. The field is a bare string
-       in values.schema.json and in the cozyrds openAPISchema, so an empty or
-       malformed one reaches the render rather than being rejected at admission.
+       in values.schema.json and in the cozyrds openAPISchema, so on a raw HelmRelease
+       write an empty or malformed one reaches the render without admission.
        The check itself stays exactly as strict for osImage.factory and for the
-       no-osImage default, which are the two arms that do interpolate it. */ -}}
-{{- if not $clone -}}
+       no-osImage default on kubevirt, the two arms that do interpolate it. */ -}}
+{{- if and (not $clone) (ne (.substrate | default "kubevirt") "proxmox") -}}
 {{-   if not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" ($factoryURL | toString)) -}}
 {{-     fail (printf "nodeGroup %q: imageFactoryURL %q is not a plain http(s) URL. It is interpolated into the worker DataVolume source URL, so it must carry no whitespace, backtick, dollar sign or YAML metacharacters." .groupName ($factoryURL | toString)) -}}
+{{-   end -}}
+{{-   $parsedURL := urlParse ($factoryURL | toString) -}}
+{{-   if not $parsedURL.hostname -}}
+{{-     fail (printf "nodeGroup %q: imageFactoryURL %q must include a hostname" .groupName ($factoryURL | toString)) -}}
 {{-   end -}}
 {{- end -}}
 {{- $_ := set .out "schematicID" $schematicID -}}
@@ -581,20 +588,84 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 
+{{- define "kubernetes-nodes.workerClass" -}}
+{{- $name := get .Values "workerClassName" | default "" | toString -}}
+{{- $class := dict "name" $name "bootstrap" "talos" -}}
+{{- if has $name (list "talos" "kairos") -}}
+{{- $_ := set $class "bootstrap" $name -}}
+{{- else if ne $name "" -}}
+{{- $obj := lookup "cozystack.io/v1alpha1" "WorkerClass" "" $name -}}
+{{- if not $obj -}}
+{{- fail (printf "workerClassName %q: no WorkerClass of that name exists, or the render has no cluster to look it up (helm template)" $name) -}}
+{{- end -}}
+{{- range $k, $v := ($obj.spec | default dict) -}}
+{{- $_ := set $class $k $v -}}
+{{- end -}}
+{{- end -}}
+{{- if not (has $class.bootstrap (list "talos" "kairos")) -}}
+{{- fail (printf "WorkerClass %q has bootstrap %q; this chart supports talos and kairos" $name $class.bootstrap) -}}
+{{- end -}}
+{{- with $class.image -}}
+{{- if ne $class.bootstrap "kairos" -}}{{- fail (printf "WorkerClass %q: image requires bootstrap kairos" $name) -}}{{- end -}}
+{{- $minor := regexFind "^v[0-9]+\\.[0-9]+" (.kubernetesVersion | toString) -}}
+{{- if ne $minor ($.Values.version | toString) -}}
+{{- fail (printf "WorkerClass %q carries Kubernetes %s, whose minor differs from the pool's version %s" $name .kubernetesVersion $.Values.version) -}}
+{{- end -}}
+{{- end -}}
+{{- $class | toYaml -}}
+{{- end -}}
+
+{{- /* The exact Kubernetes release of this pool's Machines: the class's when it
+       names an image, otherwise the patch files/versions.yaml pins for the
+       pool's version. Input: a dict with `root` and `class`. */ -}}
+{{- define "kubernetes-nodes.kubernetesVersion" -}}
+{{- with .class.image -}}
+{{- .kubernetesVersion -}}
+{{- else -}}
+{{- include "kubernetes.versionMap" .root | trim -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Switching a running pool between a Talos and a Kairos class would roll every
+  worker onto the other OS, so the live MachineDeployment's bootstrap template
+  kind has to match the one this render asks for. Inert offline, like the
+  guards above.
+*/ -}}
+{{- define "kubernetes-nodes.assertOsMatches" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" .root -}}
+{{- $groupName := include "kubernetes-nodes.groupName" .root -}}
+{{- $wantKind := ternary "KairosConfigTemplate" "TalosConfigTemplate" (eq .class.bootstrap "kairos") -}}
+{{- $md := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .root.Release.Namespace (printf "%s-%s" $clusterName $groupName) -}}
+{{- if $md -}}
+{{- $liveKind := dig "spec" "template" "spec" "bootstrap" "configRef" "kind" "" $md -}}
+{{- /* A pool still on the kubeadm bootstrap is a classless pool, and the
+       migration off kubeadm moves it onto Talos; it cannot become Kairos. */ -}}
+{{- if and (eq $liveKind "KubeadmConfigTemplate") (eq .class.bootstrap "kairos") -}}
+{{- fail (printf "kubernetes-nodes: pool %q still runs workers bootstrapped by a KubeadmConfigTemplate, which can move only onto Talos. Create a new pool on WorkerClass %q and scale this one down instead." $groupName .class.name) -}}
+{{- end -}}
+{{- if and (has $liveKind (list "TalosConfigTemplate" "KairosConfigTemplate")) (ne $liveKind $wantKind) -}}
+{{- $selector := ternary "the pool, which has no WorkerClass," (printf "WorkerClass %q" .class.name) (eq .class.name "") -}}
+{{- fail (printf "kubernetes-nodes: pool %q already runs workers bootstrapped by a %s, and %s selects %s workers. Switching would roll every worker onto the other OS. Create a new pool on the other OS and scale this one down instead." $groupName $liveKind $selector .class.bootstrap) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 This pool's node group — the SINGLE assembly of the dict that feeds every
 consumer in this chart:
 
   * nodegroup.yaml, which renders the KubevirtMachineTemplate and the
     MachineDeployment (and hashes the former into its name);
-  * talos-reconcile-job.yaml, which renders the TalosConfigTemplate spec and
-    hashes it into the name the Job applies it under.
+  * talos-reconcile-job.yaml and kairos-reconcile-job.yaml, which render the
+    pool's bootstrap template spec and hash it into the name the Job applies
+    it under.
 
 Emitted as YAML and read back with `fromYaml` at each call site. A Helm
 template cannot return a dict and a Helm variable cannot cross a file
-boundary, so this round-trip is what lets one assembly serve two files.
+boundary, so this round-trip is what lets one assembly serve every file.
 
-Why it has to be one assembly. The TalosConfigTemplate name is a hash of the
+Why it has to be one assembly. The bootstrap template name is a hash of the
 spec this dict renders, and two templates have to agree on that name: the Job
 creates the object, the MachineDeployment's bootstrap.configRef points at it.
 Assembling the dict twice makes them agree only by coincidence of the keys the

@@ -13,6 +13,8 @@ build: build-deps
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
+	make -C packages/apps/kubernetes-nodes image
+	make -C packages/system/kubernetes-worker-classes image
 	make -C packages/apps/vpn image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
@@ -35,6 +37,7 @@ build: build-deps
 	make -C packages/system/talos-log-collector image
 	make -C packages/system/kamaji image
 	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-bootstrap image
 	make -C packages/system/capi-providers-infraprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
@@ -145,7 +148,7 @@ migrations-target-check:
 # ./internal/... runs in test-controllers; ./test/... and cmd/backport-batch
 # run in targets of their own.
 go-unit-tests:
-	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*)))
+	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*))) ./api/workers/v1alpha1
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.
@@ -321,3 +324,9 @@ generate:
 
 upload_assets: manifests
 	hack/upload-assets.sh
+
+.PHONY: test-worker-class-admission
+# The timeout has to cover the restore build deadline, the shared apiserver
+# budget of TestProductionPackage and the other tests in the package.
+test-worker-class-admission:
+	RUN_WORKERCLASS_INTEGRATION=1 KUBE_FEATURE_WatchListClient=false go test -tags=integration -timeout=15m -count=1 -v ./internal/kubernetesworker/integration/

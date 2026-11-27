@@ -1,0 +1,62 @@
+suite: kubernetes-nodes PackageSource dependencies
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: waits for the worker package and the core application API
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-nodes-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubernetes-worker-classes
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: kubernetes-nodes-rd
+            path: system/kubernetes-nodes-rd
+            install:
+              namespace: cozy-system
+              releaseName: kubernetes-nodes-rd
+  - it: installs managed Kubernetes after the worker package its pools are admitted by
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubernetes-worker-classes
+  - it: every cozystack-engine variant installs cozystack-controller
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - lengthEqual:
+          path: spec.variants
+          count: 2
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: cozystack-controller
+            path: system/cozystack-controller
+            install:
+              namespace: cozy-system
+              releaseName: cozystack-controller
+              dependsOn:
+                - application-definition-crd
+      - contains:
+          path: spec.variants[1].components
+          content:
+            name: cozystack-controller
+            path: system/cozystack-controller
+            install:
+              namespace: cozy-system
+              releaseName: cozystack-controller
+              dependsOn:
+                - application-definition-crd

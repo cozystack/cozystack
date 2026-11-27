@@ -1,0 +1,55 @@
+suite: worker values namespace grants
+release:
+  name: tenant-root
+  namespace: tenant-root
+templates:
+  - templates/worker-values-reader.yaml
+tests:
+  - it: grants nothing when the optional worker package is absent
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants root namespace GET before the worker ServiceAccount exists
+    set:
+      _cluster.worker-classes-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: tenant-root
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [cozystack-values]
+              verbs: [get]
+        documentSelector:
+          path: kind
+          value: Role
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: kubernetes-worker-classes
+              namespace: cozy-system
+        documentSelector:
+          path: kind
+          value: RoleBinding
+  - it: grants the new child namespace including its ComputePlane pools
+    release:
+      name: tenant-child
+      namespace: tenant-root-parent
+    set:
+      _cluster.worker-classes-enabled: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tenant-root-parent-child
+  - it: removes both resources when the shared feature flag is disabled
+    set:
+      _cluster.worker-classes-enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0

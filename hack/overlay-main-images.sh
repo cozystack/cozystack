@@ -7,7 +7,7 @@
 # That artifact is the ENTIRE current-main packages tree with every image
 # reference digest-pinned to the images build-main just pushed.
 #
-# We walk EVERY ref-bearing file (values.yaml + images/*.tag) in that tree and
+# We walk the shared image-reference file set in that tree and
 # overlay the repo's copy when it differs only in image-reference lines. This is
 # deliberately driven by the artifact, NOT the per-package build matrix, so it
 # covers the WHOLE first-party tree — apps/, system/, core/, AND extra/,
@@ -27,7 +27,8 @@
 #   - packages/core/talos and packages/core/installer: owned by dedicated jobs
 #     (the input-gated build-talos job / the finalize installer build), so their
 #     own files are never overlaid. A successful Talos job also adds its actual
-#     output package, packages/extra/bootbox, to BUILT_JSON at the call site.
+#     output package, packages/extra/bootbox, to BUILT_JSON at the call site,
+#     and a successful Kairos worker disk job adds packages/apps/kubernetes-nodes.
 #   - vendored charts/ subtrees: upstream chart values we do not build.
 #
 # Surgical + self-validating: a file is overlaid only when every line that
@@ -77,6 +78,9 @@ if [ ! -d "$MAINPKGS" ]; then
   echo "No current-main packages tree at $MAINPKGS — unbuilt packages keep committed refs"
   exit 0
 fi
+
+# shellcheck source=hack/lib/image-refs.sh
+. "$(dirname "$0")/lib/image-refs.sh"
 
 # Dirs whose files must never be overlaid: the two units owned by dedicated
 # jobs, every unit the PR rebuilt, and every package the PR edited (its committed
@@ -212,6 +216,27 @@ replace_bare_refs() {
   echo "$n"
 }
 
+skip_file() {
+  for _overlay_dir in $skip; do
+    case "$1" in "$_overlay_dir"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+ref_only_change() {
+  _overlay_pattern="$img_line"
+  case "$1" in *.tag) _overlay_pattern="($img_line)|($bare_ref_line)" ;; esac
+  if diff "$1" "$2" | sed -n 's/^[<>] //p' \
+      | grep -vE '^[[:space:]]*$' | grep -qvE "$_overlay_pattern"; then
+    return 1
+  fi
+}
+
+matching_payload() {
+  [ -f "$1" ] && [ -f "$2" ] && gzip --test "$1" &&
+    gzip --decompress --stdout "$1" | cmp --silent "$2" -
+}
+
 overlaid=0
 same=0
 bare=0
@@ -220,19 +245,68 @@ skipped=0
 drift=0
 drift_files=""
 failed=0
-# Walk the artifact's ref-bearing files, pruning vendored charts/ subtrees.
-# `for … in $(find)` (not a pipe) keeps the counters in this shell; package
-# paths and filenames carry no spaces (same assumption as hack/build-matrix.sh).
-for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
-                  \( -name values.yaml -o -name '*.tag' \) -type f -print 2>/dev/null); do
+# A compressed payload and its readable source must not split when any
+# reference file in their package has non-reference drift.
+for pair in $IMAGE_REF_GZIP_COPIES; do
+  archive=${pair%%=*}
+  plain=${pair#*=}
+  pkg=$(printf '%s\n' "$plain" | cut --delimiter=/ --fields=1,2)
+  skip_file "packages/$plain" && continue
+  if [ ! -f "packages/$plain" ] && [ ! -f "packages/$archive" ]; then continue; fi
+  if [ ! -f "$MAINPKGS/$plain" ] && [ ! -f "$MAINPKGS/$archive" ]; then
+    echo "base artifact predates $plain -> keeping package refs"
+    skip="$skip packages/$pkg "
+    continue
+  fi
+  if ! matching_payload "packages/$archive" "packages/$plain"; then
+    echo "incomplete or mismatched image payload: $plain / $archive" >&2
+    exit 1
+  fi
+  # A broken base artifact is main's defect, not this pull request's; the
+  # committed refs were just checked whole.
+  if ! matching_payload "$MAINPKGS/$archive" "$MAINPKGS/$plain"; then
+    echo "::warning::base artifact has an incomplete or mismatched $plain / $archive -> keeping package refs"
+    skip="$skip packages/$pkg "
+    continue
+  fi
+  for new in $(image_ref_files "$MAINPKGS"); do
+    case "${new#"$MAINPKGS"/}" in "$pkg"/*) ;; *) continue ;; esac
+    cur="packages/${new#"$MAINPKGS"/}"
+    [ -f "$cur" ] || continue
+    if ! ref_only_change "$cur" "$new"; then
+      echo "drift (non-ref change) in $cur -> keeping package refs together"
+      drift=$((drift + 1))
+      drift_files="$drift_files $pkg"
+      skip="$skip packages/$pkg "
+      break
+    fi
+  done
+  skip_file "packages/$plain" && continue
+  for tag in "$MAINPKGS/$pkg"/images/*.tag; do
+    [ -f "$tag" ] || continue
+    cur="packages/${tag#"$MAINPKGS"/}"
+    [ -f "$cur" ] || continue
+    # Only the image the payload deploys is held to it; another image of the
+    # package overlays on its own.
+    repo=$(sed -E 's/@.*//; s#:[^/:]*$##; s#.*/##' "$tag")
+    grep -Fq -- "/$repo:" "$MAINPKGS/$plain" || grep -Fq -- "/$repo@" "$MAINPKGS/$plain" || continue
+    if ! grep -Fq -- "$(cat "$cur")" "packages/$plain"; then
+      echo "image tag does not match consumed payload: $cur" >&2
+      exit 1
+    fi
+    if ! grep -Fq -- "$(cat "$tag")" "$MAINPKGS/$plain"; then
+      echo "::warning::base artifact $cur is not the image its $plain deploys -> keeping package refs"
+      skip="$skip packages/$pkg "
+      break
+    fi
+  done
+done
+
+for new in $(image_ref_files "$MAINPKGS"); do
   # Artifact root == contents of packages/, so map back by re-adding the prefix.
   cur="packages/${new#"$MAINPKGS"/}"
 
-  in_skip=0
-  for d in $skip; do
-    case "$cur" in "$d"/*) in_skip=1; break ;; esac
-  done
-  if [ "$in_skip" -eq 1 ]; then
+  if skip_file "$cur"; then
     skipped=$((skipped + 1))
     continue
   fi
@@ -248,11 +322,7 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   # behind #4265 it was the entire remaining drift list: core/platform,
   # cozystack-api, dashboard, kubeovn-webhook and linstor-gui each differed
   # from the artifact by one blank line and their own ref, nothing else.
-  line_pat="$img_line"
-  case "$cur" in *.tag) line_pat="($img_line)|($bare_ref_line)" ;; esac
-
-  if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
-      | grep -vE '^[[:space:]]*$' | grep -qvE "$line_pat"; then
+  if ! ref_only_change "$cur" "$new"; then
     drift=$((drift + 1))
     r=0
     case "$cur" in
@@ -274,10 +344,10 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
       bare_files="$bare_files $d"
     fi
     # Name the PACKAGE, not the directory the file happens to sit in: an
-    # images/*.tag drift would otherwise read as "<pkg>/images", which is not
-    # something anyone can go and look at.
-    d=$(dirname "${cur#packages/}")
-    drift_files="$drift_files ${d%/images}"
+    # images/*.tag or a declared templates/ file would otherwise read as
+    # "<pkg>/images" or "<pkg>/templates", which is not something anyone can
+    # go and look at.
+    drift_files="$drift_files $(printf '%s\n' "${cur#packages/}" | cut --delimiter=/ --fields=1,2)"
     continue
   fi
 
@@ -289,6 +359,34 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
     failed=$((failed + 1))
   fi
 done
+
+for pair in $IMAGE_REF_GZIP_COPIES; do
+  archive=${pair%%=*}
+  plain=${pair#*=}
+  skip_file "packages/$plain" && continue
+  [ -f "packages/$plain" ] || continue
+  if ! cmp --silent "packages/$plain" "$MAINPKGS/$plain"; then
+    echo "image payload source overlay failed: $plain" >&2
+    exit 1
+  fi
+  pkg=$(printf '%s\n' "$plain" | cut --delimiter=/ --fields=1,2)
+  for tag in "$MAINPKGS/$pkg"/images/*.tag; do
+    [ -f "$tag" ] || continue
+    cur="packages/${tag#"$MAINPKGS"/}"
+    [ -f "$cur" ] || continue
+    if ! cmp --silent "$cur" "$tag"; then
+      echo "image tag overlay failed: $cur" >&2
+      exit 1
+    fi
+  done
+  if ! cmp --silent "packages/$archive" "$MAINPKGS/$archive"; then
+    cp "$MAINPKGS/$archive" "packages/$archive" || exit 1
+    echo "overlay: packages/$archive -> current-main"
+    overlaid=$((overlaid + 1))
+  fi
+  matching_payload "packages/$archive" "packages/$plain" || exit 1
+done
+
 
 echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift bare-refs=$bare failed=$failed"
 

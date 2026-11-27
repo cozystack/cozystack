@@ -1,0 +1,105 @@
+#cloud-config
+# Baked into the raw disk by AuroraBoot, which adds its own /oem/01_reset.yaml:
+# the first boot comes up in recovery, a layout step in the initramfs adds the
+# state and persistent partitions, and a network-stage step resets into the
+# active system unattended. AuroraBoot's file removes itself after the
+# reset. Everything else, the user included, comes from the bootstrap
+# provider's cloud-config.
+#
+# The layout tells the kernel about the new partitions with BLKPG ioctls, and
+# by the network stage the running kernel has sometimes dropped them again
+# while the on-disk table still lists them; the reset then fails with "state
+# partition not found" and the worker stays in recovery. What drops them is not
+# known. So this file takes the reset over: it sets AuroraBoot's skip marker,
+# re-adds whatever partitions the table holds and the kernel lacks, waits for
+# udev to label them, and resets. Its own reset runs without --debug, which
+# prints the whole collected config, the join token included, to a console
+# that ends up in logs.
+#
+# On a KubeVirt worker the layout adds both partitions, but formatting the
+# state partition fails in the initramfs, which stops the layout before it
+# formats the persistent one; a missing partition node is the likely cause,
+# not a proven one. The reset then finds no state partition either. The reset
+# also formats no persistent partition it cannot find by label, and the active
+# system then fails its boot on the persistent mounts. So when either label is
+# missing, the step prints the layout's lines and the formatter's own output
+# from the initramfs log, then formats each partition the layout added that has
+# a readable device node and on which blkid reports no signature, as the layout
+# would have.
+#
+# Nobody watches a worker VM's console, so a recovery boot forwards the
+# journal there: a reset that fails leaves the reason in the serial log. The
+# reset runs in the network stage, whose service waits for the network to come
+# online; nothing else orders it after this boot stage, so if the network were
+# up before journald restarts, the first lines of the reset would miss the
+# console. The drop-in lives in the recovery system's tmpfs /etc and is gone
+# once the active system boots, whose console stays quiet.
+stages:
+  boot.before:
+    - name: forward the journal to the serial console on a recovery boot
+      if: '[ -f /run/cos/recovery_mode ]'
+      files:
+        - path: /etc/systemd/journald.conf.d/90-serial-console.conf
+          permissions: 0644
+          content: |
+            [Journal]
+            ForwardToConsole=yes
+            TTYPath=/dev/ttyS0
+            MaxLevelConsole=info
+      commands:
+        - systemctl restart systemd-journald
+  network.before:
+    - name: take the first-boot reset over from AuroraBoot
+      if: '[ -f /run/cos/recovery_mode ] && [ -f /oem/01_reset.yaml ]'
+      commands:
+        - touch /oem/.autoreset.skip
+  network:
+    # Files run in name order, so this follows AuroraBoot's udevadm trigger.
+    - name: re-add the partitions the layout created and reset into the active system
+      if: '[ -f /run/cos/recovery_mode ] && [ -f /oem/01_reset.yaml ]'
+      commands:
+        - |
+          udevadm settle
+          disk="/dev/$(lsblk -no PKNAME "$(blkid -L COS_RECOVERY)")"
+          # Fails for the partitions the kernel already has; the rest are added.
+          partx -a "$disk" || true
+          udevadm settle
+          # The initramfs log is the only record of why the layout left the
+          # partitions unformatted. Only its disk lines and the formatter's
+          # output go to the console, which ends up in logs.
+          if ! blkid -L COS_STATE > /dev/null || ! blkid -L COS_PERSISTENT > /dev/null; then
+            lsblk -o NAME,SIZE,LABEL,PARTLABEL
+            grep -E "Add state partition| (ERR|WRN) .*(disk|partition|header|space|layout|GPT)" /run/immucore/immucore.log \
+              | grep -v "(conditional) Skip"
+            awk '/ ERR Error formatting partition /{f=1; print; next} /^20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/{f=0} f' /run/immucore/immucore.log
+            # The filesystems the layout in AuroraBoot's 01_reset.yaml asks for.
+            for part in state:COS_STATE:ext2 persistent:COS_PERSISTENT:ext4; do
+              name=${part%%:*}
+              label=${part#*:}
+              fs=${label#*:}
+              label=${label%%:*}
+              node=$(lsblk -rno PATH,PARTLABEL "$disk" | awk -v label="$name" '$2 == label {print $1}')
+              if [ -z "$node" ] || ! [ -b "$node" ]; then
+                echo "no block device for the $name partition"
+                continue
+              fi
+              # blkid -p exits 2 when it reports no signature, which includes
+              # a probe it could not complete, so a partition is formatted
+              # only once its first block reads back too; one it reports any
+              # filesystem on is left alone. Without -D it reports the
+              # partition table entry and exits 0 on an empty one.
+              rc=0; blkid -p -D "$node" > /dev/null || rc=$?
+              [ "$rc" -eq 2 ] || continue
+              if ! dd if="$node" of=/dev/null bs=4096 count=1 2> /dev/null; then
+                echo "the $name partition cannot be read, left unformatted"
+                continue
+              fi
+              "mkfs.$fs" -L "$label" "$node"
+            done
+            udevadm settle
+          fi > /dev/ttyS0 2>&1
+          kairos-agent reset --unattended --reboot
+  after-reset:
+    - name: drop the reset takeover marker
+      commands:
+        - rm -f /oem/.autoreset.skip

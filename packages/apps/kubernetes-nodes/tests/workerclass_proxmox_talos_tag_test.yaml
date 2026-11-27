@@ -1,0 +1,128 @@
+suite: Proxmox template tags against the resolved Talos release
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  instanceType: ""
+  resources:
+    cpu: "4"
+    memory: 8Gi
+  substrate: proxmox
+  proxmox:
+    full: true
+    network:
+      bridge: vmbr0
+    dnsServers: ["8.8.8.8"]
+tests:
+  - it: checks the tags against the platform default on a classed pool
+    set:
+      workerClassName: talos
+      proxmox.templateTags: [cozystack, talos-v1.13.6]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tagged "talos-v1.13.6", but talos.version is "v1.13.12"'
+
+  - it: checks the tags against the pool's own release on a classed pool
+    set:
+      workerClassName: talos
+      talos.version: v1.13.9
+      proxmox.templateTags: [cozystack, talos-v1.13.12]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tagged "talos-v1.13.12", but talos.version is "v1.13.9"'
+
+  - it: checks the tags against the class's release
+    set:
+      workerClassName: acme-talos
+      proxmox.templateTags: [cozystack, talos-v1.13.12]
+    kubernetesProvider: &provider
+      scheme:
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
+          namespaced: false
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinedeployments"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinesets"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/ProxmoxMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "proxmoxmachinetemplates"}
+          namespaced: true
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-talos
+          spec:
+            bootstrap: talos
+            talos:
+              version: v1.13.9
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata: {name: scheme-only, namespace: scheme-only}
+          spec: {}
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: ProxmoxMachineTemplate
+          metadata: {name: scheme-only, namespace: scheme-only}
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tagged "talos-v1.13.12", but talos.version is "v1.13.9"'
+
+  # The schema before classes stored its default release on every pool, and that
+  # default moved once, so either stored release counts as not set and the class
+  # release applies.
+  - it: lets the class release through a stored v1.13.6
+    set:
+      workerClassName: acme-talos
+      talos.version: v1.13.6
+      proxmox.templateTags: [cozystack, talos-v1.13.9]
+    kubernetesProvider: *provider
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - isKind:
+          of: ProxmoxMachineTemplate
+
+  - it: lets the class release through a stored v1.13.12
+    set:
+      workerClassName: acme-talos
+      talos.version: v1.13.12
+      proxmox.templateTags: [cozystack, talos-v1.13.9]
+    kubernetesProvider: *provider
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - isKind:
+          of: ProxmoxMachineTemplate
+
+  - it: keeps a release no schema stored as the pool's own
+    set:
+      workerClassName: acme-talos
+      talos.version: v1.13.7
+      proxmox.templateTags: [cozystack, talos-v1.13.9]
+    kubernetesProvider: *provider
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tagged "talos-v1.13.9", but talos.version is "v1.13.7"'
+
+  # A stored release yields to the class, so pinning it on the pool cannot
+  # satisfy the tag; the advice has to name the class.
+  - it: tells a classed pool to change its class, not its talos.version
+    set:
+      workerClassName: acme-talos
+      talos.version: v1.13.12
+      proxmox.templateTags: [cozystack, talos-v1.13.12]
+    kubernetesProvider: *provider
+    asserts:
+      - failedTemplate:
+          errorPattern: 'but talos.version is "v1.13.9".*or use a WorkerClass whose talos.version is the release the template carries'

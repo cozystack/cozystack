@@ -1,47 +1,26 @@
 #!/usr/bin/env bats
-# -----------------------------------------------------------------------------
-# Ties the kubernetes-nodes chart's default Talos image to the kubernetes-worker-image
-# catalog's default golden. The two live in independently edited files:
-#
-#   packages/apps/kubernetes-nodes/values.yaml      talos.{schematicID,version}
-#   packages/system/kubernetes-worker-image/values.yaml   images[], storageClass
-#
-# A worker pool that opts in with `osImage.builtin: {}` resolves the golden it
-# clones from the POOL chart's talos defaults, then requires the catalog to hold a
-# matching (schematicID, version) — packages/apps/kubernetes-nodes/templates/
-# nodegroup.yaml fails the whole render when it does not. So a one-sided Talos bump
-# silently breaks every fresh install using osImage.builtin, and nothing catches it
-# until a ~95-minute e2e run does.
-#
-# The StorageClass is the same trap from the other direction: the render also
-# rejects a group whose storageClass differs from its golden's, because across
-# classes CDI either falls back to a host-assisted copy over the pod network or
-# leaves the clone to the CSI driver. Bumping one file's default alone brings
-# that guard down on the default path.
-#
-# Both checks are cheap and exact, which is the point — they turn a slow, remote
-# e2e failure into a local one-second unit test.
-#
-# Compatible with both `bats` directly and the in-repo cozytest.sh runner, which
-# runs each @test in a fresh subshell with `set -u` and does not honor bats
-# setup()/teardown().
+# A one-sided legacy-default/catalog change must fail before a builtin pool
+# waits for a golden that cannot exist. API defaults are not this source.
+# Checked here rather than in a render test: these are cheap exact file
+# comparisons that turn a slow remote e2e failure into a local one.
 
 load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 APP_VALUES="$REPO_ROOT/packages/apps/kubernetes-nodes/values.yaml"
+APP_DEFAULTS="$REPO_ROOT/packages/apps/kubernetes-nodes/files/worker-defaults.json"
 CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
 
 @test "worker image catalog holds a golden for the pool chart's default Talos (schematicID, version)" {
-  sid=$(yq '.talos.schematicID' "$APP_VALUES")
-  ver=$(yq '.talos.version' "$APP_VALUES")
+  sid=$(yq --unwrapScalar '.talos.schematicID' "$APP_DEFAULTS")
+  ver=$(yq --unwrapScalar '.talos.version' "$APP_DEFAULTS")
   [ -n "$sid" ] && [ "$sid" != "null" ]
   [ -n "$ver" ] && [ "$ver" != "null" ]
 
   # Any entry may match — the catalog is a list of flavors, not an ordered pair.
   if ! yq '.images[] | .schematicID + " " + .version' "$CATALOG_VALUES" \
        | grep -qxF "$sid $ver"; then
-    echo "packages/apps/kubernetes-nodes/values.yaml defaults to Talos:" >&2
+    echo "legacy worker defaults select Talos:" >&2
     echo "  schematicID: $sid" >&2
     echo "  version:     $ver" >&2
     echo "but the kubernetes-worker-image catalog has no matching images[] entry:" >&2
@@ -53,8 +32,8 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
 }
 
 @test "worker image catalog golden shares the pool chart's default StorageClass" {
-  sid=$(yq '.talos.schematicID' "$APP_VALUES")
-  ver=$(yq '.talos.version' "$APP_VALUES")
+  sid=$(yq --unwrapScalar '.talos.schematicID' "$APP_DEFAULTS")
+  ver=$(yq --unwrapScalar '.talos.version' "$APP_DEFAULTS")
   app_sc=$(yq '.storageClass' "$APP_VALUES")
 
   # The golden's effective class is its own override when set, else the catalog
@@ -76,19 +55,6 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
   fi
 }
 
-# -----------------------------------------------------------------------------
-# Second family of default-drift guards on the same chart: the Talos <-> Kubernetes
-# support matrix. A pool reaches a Talos release through `talos.version` or through
-# `osImage.builtin.version` / `osImage.factory.version`, and the table in
-# templates/_helpers.tpl has to be consulted for whichever one the pool boots.
-#
-# The matrix ships one row (`v1.13`) whose Kubernetes list is a superset of
-# `values.schema.json`'s `version` enum, so no schema-valid pairing makes either
-# call site fail today. hack/kubernetes-nodes-talos-matrix.bats renders the
-# refusals with the schema skipped; these two guards cover what it does not: that
-# both call sites stay wired, and that the table still means something for the
-# defaults the chart ships.
-
 NODES_TEMPLATE="$REPO_ROOT/packages/apps/kubernetes-nodes/templates/nodegroup.yaml"
 NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
 
@@ -108,15 +74,13 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
 }
 
 @test "the support matrix covers every Kubernetes version the schema offers, for the default Talos" {
-  ver=$(yq '.talos.version' "$APP_VALUES")
+  ver=$(yq --unwrapScalar '.talos.version' "$APP_DEFAULTS")
   minor=$(printf '%s\n' "$ver" | grep -oE '^v[0-9]+\.[0-9]+')
   [ -n "$minor" ]
 
-  helpers="$REPO_ROOT/packages/apps/kubernetes-nodes/templates/_helpers.tpl"
-  # The row is a Helm dict literal: `"v1.13" (list "v1.31" "v1.32" ...)`.
-  row=$(grep -oE "\"${minor}\" \(list [^)]*\)" "$helpers" || true)
-  if [ -z "$row" ]; then
-    echo "the Talos support matrix in $helpers has no row for ${minor}, the default talos.version ($ver)" >&2
+  row=$(MINOR="$minor" yq --output-format=json '.talosKubernetesSupport[strenv(MINOR)]' "$APP_DEFAULTS")
+  if [ -z "$row" ] || [ "$row" = null ]; then
+    echo "the Talos support matrix in $APP_DEFAULTS has no row for ${minor}, the default talos.version ($ver)" >&2
     echo "an unlisted Talos minor passes the guard unchecked, so the guard means nothing on the shipped defaults" >&2
     return 1
   fi
@@ -143,5 +107,23 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
         echo "either the row is stale or the enum gained a version Talos ${minor} does not support" >&2
         return 1 ;;
     esac
+  done
+}
+
+# Admission embeds one copy and the chart reads the other; hack/update-codegen.sh
+# copies it, and nothing else notices an edit made to one side only.
+@test "admission and the pool chart resolve against the same worker defaults" {
+  cmp "$REPO_ROOT/internal/kubernetesworker/config/defaults.json" "$APP_DEFAULTS"
+}
+
+# The e2e install seeds an image-factory mirror for the default worker image
+# and skips it silently when the keys it reads come back null.
+@test "the e2e image-factory mirror reads the default Talos image from the worker defaults" {
+  for key in schematicID version; do
+    grep -qF "'.talos.${key}' packages/apps/kubernetes-nodes/files/worker-defaults.json" "$REPO_ROOT/hack/e2e-install-cozystack.bats" \
+      || { echo "hack/e2e-install-cozystack.bats does not read talos.${key} from the worker defaults" >&2; return 1; }
+    value=$(yq --input-format=json --output-format=yaml --unwrapScalar ".talos.${key}" "$APP_DEFAULTS")
+    [ -n "$value" ] && [ "$value" != null ] \
+      || { echo "talos.${key} is missing from $APP_DEFAULTS" >&2; return 1; }
   done
 }

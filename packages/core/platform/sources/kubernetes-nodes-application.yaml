@@ -12,13 +12,14 @@ spec:
   variants:
     - name: kubevirt
       dependsOn:
+        - cozystack.kubernetes-worker-classes
         - cozystack.networking
         - cozystack.capi-operator
         - cozystack.capi-provider-bootstrap-kubeadm
         - cozystack.capi-provider-core
         - cozystack.capi-provider-cp-kamaji
         - cozystack.capi-provider-infra-kubevirt
-        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        # The rd component needs the core ApplicationDefinition CRD.
         - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
