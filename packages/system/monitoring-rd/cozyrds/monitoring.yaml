@@ -44,6 +44,7 @@ spec:
     include:
       - resourceNames:
           - grafana-admin-password
+          - alerta-admin-password
   services:
     exclude: []
     include:
