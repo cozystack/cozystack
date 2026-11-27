@@ -1,0 +1,127 @@
+# The core backup controller on its own: no strategy driver is involved, and
+# the strategy kind the classes below bind is one that nothing serves. What a
+# driver does with a job is tested with the drivers, in
+# https://github.com/cozystack/backup-strategies.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup-controller
+spec:
+  catch:
+  - events: {}
+  - podLogs:
+      namespace: cozy-backup-controller
+      selector: app=backup-controller
+      tail: 100
+  - get:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  steps:
+  - name: a-job-whose-class-does-not-bind-its-kind-is-failed
+    try:
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupClass
+          metadata:
+            name: e2e-core-unbound
+          spec:
+            strategies:
+            - application:
+                kind: Gadget
+              strategyRef:
+                apiGroup: strategy.e2e.cozystack.test
+                kind: Dump
+                name: nightly
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: e2e-core-unbound
+          spec:
+            applicationRef:
+              apiGroup: apps.cozystack.io
+              kind: Widget
+              name: w
+            backupClassName: e2e-core-unbound
+    - assert:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: e2e-core-unbound
+          status:
+            phase: Failed
+            (conditions[?type == 'Ready']):
+            - status: 'False'
+              reason: BackupFailed
+  # A fragment contributes a binding to the class its label names, and the
+  # job resolves through it: the class object itself binds nothing for Widget.
+  # Nothing serves the strategy kind, which is how the controller tells that
+  # no driver is installed for it.
+  - name: a-job-bound-through-a-fragment-to-an-unserved-strategy-waits-for-its-driver
+    try:
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupClass
+          metadata:
+            name: e2e-core-unbound-widget
+            labels:
+              backups.cozystack.io/class: e2e-core-unbound
+          spec:
+            strategies:
+            - application:
+                kind: Widget
+              strategyRef:
+                apiGroup: strategy.e2e.cozystack.test
+                kind: Dump
+                name: nightly
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: e2e-core-nodriver
+          spec:
+            applicationRef:
+              apiGroup: apps.cozystack.io
+              kind: Widget
+              name: w
+            backupClassName: e2e-core-unbound
+    - assert:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: e2e-core-nodriver
+          status:
+            (conditions[?type == 'Ready']):
+            - status: 'False'
+              reason: DriverNotInstalled
+  - name: a-plan-creates-a-job-when-its-schedule-fires
+    try:
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: Plan
+          metadata:
+            name: e2e-core-plan
+          spec:
+            applicationRef:
+              apiGroup: apps.cozystack.io
+              kind: Widget
+              name: w
+            backupClassName: e2e-core-unbound
+            schedule:
+              type: cron
+              cron: "* * * * *"
+    - assert:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          spec:
+            planRef:
+              name: e2e-core-plan
+            backupClassName: e2e-core-unbound

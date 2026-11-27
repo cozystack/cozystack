@@ -10,10 +10,25 @@ rules:
 - apiGroups: ["backups.cozystack.io"]
   resources: ["plans/status"]
   verbs: ["get", "update", "patch"]
-# BackupJob: create when schedule fires (status is updated by backupstrategy-controller)
+# BackupJob: created when a schedule fires. RestoreJob is only read.
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs"]
   verbs: ["create", "get", "list", "watch"]
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["restorejobs"]
+  verbs: ["get", "list", "watch"]
+# A strategy driver writes the status of the jobs it runs. The dispatcher
+# writes it for the jobs no driver will pick up: a class that binds no
+# strategy to the application, a strategy kind nothing serves, a RestoreJob
+# whose Backup is gone.
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupjobs/status", "restorejobs/status"]
+  verbs: ["update", "patch"]
+# What the dispatcher resolves a job against: the class and its fragments,
+# and the Backup a RestoreJob names.
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupclasses", "backups"]
+  verbs: ["get", "list", "watch"]
 # Leader election (--leader-elect)
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]

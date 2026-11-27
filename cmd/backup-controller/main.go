@@ -162,6 +162,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&backupcontroller.BackupJobDispatcher{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BackupJobDispatcher")
+		os.Exit(1)
+	}
+
+	if err = (&backupcontroller.RestoreJobDispatcher{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "RestoreJobDispatcher")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
