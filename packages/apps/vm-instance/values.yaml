@@ -22,7 +22,7 @@
 ## @x-cozystack-options {source: gpu}
 ## @field {string} [className] - GPUClass to take GPUs of.
 ## @x-cozystack-options {source: gpuclass}
-## @field {int} [count] - GPUs of the class; 1 when unset.
+## @field {int} [count] - For class entries, a whole number of at least 1; omit count to use 1. All class entries of one VM together may not exceed 1024 GPUs. Raw-name entries must omit count.
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
 ## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.

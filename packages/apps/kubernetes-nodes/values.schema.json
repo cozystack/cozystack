@@ -161,7 +161,7 @@
             }
           },
           "count": {
-            "description": "GPUs of the class per worker; 1 when unset.",
+            "description": "For class entries, a whole number of at least 1 GPUs per worker; omit count to use 1. All class entries of one worker together may not exceed 1024 GPUs. Raw-name entries must omit count.",
             "type": "integer"
           },
           "name": {

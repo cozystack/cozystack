@@ -50,17 +50,53 @@ tests:
       - notExists:
           path: spec.template.spec.domain.devices.gpus
 
-  # A typed client sends the zero value of every field.
-  - it: reads a zero count and an empty name as unset
+  - it: refuses an explicit zero class count
+    set:
+      gpus:
+        - className: h100
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\].count must be a whole number of at least 1"
+
+  - it: defaults an omitted class count and ignores an empty name
     set:
       gpus:
         - className: h100
           name: ""
-          count: 0
     asserts:
       - equal:
           path: spec.template.metadata.annotations["cozystack.io/gpus"]
           value: '[{"className":"h100","count":1}]'
+
+  - it: refuses an explicit zero count on a raw entry
+    set:
+      gpus:
+        - name: example.com/gpu
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: count applies to className entries only"
+
+  - it: refuses a negative count on a raw entry
+    set:
+      gpus:
+        - name: example.com/gpu
+          count: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: count applies to className entries only"
+
+  - it: accepts a raw entry without count
+    set:
+      gpus:
+        - name: example.com/gpu
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+            - name: gpu1
+              deviceName: example.com/gpu
 
   - it: renders no gpus without entries
     asserts:

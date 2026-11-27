@@ -53,7 +53,7 @@ storageClass: replicated
 ## @x-cozystack-options {source: gpu}
 ## @field {string} [className] - GPUClass to take GPUs of.
 ## @x-cozystack-options {source: gpuclass}
-## @field {int} [count] - GPUs of the class per worker; 1 when unset.
+## @field {int} [count] - For class entries, a whole number of at least 1 GPUs per worker; omit count to use 1. All class entries of one worker together may not exceed 1024 GPUs. Raw-name entries must omit count.
 
 ## @typedef {struct} KernelModule - Kernel module loaded on the worker at boot.
 ## @field {string} name - Module name as `modprobe` takes it, e.g. `nvidia_uvm`.

@@ -101,6 +101,62 @@ tests:
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["cozystack.io/gpu-reference"]
 
+  - it: refuses an explicit zero class count
+    kubernetesProvider: *gpuClassProvider
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - className: h100
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\].count must be a whole number of at least 1"
+
+  - it: refuses a negative class count
+    kubernetesProvider: *gpuClassProvider
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - className: h100
+          count: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\].count must be a whole number of at least 1"
+
+  - it: refuses an explicit zero raw count
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: example.com/gpu
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: count applies to className entries only"
+
+  - it: refuses a negative raw count
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: example.com/gpu
+          count: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: count applies to className entries only"
+
+  - it: defaults an omitted class count
+    template: templates/nodegroup.yaml
+    kubernetesProvider: *gpuClassProvider
+    set:
+      gpus:
+        - className: h100
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["cozystack.io/gpus"]
+          value: '[{"className":"h100","count":1}]'
+
   - it: refuses class entries where GPUs do not serve VMs
     kubernetesProvider: *gpuClassProvider
     template: templates/nodegroup.yaml

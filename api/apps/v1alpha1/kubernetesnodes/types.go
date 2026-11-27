@@ -107,7 +107,7 @@ type ConfigSpec struct {
 type GPU struct {
 	// GPUClass to take GPUs of.
 	ClassName string `json:"className,omitempty"`
-	// GPUs of the class per worker; 1 when unset.
+	// For class entries, a whole number of at least 1 GPUs per worker; omit count to use 1. All class entries of one worker together may not exceed 1024 GPUs. Raw-name entries must omit count.
 	Count int `json:"count,omitempty"`
 	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
 	Name string `json:"name,omitempty"`

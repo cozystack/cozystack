@@ -4,8 +4,7 @@ returns, as JSON, {"names": [...], "classes": [{className, count}]}. An entry
 sets exactly one of name and className, count goes with className only and
 defaults to 1, and a list holds one kind. Class entries fail without
 _cluster.gpu-vm-enabled, since no webhook would resolve them and the VM would
-boot without its GPUs. A typed client sends the zero value of every field, so
-an empty string and a count of 0 read as unset.
+boot without its GPUs.
 
   {{- $gpus := include "cozy-lib.gpu.entries" (list .Values.gpus .Values._cluster) | fromJson }}
 */}}
@@ -22,7 +21,7 @@ an empty string and a count of 0 read as unset.
 {{-     fail (printf "gpus[%d]: set exactly one of name and className" $i) -}}
 {{-   end -}}
 {{-   $count := "1" -}}
-{{-   if not (empty $gpu.count) -}}
+{{-   if and (hasKey $gpu "count") (not (kindIs "invalid" $gpu.count)) -}}
 {{-     if $name -}}
 {{-       fail (printf "gpus[%d]: count applies to className entries only" $i) -}}
 {{-     end -}}
