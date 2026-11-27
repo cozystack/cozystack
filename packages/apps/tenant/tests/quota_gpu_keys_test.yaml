@@ -84,6 +84,21 @@ tests:
           path: metadata.name
           pattern: ^tenant-quota$
 
+  # Class budgets do not cover raw-name GPU entries; a native quota on the
+  # resource name does. The pod quota evaluator charges an extended resource
+  # only under requests.<name>, so that is the key that has to be rendered.
+  - it: caps a raw GPU resource name with a requests quota
+    set:
+      resourceQuotas:
+        nvidia.com/AD102GL_L40S: 1
+    documentSelector:
+      path: kind
+      value: ResourceQuota
+    asserts:
+      - equal:
+          path: spec.hard["requests.nvidia.com/AD102GL_L40S"]
+          value: 1
+
   - it: renders nothing without resourceQuotas
     asserts:
       - hasDocuments:

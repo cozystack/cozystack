@@ -126,6 +126,10 @@ A `VMInstance` reserves the `count` of each class entry and a `KubernetesNodes` 
 
 GPU budgets are checked against the application's tenant pool, not recursively against every ancestor's GPU budget.
 
+Class budgets cover class entries only: not raw-name GPU entries, which name a device-plugin resource directly, and not a KubeVirt VirtualMachine that a tenant administrator writes directly. Cap those with a native quota on the resource name, for example `nvidia.com/AD102GL_L40S: 2`, which is rendered as a `requests.` quota that Kubernetes charges against every pod requesting the resource.
+
+A worker pool with class entries must keep `minReplicas` at or below `maxReplicas` when it is written: a new pool starts at `minReplicas` workers, and the reservation is `maxReplicas` times the count. Pools without class entries are not affected. A rolling update of a worker pool can run up to `max(1, maxReplicas)` extra workers at once, because that is the pool's `maxSurge`, and the reservation does not include these surge workers.
+
 **Example:**
 ```yaml
 resourceQuotas:
