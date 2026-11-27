@@ -4,7 +4,7 @@ load test_helper
 
 # The fixtures reproduce the lines of the upstream alerta-web 9.1.0
 # docker-entrypoint.sh and nginx.conf.j2 that the respin edits.
-SCRIPT="packages/system/monitoring/images/alerta/redact-secrets.sh"
+SCRIPT="packages/system/monitoring/images/alerta/patch-upstream.sh"
 
 write_fixtures() {
   cat >"${BATS_TEST_TMPDIR}/docker-entrypoint.sh" <<'EOF'
@@ -53,6 +53,15 @@ EOF
   grep -qx '    alertad key --username "${ADMIN_USER}" --key "${ADMIN_KEY}" --duration "${MAXAGE}" >/dev/null || true' \
     "${BATS_TEST_TMPDIR}/docker-entrypoint.sh"
   [ -x "${BATS_TEST_TMPDIR}/docker-entrypoint.sh" ]
+}
+
+@test "the entrypoint syncs the admin password right after creating admin users" {
+  write_fixtures
+  sh "${SCRIPT}" "${BATS_TEST_TMPDIR}/docker-entrypoint.sh" "${BATS_TEST_TMPDIR}/nginx.conf.j2"
+
+  run grep -A1 -x '  alertad user --all --password "${ADMIN_PASSWORD}" || true' "${BATS_TEST_TMPDIR}/docker-entrypoint.sh"
+  [ "${status}" -eq 0 ]
+  [ "${lines[1]}" = '  /venv/bin/python /app/sync-admin-password.py' ]
 }
 
 @test "nginx logs the request line with the api-key parameter masked" {
