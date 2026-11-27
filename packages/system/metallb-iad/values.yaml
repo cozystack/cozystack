@@ -4,7 +4,7 @@ metallb-iad:
   metallbNamespace: cozy-metallb
   # Same digest pin as packages/system/address-controller; bump in lockstep
   # with METALLB_IAD_REF in the Makefile.
-  image: ghcr.io/cozystack/metallb-iad:main-1faf937@sha256:a2a8b05a887f9f28927d75f8b57e264be40e8770d0177798b4f06a0f69c3e793
+  image: ghcr.io/cozystack/metallb-iad:0.3.0@sha256:f4b2484b28432172ee5b1037805be4fd1ba4c6d80a9d21d7869f4cba7eae6530
   # Reserve MetalLB's pool, pin and sharing inputs on tenant Services to the
   # driver. A tenant that could set them could steer MetalLB at an address
   # reserved for someone else. Every tenant namespace, tenant-root included,

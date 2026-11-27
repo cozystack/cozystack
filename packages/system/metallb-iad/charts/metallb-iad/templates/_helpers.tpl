@@ -11,6 +11,11 @@ helm.sh/chart: {{ printf "metallb-iad-%s" .Chart.Version | replace "+" "_" | tru
 {{- default .Release.Namespace .Values.placeholderNamespace -}}
 {{- end -}}
 
+{{/* Name of the cluster-scoped RBAC objects, after the release namespace. */}}
+{{- define "metallb-iad.clusterRoleName" -}}
+{{- printf "metallb-iad-%s" .Release.Namespace -}}
+{{- end -}}
+
 {{/* imagePullSecrets block, rendered only when set. Call with the root context. */}}
 {{- define "metallb-iad.imagePullSecrets" -}}
 {{- with .Values.imagePullSecrets }}

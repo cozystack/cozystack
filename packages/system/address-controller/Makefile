@@ -9,7 +9,7 @@ include ../../../hack/package.mk
 # main build as main-<short sha>, and the digest is in that job's log or from
 # `crane digest`.
 ADDRESS_CONTROLLER_REPO ?= https://github.com/cozystack/address-controller.git
-ADDRESS_CONTROLLER_REF ?= 0ed4cc53de935ba108c012e43008fc456b806f79
+ADDRESS_CONTROLLER_REF ?= 10c701bd74fd085cf50968c756a2b93fd028954f
 
 test:
 	helm unittest .

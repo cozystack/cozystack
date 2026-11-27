@@ -47,6 +47,15 @@ rules:
 - apiGroups:
   - local.sdn.cozystack.io
   resources:
+  - ipaddressclasses/status
+  - ipaddresses/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
   - ipaddresses
   verbs:
   - create
@@ -56,14 +65,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - local.sdn.cozystack.io
-  resources:
-  - ipaddresses/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - metallb.io
   resources:

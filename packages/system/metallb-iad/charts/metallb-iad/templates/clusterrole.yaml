@@ -1,0 +1,6 @@
+{{- /* files/role.yaml is controller-gen output (make manifests); only its
+       name and labels are set here. */ -}}
+{{- $role := .Files.Get "files/role.yaml" | fromYaml }}
+{{- $_ := set $role "metadata" (dict "name" (include "metallb-iad.clusterRoleName" .) "labels" (include "metallb-iad.labels" . | fromYaml)) }}
+---
+{{ toYaml $role }}
