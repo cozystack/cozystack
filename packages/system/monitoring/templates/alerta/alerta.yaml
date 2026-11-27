@@ -183,7 +183,11 @@ data:
   it creates, and its nginx logs the api-key query parameter, so Alerta's
   credentials end up in the container log, which is readable at lower tenant
   tiers than the credentials themselves. Both files are mounted over the
-  image's copies with that output removed; see the headers in files/alerta/.
+  image's copies with that output removed. The entrypoint also runs
+  sync-admin-password.py after creating admin users, because it only creates
+  missing ones and an existing admin user would keep the password it was
+  created with, Grafana's on installations that predate Alerta's own. See the
+  headers in files/alerta/.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -196,6 +200,8 @@ data:
 {{ .Files.Get "files/alerta/docker-entrypoint.sh" | trimSuffix "\n" | indent 4 }}
   nginx.conf.j2: |-
 {{ .Files.Get "files/alerta/nginx.conf.j2" | trimSuffix "\n" | indent 4 }}
+  sync-admin-password.py: |-
+{{ .Files.Get "files/alerta/sync-admin-password.py" | trimSuffix "\n" | indent 4 }}
 ---
 apiVersion: v1
 kind: Service
@@ -338,6 +344,9 @@ spec:
             - name: alerta-entrypoint
               mountPath: /app/nginx.conf.j2
               subPath: nginx.conf.j2
+            - name: alerta-entrypoint
+              mountPath: /app/sync-admin-password.py
+              subPath: sync-admin-password.py
       volumes:
         - name: alerta-config
           configMap:
