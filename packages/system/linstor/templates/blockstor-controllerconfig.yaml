@@ -10,12 +10,13 @@
    kind in a release before it applies any, so a ControllerConfig here
    fails the first install of the blockstor backend on a kind that does not
    exist yet. And blockstor writes the same object at runtime (controller
-   properties, node connections) and creates it on first use, so the chart
-   owns one field, not the object: a server-side apply under its own field
-   manager sets passphraseSecretRef and leaves the rest alone, on a
-   ControllerConfig blockstor or linstor-migrate created as well as on a
-   missing one. --force-conflicts makes the value authoritative over a ref
-   set by hand.
+   properties, node connections) and creates it on first use, and on a
+   migrated cluster it carries LINSTOR's cluster-wide DRBD options, so the
+   chart owns one field, not the object: hack/blockstor-controllerconfig.sh
+   sets passphraseSecretRef with a merge patch, which leaves every other
+   field alone whoever owns it, and creates the object when there is none.
+   The patch makes the value authoritative over a ref set by hand. The
+   script says why not a server-side apply.
 
    The controller may start before this runs. That costs nothing: with no
    ref it unlocks nothing and creates no keyring, and it picks the ref up
@@ -31,7 +32,7 @@ metadata:
     helm.sh/hook-weight: "-1"
 ---
 {{- /*
-   An apply that finds no object creates it, which needs create, and create
+   The script creates the object when there is none, which needs create, and create
    cannot be limited by name. ControllerConfig is a singleton named
    default; blockstor reads no other. */}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -87,13 +88,15 @@ spec:
         runAsGroup: 65534
         seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: apply
+        - name: patch
           image: {{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}
           imagePullPolicy: IfNotPresent
-          command: [sh, -ec, 'printf "%s\n" "$MANIFEST" | kubectl apply --server-side --field-manager=cozystack-linstor --force-conflicts -f -']
+          command: [sh, -ec, '$(SCRIPT)', blockstor-controllerconfig.sh]
           env:
             - name: HOME
               value: /tmp
+            - name: PATCH
+              value: {{ dict "spec" (dict "passphraseSecretRef" (dict "name" .Values.blockstorPassphraseSecret "key" "MASTER_PASSPHRASE")) | toJson | quote }}
             - name: MANIFEST
               value: |
                 apiVersion: blockstor.org/v1alpha1
@@ -104,6 +107,9 @@ spec:
                   passphraseSecretRef:
                     name: {{ .Values.blockstorPassphraseSecret }}
                     key: MASTER_PASSPHRASE
+            - name: SCRIPT
+              value: |
+{{ required "ControllerConfig script is missing" (.Files.Get "hack/blockstor-controllerconfig.sh") | indent 16 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
