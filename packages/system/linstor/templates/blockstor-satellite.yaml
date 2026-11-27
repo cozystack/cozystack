@@ -157,6 +157,48 @@ metadata:
     app.kubernetes.io/component: blockstor-satellite
 spec:
   selector: {matchLabels: {app: blockstor-satellite}}
+  {{- /*
+     Without these the DaemonSet takes the Kubernetes default, which moves
+     to the next node as soon as the new pod is Ready: seconds after start,
+     long before the satellite has adjusted the node's DRBD resources.
+     The pause stops the rollout only if the satellite exits or restarts
+     within it: readiness never drops on an adjust error, so a satellite
+     that keeps running with failed resources does not stop it.
+     One node at a time and no surge are not values: a wider rollout runs
+     several first passes at once, a surge pod would run a second
+     satellite against the same host DRBD state, and maxUnavailable 0
+     with maxSurge 0 is refused by the apiserver. */}}
+  {{- $strategy := .Values.blockstorSatellite.updateStrategy | default dict }}
+  {{- $minReady := .Values.blockstorSatellite.minReadySeconds }}
+  {{- $minReadyErr := printf "linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got %s" (toJson $minReady) }}
+  {{- if not (or (kindIs "float64" $minReady) (kindIs "int64" $minReady) (kindIs "int" $minReady)) }}
+  {{- fail $minReadyErr }}
+  {{- end }}
+  {{- if or (lt (float64 $minReady) 0.0) (ne (float64 $minReady) (float64 (int64 $minReady))) }}
+  {{- fail $minReadyErr }}
+  {{- end }}
+  minReadySeconds: {{ int64 $minReady }}
+  updateStrategy:
+  {{- if eq (toString $strategy.type) "RollingUpdate" }}
+    {{- $rolling := $strategy.rollingUpdate | default dict }}
+    {{- if not (kindIs "map" $rolling) }}
+    {{- fail (printf "linstor: blockstorSatellite.updateStrategy.rollingUpdate must be a map, got %s" (toJson $rolling)) }}
+    {{- end }}
+    {{- if and (hasKey $rolling "maxUnavailable") (ne (toJson $rolling.maxUnavailable) "1") }}
+    {{- fail (printf "linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got %s" (toJson $rolling.maxUnavailable)) }}
+    {{- end }}
+    {{- if and (hasKey $rolling "maxSurge") (ne (toJson $rolling.maxSurge) "0") }}
+    {{- fail (printf "linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxSurge can only be 0, got %s" (toJson $rolling.maxSurge)) }}
+    {{- end }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  {{- else if eq (toString $strategy.type) "OnDelete" }}
+    type: OnDelete
+  {{- else }}
+  {{- fail (printf "linstor: blockstorSatellite.updateStrategy.type must be \"RollingUpdate\" or \"OnDelete\", got %q" (toString $strategy.type)) }}
+  {{- end }}
   template:
     metadata:
       labels:

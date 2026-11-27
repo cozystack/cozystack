@@ -341,6 +341,141 @@ tests:
           path: spec.template.metadata.annotations["checksum/drbd-conf"]
           pattern: '^[0-9a-f]{64}$'
 
+  # The satellite is Ready once its caches sync, minutes before its first
+  # adjust pass is done; the Kubernetes default would move to the next node
+  # right then. The pause covers the pass measured on a test cluster, up
+  # to 160s after Ready for about 110 resources.
+  - it: rolls the satellites one node at a time with a pause after Ready
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 180
+      - equal:
+          path: spec.updateStrategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 1
+              maxSurge: 0
+
+  # Two satellites on one node would both drive its DRBD resources.
+  - it: never surges a second satellite onto a node
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      blockstorSatellite:
+        minReadySeconds: 0
+        updateStrategy:
+          type: RollingUpdate
+          rollingUpdate:
+            maxUnavailable: 1
+            maxSurge: 0
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 0
+      - equal:
+          path: spec.updateStrategy.rollingUpdate
+          value:
+            maxUnavailable: 1
+            maxSurge: 0
+
+  - it: refuses a surge pod
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxSurge: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxSurge can only be 0, got 1'
+
+  # Several nodes at once run their first adjust passes together.
+  - it: refuses a rollout wider than one node
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got 5'
+
+  - it: refuses a percentage rollout
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 50%
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got "50%"'
+
+  # With maxSurge 0 the apiserver refuses it, after the chart's own checks.
+  - it: refuses a rollout that replaces no node
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got 0'
+
+  # OnDelete alone: the API keeps a rollingUpdate block it would ignore.
+  - it: replaces a satellite only when its pod is deleted under OnDelete
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      blockstorSatellite.updateStrategy.type: OnDelete
+    asserts:
+      - equal:
+          path: spec.updateStrategy
+          value:
+            type: OnDelete
+
+  - it: refuses an update strategy the DaemonSet does not have
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.type: Recreate
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.type must be "RollingUpdate" or "OnDelete", got "Recreate"'
+
+  - it: refuses a negative minReadySeconds
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: -1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got -1'
+
+  - it: refuses a minReadySeconds that is not a number
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: 2m
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got "2m"'
+
+  # --set hands a decimal over as a string; the message must still say
+  # what is wrong with it.
+  - it: refuses a decimal minReadySeconds given as a string
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: "1.5"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got "1.5"'
+
+  - it: refuses a decimal minReadySeconds
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: 1.5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got 1.5'
+
   # A SIGTERM must not cut a detached rollback short: the pod outlives the
   # REST server's shutdown window.
   - it: gives the controller time to finish a rollback on shutdown
