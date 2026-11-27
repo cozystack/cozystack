@@ -1,11 +1,10 @@
 suite: blockstor adopting a LINSTOR cluster
 
-# The runbook freezes CSI by stopping piraeus-operator before blockstor
-# adopts, and repoints CSI only once adoption has converged. So hold and adopt
-# render every piraeus object byte for byte as backend linstor does, which an
-# operator started again finds unchanged, and only clearing the value moves
-# piraeus to external mode. The webhooks the stopped operator cannot serve are
-# piraeus_webhooks_test.yaml's.
+# The runbook freezes CSI before blockstor adopts, and repoints CSI only once
+# adoption has converged, while piraeus-operator keeps running. So hold and
+# adopt render every piraeus object byte for byte as backend linstor does,
+# which leaves the operator nothing to change, and only clearing the value
+# moves piraeus to external mode.
 
 release:
   name: linstor
@@ -48,7 +47,7 @@ tests:
 
   # Dropping the plunger configuration is a change to a piraeus object too, and
   # its ConfigMap is mounted by the LINSTOR controller and satellite pods the
-  # stopped operator leaves in place.
+  # operator keeps in place.
   - it: "keeps the plunger and the LINSTOR API CA during the migration"
     set:
       backend: blockstor

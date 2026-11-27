@@ -7,8 +7,8 @@ CHART = Path(__file__).resolve().parents[1]
 
 # Every template that renders a piraeus.io object, or something one of them
 # references. While blockstorMigration is set the release must give piraeus
-# nothing new: the runbook stops the operator, and once it runs again it has
-# to find LINSTOR's shape and keep linstor-csi on LINSTOR until the value is
+# nothing new: the operator keeps running through the migration, and has to
+# find LINSTOR's shape and keep linstor-csi on LINSTOR until the value is
 # cleared. helm-unittest asserts on one render at a time, so the comparison
 # across renders lives here.
 PIRAEUS_TEMPLATES = [
