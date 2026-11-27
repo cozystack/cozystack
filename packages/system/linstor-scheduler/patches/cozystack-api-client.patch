@@ -1,0 +1,37 @@
+# Let the cozystack wrapper decide where the LINSTOR API is before the
+# chart's own linstor.endpoint and linstor.clientSecret values do.
+#
+# Under the blockstor storage backend the API is wherever the linstor
+# package points piraeus-operator, so the wrapper's
+# templates/_helpers.tpl reads that from the LinstorCluster and both
+# helpers below prefer its answer. It answers nothing under the linstor
+# backend, which leaves the upstream order as it is.
+#
+# Chart source: https://piraeus.io/helm-charts (linstor-scheduler 0.3.1)
+diff --git a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/_helpers.tpl b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/_helpers.tpl
+--- a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/_helpers.tpl
++++ b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/_helpers.tpl
+@@ -133,7 +133,10 @@ Strips distribution suffixes like +k3s1, +rke2r1 from version string.
+ Find the linstor client secret containing TLS certificates
+ */}}
+ {{- define "linstor-scheduler.linstorClientSecretName" -}}
+-{{- if .Values.linstor.clientSecret }}
++{{- $cozystack := include "linstor-scheduler.cozystack.apiClient" . | fromYaml }}
++{{- if $cozystack.clientSecret }}
++{{- $cozystack.clientSecret }}
++{{- else if .Values.linstor.clientSecret }}
+ {{- .Values.linstor.clientSecret }}
+ {{- else if .Capabilities.APIVersions.Has "piraeus.linbit.com/v1/LinstorController" }}
+ {{- $crs := (lookup "piraeus.linbit.com/v1" "LinstorController" .Release.Namespace "").items }}
+@@ -189,7 +192,10 @@ Find the linstor URL by operator resources
+ Find the linstor URL either by override or cluster resources
+ */}}
+ {{- define "linstor-scheduler.linstorEndpoint" -}}
+-{{- if .Values.linstor.endpoint }}
++{{- $cozystack := include "linstor-scheduler.cozystack.apiClient" . | fromYaml }}
++{{- if $cozystack.endpoint }}
++{{- $cozystack.endpoint }}
++{{- else if .Values.linstor.endpoint }}
+ {{- .Values.linstor.endpoint }}
+ {{- else }}
+ {{- $piraeus := include "linstor-scheduler.linstorEndpointFromCRD" . }}

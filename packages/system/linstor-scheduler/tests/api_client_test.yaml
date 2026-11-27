@@ -1,0 +1,106 @@
+suite: the LINSTOR API endpoint follows the backend
+
+# Under blockstor the linstor package, not this chart or the platform, knows
+# where the API is: it writes the URL and the client Secret into the
+# LinstorCluster that points linstor-csi there. These cases feed that object
+# through lookup.
+templates:
+  - charts/linstor-scheduler/templates/deployment.yaml
+release:
+  name: linstor-scheduler
+  namespace: cozy-linstor
+tests:
+  - it: stays on the in-cluster controller under linstor
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_CONTROLLERS
+            value: https://linstor-controller.cozy-linstor.svc:3371
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: linstor-client-tls
+
+  - it: follows the external controller of the LinstorCluster under blockstor
+    set:
+      linstor-scheduler.linstor.backend: blockstor
+    kubernetesProvider:
+      scheme: &scheme
+        "piraeus.io/v1/LinstorCluster":
+          gvr: {group: "piraeus.io", version: "v1", resource: "linstorclusters"}
+          namespaced: false
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec:
+            externalController:
+              url: https://api.example.svc:3371
+            apiTLS:
+              clientSecretName: example-client-tls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_CONTROLLERS
+            value: https://api.example.svc:3371
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_ROOT_CA
+            valueFrom:
+              secretKeyRef:
+                name: example-client-tls
+                key: ca.crt
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: example-client-tls
+
+  - it: takes piraeus's default client Secret when the LinstorCluster names none
+    set:
+      linstor-scheduler.linstor.backend: blockstor
+      linstor-scheduler.linstor.clientSecret: other-client-tls
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec:
+            externalController:
+              url: https://api.example.svc:3371
+    asserts:
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: linstor-client-tls
+
+  # On a backend switch this release can upgrade before the linstor release
+  # has written externalController. Falling back to the values would leave
+  # the scheduler on linstor-controller for good; failing has Flux retry it.
+  - it: refuses blockstor while the LinstorCluster has no external controller yet
+    set:
+      linstor-scheduler.linstor.backend: blockstor
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "backend is blockstor, but the LinstorCluster has no spec.externalController.url yet"
+
+  - it: refuses blockstor when no LinstorCluster tells it where the API is
+    set:
+      linstor-scheduler.linstor.backend: blockstor
+    asserts:
+      - failedTemplate:
+          errorPattern: "backend is blockstor.*the cluster has 0 LinstorClusters"
+
+  - it: refuses an unknown backend
+    set:
+      linstor-scheduler.linstor.backend: blockstore
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor-scheduler.linstor.backend must be "linstor" or "blockstor", got "blockstore"'

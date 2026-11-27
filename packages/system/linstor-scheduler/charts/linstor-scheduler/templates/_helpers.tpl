@@ -133,7 +133,10 @@ Strips distribution suffixes like +k3s1, +rke2r1 from version string.
 Find the linstor client secret containing TLS certificates
 */}}
 {{- define "linstor-scheduler.linstorClientSecretName" -}}
-{{- if .Values.linstor.clientSecret }}
+{{- $cozystack := include "linstor-scheduler.cozystack.apiClient" . | fromYaml }}
+{{- if $cozystack.clientSecret }}
+{{- $cozystack.clientSecret }}
+{{- else if .Values.linstor.clientSecret }}
 {{- .Values.linstor.clientSecret }}
 {{- else if .Capabilities.APIVersions.Has "piraeus.linbit.com/v1/LinstorController" }}
 {{- $crs := (lookup "piraeus.linbit.com/v1" "LinstorController" .Release.Namespace "").items }}
@@ -189,7 +192,10 @@ Find the linstor URL by operator resources
 Find the linstor URL either by override or cluster resources
 */}}
 {{- define "linstor-scheduler.linstorEndpoint" -}}
-{{- if .Values.linstor.endpoint }}
+{{- $cozystack := include "linstor-scheduler.cozystack.apiClient" . | fromYaml }}
+{{- if $cozystack.endpoint }}
+{{- $cozystack.endpoint }}
+{{- else if .Values.linstor.endpoint }}
 {{- .Values.linstor.endpoint }}
 {{- else }}
 {{- $piraeus := include "linstor-scheduler.linstorEndpointFromCRD" . }}

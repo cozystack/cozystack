@@ -1,7 +1,106 @@
+# Which storage control plane this package deploys.
+#
+#   linstor   — the Java linstor-controller driven by piraeus-operator
+#               (the default, and what every existing cluster runs).
+#   blockstor — blockstor's controller/apiserver/satellite, with
+#               piraeus-operator in EXTERNAL mode so it only drives
+#               linstor-csi. EXPERIMENTAL.
+#
+# Both backends serve the same CSI wire shape through the same
+# linstor-csi build, so the StorageClasses (provisioner
+# linstor.csi.linbit.com) are the same under either.
+#
+# blockstor is for new clusters. This chart does not move a cluster that
+# already holds LINSTOR volumes: blockstor adopts them with its own
+# linstor-migrate runbook, which the chart does not run:
+# https://blockstor.org/docs/migration/
+backend: linstor
+
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
     tag: v1.6.0@sha256:70ddd1a66fbc1ea58078f4645fc572ab8e2e189dbb4d9a5f9ca43d5663106483
+
+# Blockstor images are component-versioned: they are released from the
+# blockstor repository and carry ITS version, so a cozystack release
+# must not retag them to the cozystack version.
+#
+# None of the three sets a CPU limit, as the LINSTOR controller and
+# satellite do not. CFS throttling under a limit stretches every
+# reconcile pass: with 500m the controller and the satellites sat at the
+# limit through a burst of volume creates, idle satellites were throttled
+# in most CPU periods, and each create took tens of seconds. Memory stays
+# limited. A key set here is merged over the default; set it to null to
+# drop a default.
+blockstorController:
+  image:
+    repository: ghcr.io/cozystack/blockstor-controller
+    tag: 0.4.0@sha256:b7526472c26475abba333b2f6d3a6a2b5c51b90ef878752490c8de85a0799075
+  resources:
+    requests: {cpu: 100m, memory: 64Mi}
+    limits: {memory: 256Mi}
+blockstorApiserver:
+  image:
+    repository: ghcr.io/cozystack/blockstor-apiserver
+    tag: 0.4.0@sha256:7b869c114cee4fea9092be03758749df2e19096d99791336f0ee94d5d3de16d0
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+blockstorSatellite:
+  image:
+    repository: ghcr.io/cozystack/blockstor-satellite
+    tag: 0.4.0@sha256:36670bf2e50a845bcb40dc3f2dd2fb64f4fe6e3671a07865a423a169b3da190e
+  # The LINSTOR satellite's requests and memory limit.
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 2Gi}
+  # Lets the satellite act on a stalled resync (LINBIT/drbd#149) instead
+  # of only reporting it as a Warning Event: after the stall has lasted
+  # several passes it disconnects the peer whose resync waits on the
+  # stalled one, on a replica that is an Inconsistent SyncTarget. With a
+  # Primary in sight it never reconnects a peer to break the stall, since
+  # such a reconnect left two Secondaries with different data while DRBD
+  # reported both UpToDate. On by default: a replica stuck Inconsistent
+  # does not recover without it. The flag exists from blockstor 0.4.0 on;
+  # an older satellite exits on it.
+  stalledResyncAct: true
+  # How a change to the satellite pod template reaches the nodes. The
+  # satellite turns Ready once its caches have synced, seconds after
+  # start; its first pass over the node's DRBD resources ends later and
+  # does not show in readiness. minReadySeconds holds the rollout on each
+  # node for that long after Ready, so that first passes on two nodes do
+  # not overlap. 180 covers the passes measured on a test cluster, 1.5 to
+  # 2.7 minutes after Ready for about 110 resources per node; a node with
+  # more resources needs longer.
+  # The pause stops the rollout only if the satellite exits or restarts
+  # within it. A satellite that keeps running while resources fail to
+  # adjust stays Ready, and the next node follows. For an upgrade that
+  # changes how resources are rendered, use OnDelete and the per-node
+  # checks in "Upgrading the blockstor satellites" in README.md.
+  # Every node adds the pause to the rollout, and the HelmRelease upgrade
+  # waits for the whole rollout: see the same section before raising it.
+  minReadySeconds: 180
+  updateStrategy:
+    # RollingUpdate replaces one node at a time; OnDelete replaces a pod
+    # only when it is deleted, for an upgrade checked node by node.
+    # rollingUpdate may be left out: maxUnavailable can only be 1, since
+    # several nodes would run their first passes at once, and maxSurge
+    # only 0, since two satellites on one node would both drive its DRBD
+    # resources. The chart refuses other values.
+    type: RollingUpdate
+# The Secret, in this namespace, whose MASTER_PASSPHRASE key unlocks the
+# blockstor master key that wraps every LUKS volume password. It is the
+# Secret piraeus reads for LINSTOR, so a cluster migrated from LINSTOR keeps
+# its passphrase. blockstor only reads it; the operator creates it. The
+# chart renders it into ControllerConfig.spec.passphraseSecretRef and into
+# the Secret names the blockstor Roles grant.
+blockstorPassphraseSecret: linstor-passphrase
+# Runs the hook Job that writes blockstorPassphraseSecret into
+# ControllerConfig/default. The same pin the other cozystack hook Jobs use.
+kubectl:
+  image:
+    repository: docker.io/alpine/k8s
+    tag: 1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -59,6 +158,9 @@ linstor:
     enabled: true
     minutes: 30
     allowCleanup: true
+# linstor-csi is REUSED unchanged — blockstor serves the same CSI
+# wire-shape, so the existing StorageClasses (provisioner
+# linstor.csi.linbit.com) keep working.
 linstorCSI:
   ## Constrain provisioning to the node the scheduler actually picked.
   ##

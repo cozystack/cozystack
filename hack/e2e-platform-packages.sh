@@ -3,6 +3,7 @@ set -eu
 
 api_server_endpoint=${COZY_APISERVER_ENDPOINT:-https://192.168.123.10:6443}
 linstor_drbd_enabled=${COZY_LINSTOR_DRBD_ENABLED:-true}
+storage_backend=${COZY_STORAGE_BACKEND:-linstor}
 
 # Container-mode Talos shares the runner kernel and cannot load DRBD. Keep the
 # normal package graph for QEMU, and let that lane replace two Packages instead:
@@ -23,6 +24,32 @@ case "$linstor_drbd_enabled" in
     exit 2
     ;;
 esac
+
+# The storage control plane the cluster installs, passed to the platform as
+# storage.backend. Blockstor creates its zpool on the QEMU lane's private
+# /dev/vdc, which the container lane does not have, so the pair is refused
+# rather than installed into a prep that cannot finish.
+case "$storage_backend" in
+  linstor) ;;
+  blockstor)
+    if [ "$linstor_drbd_enabled" = false ]; then
+      echo "COZY_STORAGE_BACKEND=blockstor is not supported with COZY_LINSTOR_DRBD_ENABLED=false" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "COZY_STORAGE_BACKEND must be linstor or blockstor, got: $storage_backend" >&2
+    exit 2
+    ;;
+esac
+
+# Only when asked: the linstor default renders the same Package it always has.
+storage_values=
+if [ "$storage_backend" = blockstor ]; then
+  storage_values='        storage:
+          backend: blockstor
+'
+fi
 
 # Packages left out of this install. The container lane always drops the two it
 # replaces below; COZY_DISABLED_PACKAGES adds the complement computed by
@@ -68,7 +95,7 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "$api_server_endpoint"
-        # Must match Tenant/root spec.monitoring, which the install sets to
+${storage_values}        # Must match Tenant/root spec.monitoring, which the install sets to
         # false. Left true, cozystack-basics renders Services into
         # cozy-monitoring, which a narrow suite selection never creates.
         monitoring:

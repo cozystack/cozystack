@@ -16,3 +16,4 @@ update:
 	# tests/ are the source of truth (same policy as packages/system/coredns).
 	rm -rf charts/linstor-scheduler/tests
 	patch --no-backup-if-mismatch -p4 < patches/cozystack-scheduler-deployment.patch
+	patch --no-backup-if-mismatch -p4 < patches/cozystack-api-client.patch

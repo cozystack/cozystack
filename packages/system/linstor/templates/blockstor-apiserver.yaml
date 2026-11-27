@@ -1,0 +1,194 @@
+{{- if eq .Values.backend "blockstor" }}
+---
+{{- /*
+   blockstor apiserver — the LINSTOR-compatible REST front end split out
+   of the controller binary. linstor-csi (external mode) and the
+   `linstor` CLI dial it. Three replicas behind a Service. */}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+---
+{{- /*
+   CRUD on the blockstor.org CRDs, named rather than wildcarded so a kind
+   added to the group later is not granted by omission. No finalizers,
+   events or leases: the REST handlers do not write those. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: blockstor-apiserver
+rules:
+  - apiGroups: [blockstor.org]
+    resources:
+      - controllerconfigs
+      - controllerconfigs/status
+      - nodes
+      - nodes/status
+      - physicaldevices
+      - physicaldevices/status
+      - resourcedefinitions
+      - resourcedefinitions/status
+      - resourcegroups
+      - resourcegroups/status
+      - resources
+      - resources/status
+      - snapshots
+      - snapshots/status
+      - storagepools
+      - storagepools/status
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: blockstor-apiserver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: blockstor-apiserver
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-apiserver
+    namespace: {{ .Release.Namespace }}
+---
+{{- /*
+   The encryption endpoints read and rewrite the keyring (add-, modify-,
+   remove-passphrase), create it and the generated unlock Secret when no
+   passphrase Secret is named, and read the passphrase Secret to unlock.
+   All of it is in this namespace and none of it goes through
+   controller-runtime's cache, which would watch every Secret: the verbs
+   read by name, and the encryption state of the resource view comes from
+   one watch per Secret, selected by metadata.name. get, list, watch and
+   update name the three Secrets, because this namespace is shared with
+   piraeus, whose TLS keys stay unreadable; a list or watch is allowed only
+   when it selects one of them by name. create cannot be limited by name,
+   so it is granted on its own; the ValidatingAdmissionPolicy in
+   blockstor-secrets-policy.yaml holds it to the two Secrets blockstor
+   creates. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: blockstor-apiserver-secrets
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: {{ include "blockstor.secretNames" . }}
+    verbs: [get, list, watch, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: blockstor-apiserver-secrets
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: blockstor-apiserver-secrets
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-apiserver
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blockstor-apiserver
+    app.kubernetes.io/component: blockstor-apiserver
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: blockstor-apiserver}}
+  template:
+    metadata:
+      labels:
+        app: blockstor-apiserver
+        app.kubernetes.io/component: blockstor-apiserver
+    spec:
+      serviceAccountName: blockstor-apiserver
+      {{- /*
+         The REST server's graceful-shutdown window is derived from its
+         detached rollback budget; this has to outlive it, or a SIGTERM kills
+         a compensation mid-cascade. */}}
+      terminationGracePeriodSeconds: 21
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: blockstor-apiserver}
+      containers:
+        - name: apiserver
+          image: {{ .Values.blockstorApiserver.image.repository }}:{{ .Values.blockstorApiserver.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            {{- /*
+               Plain-HTTP debug listener with no client authentication.
+               Bound to loopback so nothing on the pod network reaches it:
+               `kubectl port-forward` connects from inside the pod's network
+               namespace, so it still works. */}}
+            - --rest-bind-address=127.0.0.1:3370
+            {{- /*
+               Mutual-TLS listener — the ONLY port the Service exposes.
+               Requires + verifies client certs against the mounted CA;
+               hot-reloads cert/key/CA on cert-manager rotation. */}}
+            - --tls-bind-address=:3371
+            - --tls-cert-file=/etc/blockstor/tls/tls.crt
+            - --tls-key-file=/etc/blockstor/tls/tls.key
+            - --tls-client-ca-file=/etc/blockstor/tls/ca.crt
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=0
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          ports:
+            - {name: rest-tls, containerPort: 3371}
+            - {name: health, containerPort: 8081}
+          volumeMounts:
+            - name: api-tls
+              mountPath: /etc/blockstor/tls
+              readOnly: true
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 15
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          {{- with .Values.blockstorApiserver.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: api-tls
+          secret:
+            secretName: blockstor-apiserver-server-tls
+---
+{{- /*
+   mTLS-only Service: exposes ONLY :3371. The plain-HTTP debug port
+   (3370) is deliberately NOT listed. Clients dial
+   https://blockstor-apiserver.cozy-linstor.svc:3371 presenting a client
+   cert. This DNS MUST match LinstorCluster.spec.externalController.url
+   and a serving-cert SAN. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: blockstor-apiserver
+spec:
+  selector: {app: blockstor-apiserver}
+  ports:
+    - {name: rest-tls, port: 3371, targetPort: 3371}
+{{- end }}
