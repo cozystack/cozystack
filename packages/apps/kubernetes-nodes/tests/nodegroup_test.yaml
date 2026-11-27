@@ -144,6 +144,19 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.labels["cluster.x-k8s.io/cluster-name"]
+
+  # CAPK creates the worker VM without an ownerReference, so the lineage
+  # webhook reaches the VM's application only through this label. It names
+  # the parent cluster's release, not this pool's: the worker pods belong to
+  # the Kubernetes application.
+  - it: names the parent cluster's release on the worker VM
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.metadata.labels["helm.toolkit.fluxcd.io/name"]
+          value: kubernetes-myk8s
 ---
 suite: worker node pool validation
 templates:

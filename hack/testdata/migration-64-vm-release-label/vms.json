@@ -1,0 +1,32 @@
+{"apiVersion":"v1","kind":"List","items":[
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-a","name":"kubernetes-a-md0-x1","labels":{
+   "cluster.x-k8s.io/cluster-name":"kubernetes-a",
+   "capk.cluster.x-k8s.io/kubevirt-machine-name":"kubernetes-a-md0-x1",
+   "capk.cluster.x-k8s.io/kubevirt-machine-namespace":"tenant-a"}}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-b","name":"computeplane-cluster-md0-y1","labels":{
+   "cluster.x-k8s.io/cluster-name":"computeplane-cluster",
+   "capk.cluster.x-k8s.io/kubevirt-machine-name":"computeplane-cluster-md0-y1",
+   "capk.cluster.x-k8s.io/kubevirt-machine-namespace":"tenant-b"}}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-a","name":"kubernetes-a-md0-new","labels":{
+   "helm.toolkit.fluxcd.io/name":"kubernetes-a",
+   "cluster.x-k8s.io/cluster-name":"kubernetes-a",
+   "capk.cluster.x-k8s.io/kubevirt-machine-name":"kubernetes-a-md0-new",
+   "capk.cluster.x-k8s.io/kubevirt-machine-namespace":"tenant-a"}}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-c","name":"vm-instance-user","labels":{
+   "helm.toolkit.fluxcd.io/name":"vm-instance-user"}}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-c","name":"plain"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-c","name":"no-cluster","labels":{
+   "capk.cluster.x-k8s.io/kubevirt-machine-name":"no-cluster",
+   "capk.cluster.x-k8s.io/kubevirt-machine-namespace":"tenant-c"}}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine",
+ "metadata":{"namespace":"tenant-d","name":"external-machine","labels":{
+   "cluster.x-k8s.io/cluster-name":"kubernetes-ext",
+   "capk.cluster.x-k8s.io/kubevirt-machine-name":"kubernetes-ext-md0-z1",
+   "capk.cluster.x-k8s.io/kubevirt-machine-namespace":"infra"}}}
+]}
