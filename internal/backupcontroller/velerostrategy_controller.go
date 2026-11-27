@@ -460,7 +460,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroBackup called", "strategy", strategy.Name)
 
-	mapping, err := r.RESTMapping(schema.GroupKind{Group: *backupJob.Spec.ApplicationRef.APIGroup, Kind: backupJob.Spec.ApplicationRef.Kind})
+	appRef := NormalizeApplicationRef(backupJob.Spec.ApplicationRef)
+	mapping, err := r.RESTMapping(schema.GroupKind{Group: *appRef.APIGroup, Kind: appRef.Kind})
 	if err != nil {
 		return err
 	}
