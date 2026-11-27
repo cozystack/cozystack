@@ -611,8 +611,9 @@ stringData:
 
       This pass comes after the ones that manage roles and databases, so
       that a rebuild that fails, or does not finish before the Job deadline,
-      costs none of them. Only the record of an adopted restore follows it:
-      that record must not be written by a run that failed.
+      costs none of them. Only the PostGIS update and the record of an
+      adopted restore follow it: that record must not be written by a run
+      that failed.
 
       Helm runs this hook as soon as the Cluster is patched, while CNPG is
       still rolling the instances, so the primary may answer from the previous
@@ -855,6 +856,121 @@ stringData:
       echo "index rebuilds failed in:$COLLATION_FAILED (the errors are above); the other indexes were rebuilt. A unique index cannot be rebuilt over rows that the previous ordering kept apart and the new one treats as equal, so remove such duplicates. The next run of the init-job tries again, except for an index an error above reports as left alone" >&2
       exit 1
     fi
+    {{- if eq .Values.flavor "postgis" }}
+    {{- /*
+      A new PostGIS library leaves the SQL objects of every database on the
+      release they were installed with until ALTER EXTENSION ... UPDATE runs
+      there, and postgis_full_version() reports them as needing an upgrade
+      meanwhile. The extensions were created in this Job's superuser session,
+      so only the superuser owns them and can update them; a tenant gets
+      "must be owner of extension". This pass updates them in every database
+      where they are installed, including ones values no longer list.
+
+      The target is the version the server offers, never one rendered here,
+      so a database only moves to what the running library implements, and
+      a database already on it is left alone. While CNPG is still rolling the
+      instances the server offers the previous release and there is nothing
+      to update yet, so the pass first waits for the server to offer the
+      PostGIS release the Job's own image ships, until 120 seconds before
+      the Job's deadline. A rollout that takes longer fails the Job: this Job
+      is a hook, so a run that ended well would not come again before the
+      next change of the release, while a failed one makes the release retry.
+
+      postgis_extensions_upgrade() is not used: it leaves out
+      address_standardizer, and it updates every installed extension to ANY
+      and back on each call, even when nothing changed. Each extension is
+      updated on its own instead, postgis before the ones that require it,
+      in sessions that pin search_path as the collation pass does. A version
+      the image ships no update path from is reported and left as it is: the
+      address_standardizer of PostGIS 3.7 has none from earlier releases.
+
+      ALTER EXTENSION is transactional, so an update that fails leaves its
+      extension as it was. A tenant transaction can hold a lock an update
+      needs, and one update can wait for several of them in turn, so each
+      update, its lock waits included, runs no longer than what is left of
+      the Job, with the same minute in reserve as the collation pass, and a
+      database reached with no time left counts as failed. The pass carries
+      on with the other databases and then fails the Job, so that the
+      release is retried and reported as failed instead of the error staying
+      in the log of a Job that is deleted an hour later.
+
+      The update scripts run as the superuser and write to tables a tenant's
+      admin role may attach triggers to (spatial_ref_sys among them), and a
+      trigger runs with the privileges of the session that fires it. The
+      update session therefore runs with session_replication_role = replica,
+      under which triggers enabled the default way do not fire; only a
+      table's owner, the superuser, can enable one ALWAYS or REPLICA, and a
+      database where such a trigger sits on a table of these extensions is
+      not updated.
+    */}}
+
+    echo "== update postgis extensions"
+    POSTGIS_SHIPPED=$(sed -n "s/^default_version *= *'\([^']*\)'.*/\1/p" "$(pg_config --sharedir)/extension/postgis.control")
+    postgis_offered() {
+    timeout 10 psql -t -A -c "SELECT default_version FROM pg_catalog.pg_available_extensions WHERE name = 'postgis'" 2>/dev/null
+    }
+    ALL_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
+    POSTGIS_DBS=""
+    POSTGIS_FAILED=""
+    for db in $ALL_DBS; do
+    if ! installed=$(psql -v ON_ERROR_STOP=1 -q -t -A --dbname "$db" -c "SET search_path = pg_catalog, pg_temp" -c "SELECT count(*) FROM pg_extension WHERE extname IN ('postgis', 'postgis_raster', 'postgis_topology', 'postgis_sfcgal', 'postgis_tiger_geocoder', 'address_standardizer', 'address_standardizer_data_us')"); then
+    echo "the PostGIS extensions in database $db were not checked (the error is above); the next run of the init-job carries on" >&2
+    POSTGIS_FAILED="$POSTGIS_FAILED $db"
+    continue
+    fi
+    if [ "$installed" != 0 ]; then
+    POSTGIS_DBS="$POSTGIS_DBS $db"
+    fi
+    done
+    if [ -n "$POSTGIS_DBS" ] && [ -n "$POSTGIS_SHIPPED" ] && [ "$(postgis_offered)" != "$POSTGIS_SHIPPED" ]; then
+    echo "waiting for the server to offer PostGIS $POSTGIS_SHIPPED"
+    until [ "$(postgis_offered)" = "$POSTGIS_SHIPPED" ]; do
+      if [ "$SECONDS" -ge $((JOB_DEADLINE - 120)) ]; then
+        echo "the server did not move to PostGIS $POSTGIS_SHIPPED in time (check the rollout of the cnpg.io/Cluster); the PostGIS extensions are not updated yet - failing the init-job, the next run of it updates them" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+    fi
+    for db in $POSTGIS_DBS; do
+    LEFT=$((JOB_DEADLINE - SECONDS - 60))
+    if [ "$LEFT" -lt 10 ]; then
+    echo "the PostGIS extensions in database $db were not updated: the init-job is out of time, the next run of it carries on" >&2
+    POSTGIS_FAILED="$POSTGIS_FAILED $db"
+    continue
+    fi
+    if ! psql -v ON_ERROR_STOP=1 -q -t -A --dbname "$db" -v lock_wait="${LEFT}s" <<\EOT
+    SET client_min_messages = warning;
+    SET search_path = pg_catalog, pg_temp;
+    SET lock_timeout = :'lock_wait';
+    SET session_replication_role = replica;
+    SELECT EXISTS (SELECT FROM pg_trigger t JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = t.tgrelid AND d.deptype = 'e' JOIN pg_extension x ON x.oid = d.refobjid WHERE NOT t.tgisinternal AND t.tgenabled IN ('A', 'R') AND x.extname IN ('postgis', 'postgis_raster', 'postgis_topology', 'postgis_sfcgal', 'postgis_tiger_geocoder', 'address_standardizer', 'address_standardizer_data_us')) AS armed \gset
+    \if :armed
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('the PostGIS extensions in database %s were not updated: a table of theirs carries a trigger enabled ALWAYS or REPLICA, which would run inside the superuser update; drop that trigger, and the next run of the init-job updates them', current_database()))) \gexec
+    \endif
+    SELECT clock_timestamp() + :'lock_wait'::interval AS deadline_at \gset
+    CREATE TEMP TABLE cozystack_postgis AS
+    SELECT e.extname, e.extversion, a.default_version, f.position,
+           EXISTS (SELECT FROM pg_extension_update_paths(e.extname) p WHERE p.source = e.extversion AND p.target = a.default_version AND p.path IS NOT NULL) AS reachable
+    FROM unnest(ARRAY['postgis', 'postgis_raster', 'postgis_topology', 'postgis_sfcgal', 'postgis_tiger_geocoder', 'address_standardizer', 'address_standardizer_data_us']::name[]) WITH ORDINALITY AS f(name, position)
+    JOIN pg_extension e ON e.extname = f.name
+    JOIN pg_available_extensions a ON a.name = e.extname
+    WHERE e.extversion <> a.default_version;
+    SELECT format('WARNING: extension %s in database %s stays at version %s: the image ships no update path from it to %s', extname, current_database(), extversion, default_version) FROM cozystack_postgis WHERE NOT reachable ORDER BY position;
+    SELECT format('updating extension %s in database %s from %s to %s', extname, current_database(), extversion, default_version) FROM cozystack_postgis WHERE reachable ORDER BY position;
+    SELECT format('DO %L', format('BEGIN PERFORM set_config(%L, greatest(1, floor(extract(epoch FROM %L::timestamptz - clock_timestamp()) * 1000))::bigint::text, false); PERFORM set_config(%L, current_setting(%L), false); END', 'statement_timeout', :'deadline_at', 'lock_timeout', 'statement_timeout')),
+           format('ALTER EXTENSION %I UPDATE TO %L', extname, default_version)
+    FROM cozystack_postgis WHERE reachable ORDER BY position \gexec
+    EOT
+    then
+    POSTGIS_FAILED="$POSTGIS_FAILED $db"
+    fi
+    done
+    if [ -n "$POSTGIS_FAILED" ]; then
+      echo "PostGIS extension updates failed in:$POSTGIS_FAILED (the errors are above); the extensions there stay at their previous version. The next run of the init-job tries again" >&2
+      exit 1
+    fi
+    {{- end }}
     {{- if .Values.bootstrap.newServerName }}
 
     echo "== record the adopted restore"
