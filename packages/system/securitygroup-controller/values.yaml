@@ -1,5 +1,5 @@
 securityGroupController:
-  image: "ghcr.io/cozystack/cozystack/securitygroup-controller:v1.6.5@sha256:a391337127022f0a06506ce4a05142d58d0831cca31eaeec68bd807b07f141c4"
+  image: "ghcr.io/cozystack/cozystack/securitygroup-controller:v1.6.6-rc.2@sha256:67261546286b33b0a51a053c3b2c96f98366374a20354cdabf8e7fa3a027069c"
   replicas: 2
   debug: false
   resources:
