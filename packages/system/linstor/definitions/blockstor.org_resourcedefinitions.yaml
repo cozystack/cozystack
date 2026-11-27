@@ -251,10 +251,21 @@ spec:
                 properties:
                   passphraseSecretRef:
                     description: |-
-                      passphraseSecretRef references the Secret carrying the LUKS
-                      passphrase under the key `passphrase`. The satellite reads it
-                      via the apiserver during reconcile; the passphrase never lands
-                      on Spec in plaintext.
+                      passphraseSecretRef names a Secret carrying a LUKS passphrase
+                      under the key `passphrase`.
+
+                      NOT IMPLEMENTED: setting this does NOT encrypt the volume with
+                      the referenced Secret. A resource definition that sets it gets
+                      per-replica passwords wrapped under the CLUSTER master key, like
+                      every other one, and the referenced Secret opens nothing.
+
+                      The field is kept, rather than removed, because it is reserved
+                      as the selector of a non-default key (docs/encryption-keys.md,
+                      stage 2) and removing it would prune the reference out of stored
+                      objects.
+                      While it does nothing, a LUKS-layered resource definition that
+                      sets it gets an `EncryptionKeyIgnored` Condition on each of its
+                      Resources saying so.
                     properties:
                       name:
                         default: ""
@@ -350,6 +361,30 @@ spec:
                 items:
                   type: string
                 type: array
+              peerSlots:
+                description: |-
+                  peerSlots is the DRBD peer-slot count new replicas of this
+                  definition get, LINSTOR's DrbdRscDfnData.peerSlots. A replica
+                  keeps one bitmap per slot and a peer with a disk takes one, so a
+                  definition holds one replica with a disk more than its slots.
+
+                  Resolved once when the definition is created, as LINSTOR resolves
+                  it when the definition's DRBD layer is created: the count the
+                  request names, else the group's peerSlots, else the
+                  PeerSlotsNewResource property of the definition, its group or the
+                  controller, else 7. `rd modify --peer-slots` changes it for
+                  replicas created afterwards.
+
+                  Unset means a definition created before blockstor recorded a
+                  count: by blockstor, whose replicas have 15, or by LINSTOR before
+                  an older linstor-migrate adopted it, whose replicas have
+                  LINSTOR's count. The controller records the least count the
+                  superblocks of its replicas with a disk hold once all of them
+                  have told it; until then it is read as 15.
+                format: int32
+                maximum: 31
+                minimum: 1
+                type: integer
               props:
                 additionalProperties:
                   type: string
@@ -381,6 +416,16 @@ spec:
                   description: ResourceDefinitionVolume is one volume slot inside
                     an RD.
                   properties:
+                    deleteID:
+                      description: |-
+                        deleteID tells this delete of the volume apart from an earlier one of
+                        a volume with the same number. It is written together with the
+                        DELETE flag, and a replica's confirmation in Status.DeletedVolumes
+                        counts only when it carries the same value: a confirmation left over
+                        from the earlier volume must not stand for this one, whose storage
+                        would then never be deleted.
+                      maxLength: 64
+                      type: string
                     drbdMinor:
                       description: |-
                         drbdMinor is the /dev/drbd<N> device minor for THIS volume,
@@ -414,8 +459,13 @@ spec:
                       format: int32
                       type: integer
                     flags:
+                      description: |-
+                        flags carries LINSTOR's volume definition flags; DELETE is the one
+                        blockstor acts on, see VolumeDefinitionFlagDelete.
                       items:
+                        maxLength: 64
                         type: string
+                      maxItems: 16
                       type: array
                     props:
                       additionalProperties:
@@ -469,6 +519,11 @@ spec:
                   - sizeKib
                   - volumeNumber
                   type: object
+                  x-kubernetes-validations:
+                  - message: 'the DELETE flag of a volume definition is never cleared:
+                      a replica may already have deleted its volume'
+                    rule: '!has(oldSelf.flags) || !(''DELETE'' in oldSelf.flags) ||
+                      (has(self.flags) && ''DELETE'' in self.flags)'
                 type: array
                 x-kubernetes-list-map-keys:
                 - volumeNumber

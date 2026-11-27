@@ -63,6 +63,16 @@ spec:
           spec:
             description: spec defines the desired state of Snapshot
             properties:
+              abortReason:
+                description: |-
+                  abortReason, once set, records that the controller aborted the
+                  take, and why. It is written in the same update that clears
+                  suspendIO and takeSnapshot, so the abort is on record before any
+                  satellite resumes and holds even if the status write that
+                  follows never lands. An aborted take is over: suspendIO is never
+                  set again and the snapshot is never marked SUCCESSFUL, as LINSTOR
+                  keeps an aborted snapshot definition failed for good.
+                type: string
               groupID:
                 description: |-
                   groupID, when non-empty, marks this Snapshot as a member of a
@@ -234,6 +244,20 @@ spec:
                 items:
                   description: SnapshotVolumeRef is one volume slot inside a Snapshot.
                   properties:
+                    props:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        props is the volume definition's property map as it was when the
+                        snapshot was taken, which a restore copies onto the volume it
+                        creates, as LINSTOR does. The block size LINSTOR keeps there is
+                        the one the snapshot's data was written at. A snapshot recorded
+                        before this field existed has none, and its volume definition's
+                        current props stand in. Serialised without omitempty so a volume
+                        definition that had no props is recorded as {} and stays told
+                        apart from a snapshot that recorded nothing.
+                      nullable: true
+                      type: object
                     sizeKib:
                       format: int64
                       type: integer
@@ -316,11 +340,36 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deleteFailures:
+                description: |-
+                  deleteFailures records, per node, why the satellite's last
+                  attempt to delete its copy of a deleting snapshot failed. The
+                  delete call answers with it at once, as LINSTOR answers with the
+                  error its satellite returned, instead of waiting on a node that
+                  is alive but keeps failing.
+                items:
+                  description: |-
+                    SnapshotDeleteFailure is the error one satellite hit deleting its
+                    copy of the snapshot.
+                  properties:
+                    message:
+                      type: string
+                    nodeName:
+                      type: string
+                  required:
+                  - message
+                  - nodeName
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - nodeName
+                x-kubernetes-list-type: map
               flags:
                 description: |-
-                  flags carries terminal-state markers. Currently only
-                  "FAILED" is meaningful — stamped by the satellite when
-                  CreateSnapshot returns a non-retryable error class.
+                  flags carries terminal-state markers: "SUCCESSFUL" once the
+                  take completed on every targeted node, "FAILED" when a
+                  satellite's CreateSnapshot returned a non-retryable error, and
+                  "FAILED_DISCONNECT" when the controller aborted a take that hung.
                 items:
                   type: string
                 type: array
@@ -349,6 +398,14 @@ spec:
                       type: string
                     ready:
                       type: boolean
+                    storagePool:
+                      description: |-
+                        storagePool is the pool that holds this node's copy: the pool of
+                        the replica it was taken from. The local satellite records it once
+                        its copy exists, because the copy outlives the replica and a
+                        restore has to be placed in the same pool, the way LINSTOR keeps
+                        the pool on each snapshot volume.
+                      type: string
                     suspendIOAcked:
                       description: |-
                         suspendIOAcked is stamped true by the local satellite once

@@ -35,21 +35,21 @@ piraeusServer:
 blockstorController:
   image:
     repository: ghcr.io/cozystack/blockstor-controller
-    tag: 0.3.0@sha256:ca5fc964265a1fd9e1153077f0565a9f07532c593bea1182d3b97a38430822ea
+    tag: 0.4.0@sha256:b7526472c26475abba333b2f6d3a6a2b5c51b90ef878752490c8de85a0799075
   resources:
     requests: {cpu: 100m, memory: 64Mi}
     limits: {memory: 256Mi}
 blockstorApiserver:
   image:
     repository: ghcr.io/cozystack/blockstor-apiserver
-    tag: 0.3.0@sha256:20cf599f8d0ae85a44b237b9d8ad2ca631a1feff3fd387194ef84636b538dd0b
+    tag: 0.4.0@sha256:7b869c114cee4fea9092be03758749df2e19096d99791336f0ee94d5d3de16d0
   resources:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {memory: 512Mi}
 blockstorSatellite:
   image:
     repository: ghcr.io/cozystack/blockstor-satellite
-    tag: 0.3.0@sha256:abff381da5425fdf7a6abc0d52006727cf7fe13c438acc79aaea192fc8681cb4
+    tag: 0.4.0@sha256:36670bf2e50a845bcb40dc3f2dd2fb64f4fe6e3671a07865a423a169b3da190e
   # The LINSTOR satellite's requests and memory limit.
   resources:
     requests: {cpu: 100m, memory: 128Mi}

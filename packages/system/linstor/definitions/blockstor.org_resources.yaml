@@ -85,7 +85,7 @@ spec:
                   drbdNodeID is the DRBD-9 node-id assigned to this replica.
                   Per-replica, allocated once and stable for the replica's life —
                   re-numbering a live replica re-maps its DRBD bitmaps and
-                  corrupts peer-to-peer resync. Range 0..15 (drbd-9 max-peers).
+                  corrupts peer-to-peer resync. Range 0..31 (DRBD 9 node ids).
 
                   clusterIP-style allocation: nil means "controller, allocate";
                   non-nil is authoritative and NEVER overwritten (restore-safe).
@@ -314,6 +314,29 @@ spec:
               nodeName:
                 description: nodeName is the satellite hosting this replica.
                 type: string
+              peerSlots:
+                description: |-
+                  peerSlots is the DRBD peer-slot count this replica's metadata is
+                  created with (`create-md --max-peers`) and its lower disk is sized
+                  for. The controller copies it from the definition when it
+                  allocates the replica's identities, as LINSTOR copies the
+                  definition's count to each replica it creates, so changing the
+                  definition's count later leaves the replicas already there alone.
+
+                  Unset means a replica created before blockstor recorded a count:
+                  by blockstor with 15, or by LINSTOR, whose count only the
+                  superblock tells (status.metadataPeerSlots). The controller
+                  records it from there. Settable once: the metadata on disk does
+                  not change with it.
+                format: int32
+                maximum: 31
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: 'peerSlots is settable-once: the replica''s metadata was
+                    created with it'
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               props:
                 additionalProperties:
                   type: string
@@ -479,6 +502,45 @@ spec:
           status:
             description: status defines the observed state of Resource
             properties:
+              applyFailure:
+                description: |-
+                  applyFailure is the error of the satellite's last apply pass on
+                  this replica, with the volume sizes that pass was applying. The
+                  satellite sets it when a pass fails and removes it when one
+                  succeeds. A resize that waits for this replica to grow ends with
+                  this error instead of waiting for a pass that keeps failing, as
+                  LINSTOR returns its satellite's error.
+                properties:
+                  message:
+                    description: message is the error the pass failed with.
+                    type: string
+                  volumes:
+                    description: |-
+                      volumes lists the definition size of each volume the failed pass
+                      was applying.
+                    items:
+                      description: ResourceApplyFailureVolume is the size one volume
+                        had in a failed pass.
+                      properties:
+                        sizeKib:
+                          description: sizeKib is the volume definition size the pass
+                            was applying.
+                          format: int64
+                          type: integer
+                        volumeNumber:
+                          description: volumeNumber is the volume's number in the
+                            definition.
+                          format: int32
+                          type: integer
+                      required:
+                      - sizeKib
+                      - volumeNumber
+                      type: object
+                    type: array
+                required:
+                - message
+                type: object
+                x-kubernetes-map-type: atomic
               conditions:
                 description: conditions represent the current state of the Resource.
                 items:
@@ -609,6 +671,16 @@ spec:
                           parse this token out of `drbdsetup status --verbose`; the field
                           gives them a kubectl-native substitute.
                         properties:
+                          done:
+                            description: |-
+                              done is the progress of the resync running with this peer, as
+                              the `done:<percent>` token of the peer-device frame carries it
+                              ("50.31"). DRBD measures it against that resync's own total,
+                              not the volume size, and prints it only while a resync with
+                              this peer runs; empty otherwise. It is what LINSTOR reports as
+                              the peer's `done_percentage` and renders in `SyncTarget(NN%)`.
+                              A string because a CRD has no portable float type.
+                            type: string
                           peerDiskState:
                             description: |-
                               peerDiskState is the peer's DRBD-9 disk_state for this volume
@@ -617,6 +689,17 @@ spec:
                               disk state, typical under partition). Mirrors the
                               `peer-disk:<state>` token in `drbdsetup events2
                               --statistics` peer-device frames.
+                            type: string
+                          replicationState:
+                            description: |-
+                              replicationState is this volume's DRBD-9 replication state with
+                              this peer, the `replication:<state>` token of the volume's own
+                              peer-device frame. DRBD keeps it per peer and per volume, and
+                              so does LINSTOR (DrbdVolume.volReplState); the connection-level
+                              `replicationState` is whichever volume's frame came last. It is
+                              what `done` belongs to: a two-volume resource can have one
+                              volume in SyncTarget and the other Established or PausedSyncT
+                              on the same connection.
                             type: string
                           volumeNumber:
                             description: |-
@@ -647,6 +730,39 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - peerNodeName
+                x-kubernetes-list-type: map
+              deletedVolumes:
+                description: |-
+                  deletedVolumes is this replica's confirmation of volume definition
+                  deletes: the satellite lists a volume here once it has removed the
+                  volume from DRBD and deleted its storage, because its volume
+                  definition is flagged DELETE. The controller removes the volume
+                  definition once every replica of the definition lists it with the
+                  same deleteID. The satellite drops an entry once its volume
+                  definition is gone. Empty on a satellite that predates volume
+                  definition deletes, which therefore holds the definition until it is
+                  upgraded rather than having its volume skipped.
+                items:
+                  description: |-
+                    DeletedVolumeStatus is one replica's confirmation that it deleted the
+                    volume of a volume definition flagged DELETE.
+                  properties:
+                    deleteID:
+                      description: |-
+                        deleteID is the deleteID of the volume definition the satellite
+                        acted on.
+                      maxLength: 64
+                      type: string
+                    volumeNumber:
+                      description: volumeNumber is the deleted volume's number.
+                      format: int32
+                      type: integer
+                  required:
+                  - volumeNumber
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - volumeNumber
                 x-kubernetes-list-type: map
               drbdMinor:
                 description: |-
@@ -687,6 +803,35 @@ spec:
                 description: inUse is whether DRBD reports the resource as primary
                   anywhere.
                 type: boolean
+              mayPromote:
+                description: |-
+                  mayPromote is the kernel-reported DRBD-9 `may_promote:` flag
+                  from the same frames, published upstream as
+                  `layer_object.drbd.may_promote`. Unset until observed.
+                type: boolean
+              metadataPeerSlots:
+                description: |-
+                  metadataPeerSlots is the peer-slot count the replica's DRBD
+                  metadata holds, read once from its superblock by the satellite.
+                  A grow sizes the metadata for it, so the device stays at the
+                  definition. A replica created before blockstor recorded counts,
+                  by blockstor with 15 or by LINSTOR with its definition's count,
+                  7 by default, when it was adopted, gets it as spec.peerSlots
+                  from the controller, never a guess.
+                format: int32
+                maximum: 31
+                minimum: 1
+                type: integer
+              promotionScore:
+                description: |-
+                  promotionScore is the kernel-reported DRBD-9 promotion score of
+                  this replica, parsed from the `promotion_score:` token in
+                  `drbdsetup events2` resource frames. Upstream LINSTOR publishes
+                  it as `layer_object.drbd.promotion_score`, and linstor-csi
+                  reports a volume abnormal on every node whose score is 0 or
+                  missing. Unset until the satellite has observed the resource.
+                format: int32
+                type: integer
               role:
                 description: |-
                   role is the kernel-reported DRBD-9 role on this node, parsed
@@ -698,6 +843,12 @@ spec:
                   up to one Primary and two Secondaries, all on different nodes.
                   ~15 e2e tests `grep role:` from `drbdsetup status`; surfacing
                   it on Status lets them switch to a k8s-native read.
+                type: string
+              satelliteIncarnation:
+                description: |-
+                  satelliteIncarnation is the node's status.satelliteIncarnation of
+                  the satellite process that wrote the runtime state above. Written
+                  by the satellite observer with that state; do not hand-set.
                 type: string
               suspended:
                 description: |-
@@ -741,6 +892,23 @@ spec:
                     allocatedKib:
                       format: int64
                       type: integer
+                    appliedSizeKib:
+                      description: |-
+                        appliedSizeKib is the volume definition size this replica has
+                        finished applying: the satellite writes it after a pass in which
+                        every layer, the backing volume, LUKS and `drbdadm resize`,
+                        succeeded at that size and the device the consumer sees reads at
+                        least that size. A grow is complete once every diskful replica
+                        reports the new size here. The last replica to grow its
+                        backing runs its `drbdadm resize` after all the others have
+                        grown theirs, and DRBD commits a resize on every connected peer
+                        before the command returns, so at that point the device has the
+                        new size wherever it is attached. The REST API answers a resize
+                        only then, as LINSTOR does, and the satellite reruns
+                        `drbdadm resize` while this lags the definition. Unset until
+                        the first such pass.
+                      format: int64
+                      type: integer
                     currentGI:
                       description: |-
                         currentGi is the DRBD-9 current generation identifier reported
@@ -753,6 +921,18 @@ spec:
                       type: string
                     devicePath:
                       type: string
+                    deviceSizeKib:
+                      description: |-
+                        deviceSizeKib is the size of this replica's DRBD device in KiB,
+                        the `size:` token of `drbdsetup events2 --statistics --full`
+                        device frames. A diskless replica reports the size its peers
+                        agreed on. The controller hands the largest size any replica
+                        reports to a replica that is getting a new lower disk, which
+                        must hold at least that much: the kernel refuses to attach a
+                        disk smaller than the device, and a volume adopted from LINSTOR
+                        can be a few KiB larger than its definition.
+                      format: int64
+                      type: integer
                     diskState:
                       type: string
                     historyGI:
@@ -766,16 +946,16 @@ spec:
                       type: array
                     outOfSyncKib:
                       description: |-
-                        outOfSyncKib is the worst-case "how many KiB this volume is
-                        behind any peer" reported by `drbdsetup events2 --statistics`
-                        peer-device frames. Combined with RD.Spec.VolumeDefinitions
-                        SizeKib, callers compute a sync-progress percentage:
-                          progress = (1 - outOfSyncKib / sizeKib) * 100
+                        outOfSyncKib is the largest out-of-sync count over this
+                        volume's peers, as `drbdsetup events2 --statistics` peer-device
+                        frames report it. 0 means in sync with every peer. It is not a
+                        resync progress once the replica has more than one peer: the
+                        progress is connections[].peerVolumes[].done.
 
-                        0 means fully in sync; sizeKib (or close to it) means fresh
-                        resync hasn't started yet. Surfaced via the REST view layer
-                        so `linstor r l` / piraeus dashboards can render a CDI-style
-                        progress bar without polling drbdsetup themselves.
+                        While the volume is UpToDate and no peer resyncs with this
+                        replica, a change that keeps the count non-zero can reach the
+                        status up to 5 minutes late. A change to or from 0, and any
+                        change during a resync, is written at once.
                       format: int64
                       type: integer
                     quorum:

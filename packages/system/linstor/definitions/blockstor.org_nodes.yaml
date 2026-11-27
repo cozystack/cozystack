@@ -255,6 +255,14 @@ spec:
                   satellite recently?" signal.
                 format: date-time
                 type: string
+              satelliteIncarnation:
+                description: |-
+                  satelliteIncarnation identifies the satellite process now running
+                  on this node; every satellite start picks a new one. A Resource
+                  whose status.satelliteIncarnation differs was last reported by an
+                  earlier process, so its state predates the restart and is not
+                  shown. Written by the satellite heartbeat; do not hand-set.
+                type: string
             type: object
         required:
         - spec

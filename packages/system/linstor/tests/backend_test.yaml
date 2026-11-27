@@ -167,7 +167,7 @@ tests:
       - templates/backend-guard.yaml
     set:
       backend: blockstor
-      blockstorController.image.tag: 0.3.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
+      blockstorController.image.tag: 0.4.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
     asserts:
       - hasDocuments:
           count: 0
