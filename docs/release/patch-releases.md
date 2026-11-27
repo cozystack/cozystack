@@ -77,6 +77,6 @@ gitGraph
    1. Verifies the pinned packages candidate against the merged tree and the original rc artifact's container digests.
    2. Creates the tag `v1.2.1` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    3. Cuts the write-once `api/apps/v1alpha1/v1.2.1` Go-module tag at the same commit.
-   4. Publishes the release page (`draft` → `latest`; `latest` moves only if `v1.2.1` is the newest published stable).
-   5. Retags the verified packages candidate and rc container images by digest to `v1.2.1` and publishes the stable `cozy-installer` chart — no container rebuild.
+   4. Retags the verified packages candidate and rc container images by digest to `v1.2.1` and publishes the stable `cozy-installer` chart — no container rebuild.
+   5. Publishes the release page (`draft` → `latest`; `latest` moves only if `v1.2.1` is the newest published stable). It goes last, so the page never announces a version whose images and chart are not in the registry yet.
 7. Once the release is published, merge the parked `cozystack/website` docs PR, then announce the release to the community.
