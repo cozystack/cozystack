@@ -58,7 +58,7 @@ func newOptionsTestREST(t *testing.T, funcs interceptor.Funcs, objects ...client
 		WithObjects(objects...).
 		WithInterceptorFuncs(funcs).
 		Build()
-	return NewREST(c, c, &config.Resource{
+	return NewREST(c, c, nil, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",

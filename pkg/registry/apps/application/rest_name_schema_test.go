@@ -236,7 +236,7 @@ func withDeclaredMaxLength(t *testing.T, raw string, maxLen int) string {
 // exercise the wiring in NewREST rather than a hand-set field.
 func newTestREST(t *testing.T, kind, prefix, openAPISchema string) *REST {
 	t.Helper()
-	return NewREST(nil, nil, &config.Resource{
+	return NewREST(nil, nil, nil, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:          kind,
 			Singular:      strings.ToLower(kind),

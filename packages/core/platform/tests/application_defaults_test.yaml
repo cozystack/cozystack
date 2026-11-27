@@ -1,0 +1,51 @@
+suite: installation application defaults
+templates:
+  - templates/application-defaults.yaml
+  - templates/apps.yaml
+tests:
+  - it: renders an empty configuration as a JSON object
+    template: templates/application-defaults.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: cozystack-application-defaults
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - equal:
+          path: data["defaults.json"]
+          value: '{}'
+  - it: treats a null Helm value as empty configuration
+    template: templates/application-defaults.yaml
+    set:
+      applicationDefaults: null
+    asserts:
+      - equal:
+          path: data["defaults.json"]
+          value: '{}'
+  - it: stores partial specs by application plural
+    template: templates/application-defaults.yaml
+    set:
+      applicationDefaults:
+        widgets:
+          enabled: false
+          replicas: 0
+          options: {}
+        otherwidgets:
+          size: small
+    asserts:
+      - equal:
+          path: data["defaults.json"]
+          value: '{"otherwidgets":{"size":"small"},"widgets":{"enabled":false,"options":{},"replicas":0}}'
+  - it: does not forward defaults to chart values
+    template: templates/apps.yaml
+    set:
+      applicationDefaults:
+        widgets:
+          uniqueDefaultsMarker: secret-value
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'applicationDefaults|uniqueDefaultsMarker|cozystack-application-defaults'

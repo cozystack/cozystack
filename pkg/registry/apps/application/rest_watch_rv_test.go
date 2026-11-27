@@ -111,7 +111,7 @@ func newRVWatchFixture(t *testing.T) *rvWatchFixture {
 			return liveStore.Delete(ctx, obj, opts...)
 		},
 	})
-	f.rest = NewREST(f.cache, f.live, &config.Resource{
+	f.rest = NewREST(f.cache, f.live, nil, &config.Resource{
 		Application: config.ApplicationConfig{Kind: "PostgreSQL", Plural: "postgresqls", Singular: "postgresql"},
 		Release:     config.ReleaseConfig{Prefix: "postgresql-"},
 	})

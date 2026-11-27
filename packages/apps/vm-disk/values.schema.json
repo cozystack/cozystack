@@ -59,7 +59,8 @@
           "rule": "self == oldSelf",
           "message": "source is immutable"
         }
-      ]
+      ],
+      "x-kubernetes-map-type": "atomic"
     },
     "optical": {
       "description": "Defines if disk should be considered optical.",
