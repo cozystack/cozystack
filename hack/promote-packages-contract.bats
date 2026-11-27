@@ -120,6 +120,75 @@ step_line() {
   printf '%s\n' "$setup" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
 }
 
+# The release page announces the version, so it must not go public before the
+# stable images and chart it points at exist. A step that fails after the draft
+# is undrafted also cannot be re-run: the draft lookup in resolve no longer finds
+# anything to publish.
+@test "finalize publishes the release page only after the stable images and chart exist" {
+  resolve="$(step_line 'Resolve draft release' "$FINALIZE")"
+  retag="$(step_line 'Retag rc images to stable' "$FINALIZE")"
+  chart="$(step_line 'Publish stable cozy-installer chart' "$FINALIZE")"
+  publish="$(step_line 'Publish draft release' "$FINALIZE")"
+  [ -n "$resolve" ] && [ -n "$retag" ] && [ -n "$chart" ] && [ -n "$publish" ]
+  [ "$resolve" -lt "$retag" ]
+  [ "$retag" -lt "$chart" ]
+  [ "$chart" -lt "$publish" ]
+
+  # One latest decision, made before the first registry write; the registry
+  # steps and the release page read it instead of recomputing it.
+  for step in 'Retag rc images to stable' 'Publish stable cozy-installer chart' 'Publish draft release'; do
+    step_block "$step" "$FINALIZE" | code_lines | grep -qF 'steps.resolve.outputs.make_latest'
+  done
+}
+
+# Finalize decides `latest` minutes before it moves it, so two release PRs
+# merged close together must not finalize at once. The group is built from the
+# job's own condition: a PR that skips finalize must not take the shared
+# group's one pending slot from a release waiting in it.
+@test "finalize runs one release at a time, and only release PRs share the queue" {
+  [ "$(yq '.jobs.finalize.concurrency.cancel-in-progress' "$FINALIZE")" = false ]
+  # One pending job per group is GitHub's default: a third release merged while
+  # two are in line would cancel the one waiting.
+  [ "$(yq '.jobs.finalize.concurrency.queue' "$FINALIZE")" = max ]
+  cond="$(yq '.jobs.finalize.if' "$FINALIZE" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
+  [ -n "$cond" ]
+  want="\${{ ($cond) && 'release-finalize' || format('release-finalize-skipped-{0}', github.event.pull_request.number) }}"
+  [ "$(yq '.jobs.finalize.concurrency.group' "$FINALIZE")" = "$want" ]
+}
+
+# Order alone does not hold the page back. A registry step allowed to fail
+# without failing the job, or a publish step that runs whatever happened before
+# it, publishes over a missing image or chart all the same. And a patch on an
+# older line must move no `latest`: the image and chart aliases follow the one
+# decision, not a default.
+@test "finalize publishes nothing after a failed registry step, and latest moves only on the resolved decision" {
+  for step in 'Resolve draft release' 'Retag rc images to stable' 'Publish stable cozy-installer chart' 'Publish draft release'; do
+    STEP="$step" yq --exit-status '.jobs.finalize.steps[] | select(.name == strenv(STEP)) | has("continue-on-error") | not' "$FINALIZE" >/dev/null
+  done
+  # No condition at all on the publish step, so it runs only when every step
+  # before it succeeded; and no registry command whose failure is swallowed.
+  yq --exit-status '.jobs.finalize.steps[] | select(.name == "Publish draft release") | has("if") | not' "$FINALIZE" >/dev/null
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .run' "$FINALIZE")" = './hack/promote-retag.sh "${STABLE_TAG}"' ]
+  chart_code="$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" | code_lines)"
+  [ "$(printf '%s\n' "$chart_code" | head -n 1)" = 'set -eu' ]
+  if printf '%s\n' "$chart_code" | grep -qF '||'; then
+    echo "Publish stable cozy-installer chart swallows a failure with ||" >&2; false
+  fi
+
+  # A registry step skipped for a stable tag publishes over a missing artifact
+  # just as a failed one would; only a prerelease skips them.
+  for step in 'Retag rc images to stable' 'Publish stable cozy-installer chart'; do
+    [ "$(STEP="$step" yq '.jobs.finalize.steps[] | select(.name == strenv(STEP)) | .if' "$FINALIZE")" = "\${{ !contains(steps.get_tag.outputs.tag, '-') }}" ]
+  done
+
+  move_latest="$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .env.MOVE_LATEST' "$FINALIZE")"
+  [ "$move_latest" = "\${{ steps.resolve.outputs.make_latest == 'true' && '1' || '0' }}" ]
+
+  chart_run="$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE")"
+  [ "$(printf '%s\n' "$chart_run" | code_lines | grep -cF 'cozy-installer:latest')" -eq 1 ]
+  printf '%s\n' "$chart_run" | code_lines | grep -A3 -F 'if [ "${MAKE_LATEST}" = "true" ]; then' | grep -qF 'cozy-installer:latest'
+}
+
 @test "promote rejects an old target base before publishing a candidate" {
   validate="$(step_block 'Validate rc is promotable' "$PROMOTE")"
   prepare_line="$(step_line 'Prepare stable branch' "$PROMOTE")"
