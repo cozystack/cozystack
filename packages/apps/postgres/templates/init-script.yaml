@@ -648,6 +648,17 @@ stringData:
       minute in reserve: the deadline counts from the start of the Job,
       $SECONDS from the start of this script.
 
+      Such a rebuild outlives the run that started it: its backend does not
+      notice that the Job is gone until the rebuild ends. REINDEX finds an
+      index by name, and once it has waited behind that rebuild the name
+      belongs to the index the rebuild put in place, which would then be
+      rebuilt a second time. An index is therefore skipped, and reported like
+      a failed rebuild, while another session builds an index of its table;
+      the next run finds the new index above the mark. That check comes
+      first in the session, before the index is looked up: a rebuild that
+      ended before it has removed the index the session looks for, and an
+      orphaned one cannot start another after it.
+
       One index must be rebuilt within one run of the Job, and a retry would
       otherwise start a rebuild that cannot finish over and over. An
       interrupted or failed REINDEX CONCURRENTLY leaves an invalid index with
@@ -782,6 +793,10 @@ stringData:
     SET client_min_messages = error;
     SET search_path = pg_catalog, pg_temp;
     SET lock_timeout = :'lock_wait';
+    SELECT EXISTS (SELECT FROM pg_index i JOIN pg_stat_progress_create_index p ON p.relid = i.indrelid JOIN pg_database d ON d.oid = p.datid WHERE i.indexrelid = :'index'::oid AND d.datname = current_database() AND p.pid <> pg_backend_pid()) AS building \gset
+    \if :building
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was skipped: another session is building an index of its table, as a rebuild left by an earlier run of the init-job does; the next run of the init-job carries on', :'index'::oid::regclass, current_database()))) \gexec
+    \endif
     SELECT count(*) = 1 AS present FROM pg_index WHERE indexrelid = :'index'::oid \gset
     \if :present
     SELECT coalesce(current_setting('cozystack.collation_repair', true), '') AS recorded \gset
