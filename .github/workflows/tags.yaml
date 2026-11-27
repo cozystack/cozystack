@@ -53,9 +53,9 @@ jobs:
               repo:  context.repo.repo,
               per_page: 100
             });
-            const exists = releases.some(r => r.tag_name === tag);
+            const exists = releases.some(r => r.tag_name === tag && !r.draft);
             core.setOutput('release_exists', exists);
-            console.log(exists ? `Release ${tag} already exists, nothing to build` : `No release ${tag} yet`);
+            console.log(exists ? `Release ${tag} already published, nothing to build` : `No published release ${tag} yet`);
 
       - name: Checkout code
         if: steps.check_release.outputs.release_exists == 'false'
@@ -166,20 +166,15 @@ jobs:
       packages: write
 
     steps:
-      # Skip the build when a release (draft OR published) already exists for
-      # this tag:
-      #   - re-runs of the same rc/nightly tag become idempotent no-ops;
-      #   - a stable tag prepared by the promote flow must NOT be rebuilt here.
-      #     promote-rc.yaml creates the draft vX.Y.Z from the already-built,
-      #     already-tested rc artifacts; promotion ships those exact bits, never
-      #     a fresh build. When finalize pushes the stable tag, this guard sees
-      #     the draft and skips straight to changelog/website.
+      # A pre-release draft can be left by a failed run. Stable drafts already
+      # contain the tested artifacts staged by promote-rc.yaml.
       - name: Check if release already exists
         id: check_release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
+            const isPrerelease = tag.includes('-');
             // Paginate: a promote-created stable draft (or an accreting backlog
             // of rc releases) can sit past the default first 30, and a missed
             // draft here would wrongly rebuild instead of no-op.
@@ -188,11 +183,10 @@ jobs:
               repo:  context.repo.repo,
               per_page: 100
             });
-            const exists = releases.some(r => r.tag_name === tag);
+            const exists = releases.some(r => r.tag_name === tag && (!isPrerelease || !r.draft));
             core.setOutput('release_exists', exists);
-            console.log(exists ? `Release ${tag} already exists (draft or published)` : `No release ${tag} yet`);
+            console.log(exists ? `Skipping build for existing release ${tag}` : `Continuing release workflow for ${tag}`);
 
-      # If a published release already exists, skip the rest of the workflow
       - name: Skip if release already exists
         if: steps.check_release.outputs.release_exists == 'true'
         run: echo "Release already exists, skipping workflow."
