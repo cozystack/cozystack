@@ -18,6 +18,7 @@ If you are about to generate a changelog only, jump straight to [`agents/changel
 ## Pages
 
 - [Introduction](./release/introduction.md): the three release types and the tag push that drives the pipeline.
+- [Milestones](./release/milestones.md): how a `vX.Y.Z` milestone is the scope of a release and starts it.
 - [Release Candidates](./release/release-candidates.md): what an rc is, and how cutting the first one freezes `release-X.Y`.
 - [Regular Releases](./release/regular-releases.md): promoting an rc to `vX.Y.0`, step by step.
 - [Patch Releases](./release/patch-releases.md): the same flow for `vX.Y.Z` on an existing `release-X.Y` line.
