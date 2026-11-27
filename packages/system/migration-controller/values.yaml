@@ -1,5 +1,5 @@
 migrationController:
-  image: "ghcr.io/cozystack/cozystack/migration-controller:v1.7.2@sha256:c4f131b2ab16389c26b37fd605ab7a82f6fe241a598377db0056a35bc6726dbe"
+  image: "ghcr.io/cozystack/cozystack/migration-controller:v1.7.3-rc.1@sha256:d8d787da2f3872c1254e2b72857335ff43463d618623126c475dd8b5ce0ce5d5"
   replicas: 1
   debug: false
   metrics:

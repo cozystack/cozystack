@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/cluster-api-provider-kubevirt:v1.7.2@sha256:a46ea81da65d598d919094c7f03654b0eed28282af2e5532983232f62a70bcf9
+ghcr.io/cozystack/cozystack/cluster-api-provider-kubevirt:v1.7.3-rc.1@sha256:f37f248f3d345a8c7f269410c3f7166eec56f9155026bda093700f5ccb776ba4
