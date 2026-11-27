@@ -23,7 +23,7 @@ cozystackOperator:
   disableTelemetry: false
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.6@sha256:3fb491fe668b02b1cdd27de8cc14526456061819ee44b816b6d8ad759d60ee04
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:3c0550561f8e23cb9ae5fa79c8c6b20043646378aa28af3fe75ecde8fda3061a'
+  platformSourceRef: 'digest=sha256:5febb55c029da75c9bd2955c17602ddcd6781fc301c6281fe7c921a0aa341923'
   # When non-empty, overrides the operator's --helmrelease-interval flag
   # (operator default: 5m). E2E sets this to 30s; production should leave empty.
   helmReleaseInterval: ""
