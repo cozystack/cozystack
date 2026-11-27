@@ -38,6 +38,16 @@
 {{- if not (has $substrate (list "kubevirt" "proxmox")) }}
 {{-   fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
 {{- end }}
+{{- /* CAPI starts a new pool at its min-size annotation without comparing it
+       with the max, so a pool with class entries and minReplicas above
+       maxReplicas would run more GPUs than count times maxReplicas. */}}
+{{- $hasClassEntries := false }}
+{{- range (.Values.gpus | default list) }}
+{{-   if and (kindIs "map" .) .className }}{{ $hasClassEntries = true }}{{ end }}
+{{- end }}
+{{- if and $hasClassEntries (gt (int64 .Values.minReplicas) (int64 .Values.maxReplicas)) }}
+{{-   fail (printf "minReplicas (%v) must not exceed maxReplicas (%v) on a pool with GPU class entries" .Values.minReplicas .Values.maxReplicas) }}
+{{- end }}
 {{- $isProxmox := eq $substrate "proxmox" }}
 {{- $vpc := "" }}
 {{- with dig "name" "" (.Values.network | default dict) }}
