@@ -190,32 +190,17 @@ spec:
             name: redis-secure.ca-cert
           type: Opaque
 
-  # Two paths carry a Secret to a tenant and both are asserted. The dashboard
-  # Role grants by name; core.cozystack.io/tenantsecrets serves whatever the
-  # lineage webhook stamped tenantresource=true from the ApplicationDefinition
-  # selectors, and that label-driven path is the one that would leak a
-  # private key if the selector ever named the cert-manager Secrets instead of
-  # the projection.
+  # A tenant reads Secrets only through core.cozystack.io/tenantsecrets, which
+  # serves whatever the lineage webhook stamped tenantresource=true from the
+  # ApplicationDefinition selectors. That label-driven path is the one that
+  # would leak a private key if the selector ever named the cert-manager
+  # Secrets instead of the projection.
   - name: verify-tenant-ca-projection
     try:
-    # The name-granting path, on the deployed object rather than the render:
-    # the Role must reach exactly the auth Secret. The unit tests pin the same
-    # rule, but only against the template, so a Role that fails to apply or
-    # gets widened in the cluster is invisible to them.
-    - assert:
-        timeout: 2m
-        resource:
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata:
-            name: redis-secure-dashboard-resources
-          (length(rules[?contains(resources, 'secrets')])): 1
-          (rules[?contains(resources, 'secrets')].resourceNames[]):
-          - redis-secure-auth
     # Positive control, and it comes first: the negatives below are satisfied
     # by an ABSENT label, which is also what a webhook that stamped nothing
     # this run looks like. The auth Secret is chart-rendered, traces to the
-    # Redis CR and is granted by name, so it MUST be stamped.
+    # Redis CR and is included by name, so it MUST be stamped.
     - assert:
         timeout: 2m
         resource:

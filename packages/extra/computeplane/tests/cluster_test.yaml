@@ -40,7 +40,7 @@ tests:
           path: spec.chartRef.kind
           value: ExternalArtifact
 
-  - it: withholds the admin kubeconfig from the tenant's dashboard Role
+  - it: keeps withholding the admin kubeconfig from the previous kubernetes chart
     documentSelector:
       path: metadata.name
       value: computeplane-cluster

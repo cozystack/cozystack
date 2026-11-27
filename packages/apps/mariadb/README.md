@@ -265,7 +265,7 @@ users:
     maxUserConnections: 1000
 ```
 
-Passwords cannot be set here — they (and the `root` account) are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o json | jq -r '.data["user1"]' | base64 -d` (a username may contain a `.`, which `jsonpath` would treat as a path step and return nothing).
+Passwords cannot be set here — they (and the `root` account) are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get tenantsecret <release>-credentials -o json | jq -r '.data["user1"]' | base64 -d` (a username may contain a `.`, which `jsonpath` would treat as a path step and return nothing).
 
 
 ### databases

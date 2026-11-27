@@ -133,41 +133,9 @@ spec:
           (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
 
   # The Secrets the operator creates for TLS all carry private key material and
-  # must never be reachable by a tenant. The chart tests pin this at render
-  # time; this pins the object that is actually deployed.
-  #
-  # Asserted as an exact list rather than as the absence of forbidden names,
-  # because a rule granting `secrets` with no resourceNames at all grants every
-  # Secret in the namespace while containing no forbidden name to match on.
-  #
-  # Two counts are asserted alongside it and neither is redundant. An
-  # ADDITIONAL rule naming secrets contributes no entries to the flattened name
-  # list, so the equality alone would still hold while every Secret became
-  # readable — the secrets-rule count catches that. An ADDED rule with resources
-  # ["*"] grants every Secret without containing the string "secrets" at all, so
-  # it is invisible to both — the total rule count catches that one. An existing
-  # rule MUTATED to ["*"] drops the secrets-rule count to zero and empties the
-  # flattened name list, so both assertions below fail on it as well.
-  - name: verify-tenant-role-grants-no-key-material
-    try:
-    - assert:
-        timeout: 2m
-        resource:
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata:
-            name: mongodb-test-dashboard-resources
-          (length(rules)): 3
-          (length(rules[?contains(resources, 'secrets')])): 1
-          (rules[?contains(resources, 'secrets')].resourceNames[]):
-          - mongodb-test-credentials
-          # The Role is read-only by intent; verbs is the fourth RBAC axis and
-          # widening it is the same class as widening the other three.
-          (length(rules[?verbs != ['get', 'list', 'watch']])): 0
-
-  # The Role above is only one of the two paths a Secret can reach a tenant by.
-  # The other is core.cozystack.io/tenantsecrets, which surfaces whatever the
-  # lineage webhook stamped internal.cozystack.io/tenantresource=true from this
+  # must never be reachable by a tenant. A tenant reads Secrets only through
+  # core.cozystack.io/tenantsecrets, which surfaces whatever the lineage
+  # webhook stamped internal.cozystack.io/tenantresource=true from this
   # application's ApplicationDefinition selectors. That is the path the
   # secrets.include selector drives, and it is the one that would leak the CA
   # private key if the selector ever named the operator's Secrets instead of

@@ -111,8 +111,10 @@ spec:
   # merges spec.values after valuesFrom, so nothing injected via
   # cozystack-values can disable these pins.
   values:
-    # The wrapped chart otherwise lets the tenant's "use" subjects read
-    # computeplane-cluster-admin-kubeconfig through its dashboard Role.
+    # The kubernetes chart no longer reads this. It stays one release so
+    # that the previous kubernetes chart, still served by the ExternalArtifact
+    # until it catches up, does not render its dashboard Role with the admin
+    # kubeconfig again. Remove it in the next release.
     withholdAdminKubeconfig: true
     addons:
       certManager:

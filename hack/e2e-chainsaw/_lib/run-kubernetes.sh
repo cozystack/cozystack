@@ -6868,8 +6868,7 @@ EOF
   # Server-side dry-run executes Helm `lookup` against the live cluster and
   # renders the real storageClasses map. rc is captured separately (no pipe) so
   # the management-cluster state is always restored before any assertion exits.
-  # The release namespace must be a valid tenant identifier (the chart's
-  # dashboard-resourcemap template enforces this), so render under tenant-test.
+  # Render under tenant-test, the kind of namespace a tenant release lives in.
   #
   # `|| rc=$?` rather than a bare assignment followed by `rc=$?`: the caller runs
   # under `set -e`, so a failed render would exit the function on the assignment

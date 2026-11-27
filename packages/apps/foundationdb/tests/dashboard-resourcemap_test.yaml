@@ -72,6 +72,18 @@ tests:
           path: data.resources
           pattern: "apiVersion: v1\n  kind: ConfigMap\n  name: foundationdb-example-config"
 
+  - it: lists only the configuration in the resource map
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.resources
+          value: |
+            - apiVersion: v1
+              kind: ConfigMap
+              name: foundationdb-example-config
+
   - it: renders only the existing map and the two access objects
     asserts:
       - hasDocuments:

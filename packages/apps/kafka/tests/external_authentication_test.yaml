@@ -7,7 +7,6 @@ suite: external listener requires SCRAM-SHA-512 credentials
 templates:
   - templates/kafka.yaml
   - templates/users.yaml
-  - templates/dashboard-resourcemap.yaml
 
 release:
   name: kafka-test
@@ -99,26 +98,6 @@ tests:
       - matchRegex:
           path: metadata.name
           pattern: ^kafka-test\.(analytics|app)$
-
-  - it: lets the tenant read each user's generated credentials Secret
-    template: templates/dashboard-resourcemap.yaml
-    set:
-      users:
-        app: {}
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: [""]
-            resources: [secrets]
-            resourceNames:
-              - kafka-test-clients-ca-cert
-              - kafka-test-cluster-ca-cert
-              - kafka-test.app
-            verbs: ["get", "list", "watch"]
 
   - it: refuses a user name that is not a valid object name
     template: templates/users.yaml

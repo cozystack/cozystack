@@ -4,9 +4,7 @@ suite: RabbitMQ TenantProjection sentinel
 # declaration that tells the CA-extraction controller to lift ca.crt out of the
 # key-bearing <release>-ca into the tenant-readable <release>.tenant-ca
 # projection. Without this sentinel the controller has no source to read, so
-# <release>.tenant-ca is never created and the Role's careful exclusion of the
-# key-bearing Secrets (dashboard_resourcemap_test.yaml) buys the tenant no
-# actual path to the CA.
+# <release>.tenant-ca is never created and the tenant has no path to the CA.
 #
 # The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
 # carry none — it owns the projection, and it is itself owned only through the

@@ -33,7 +33,7 @@ It can be done via UI or a `kubectl` request:
 -   Run the following command (using the management cluster kubeconfig):
 
     ```bash
-    kubectl get secret -n tenant-<name> kubernetes-<clusterName>-admin-kubeconfig -o go-template='{{ printf "%s\n" (index .data "admin.conf" | base64decode) }}' > admin.conf
+    kubectl get tenantsecret -n tenant-<name> kubernetes-<clusterName>-admin-kubeconfig -o go-template='{{ printf "%s\n" (index .data "admin.conf" | base64decode) }}' > admin.conf
     ```
 
 There are several kubeconfig options available:

@@ -2,7 +2,6 @@ suite: harbor managementWhitelist restricts everything but the registry paths
 templates:
   - templates/ingress.yaml
   - templates/httproute.yaml
-  - templates/dashboard-resourcemap.yaml
 
 release:
   name: harbor
@@ -253,21 +252,3 @@ tests:
       - equal:
           path: kind
           value: HTTPRoute
-
-  - it: lets the dashboard read both Ingress objects
-    template: templates/dashboard-resourcemap.yaml
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups:
-              - networking.k8s.io
-            resources:
-              - ingresses
-            resourceNames:
-              - harbor-ingress
-              - harbor-registry-ingress
-            verbs: ["get", "list", "watch"]
