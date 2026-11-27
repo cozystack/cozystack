@@ -11,10 +11,11 @@ spec:
   # v1.0.x, not v1.1: both serve InClusterIPPool v1alpha2, but v1.1 moves to the
   # v1beta2 contract and its IPAddressClaim API, while capmox v0.7, the only
   # consumer here, is a v1beta1-contract provider. Move the two together.
-  version: v1.0.3-ipam-in-cluster
+  version: {{ include "capi-providers-ipam-in-cluster.version" . }}
   fetchConfig:
     selector:
       matchLabels:
+        provider.cluster.x-k8s.io/version: {{ include "capi-providers-ipam-in-cluster.version" . }}
         ipamprovider-provider: in-cluster
   deployment:
     containers:

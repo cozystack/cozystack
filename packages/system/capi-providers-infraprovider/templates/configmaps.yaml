@@ -1,8 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.1.10-infraprovider
+  name: {{ include "capi-providers-infraprovider.version" . }}
   labels:
+    provider.cluster.x-k8s.io/version: {{ include "capi-providers-infraprovider.version" . }}
     infraprovider-components: cozy
   annotations:
     provider.cluster.x-k8s.io/compressed: "true"

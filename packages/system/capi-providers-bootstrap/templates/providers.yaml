@@ -29,9 +29,10 @@ metadata:
   name: talos
 spec:
   # https://github.com/siderolabs/cluster-api-bootstrap-provider-talos
-  version: v0.6.13-bootstrap-talos
+  version: {{ include "capi-providers-bootstrap.talosVersion" . }}
   fetchConfig:
     selector:
       matchLabels:
+        provider.cluster.x-k8s.io/version: {{ include "capi-providers-bootstrap.talosVersion" . }}
         bootstrap-components: cozy
         bootstrap-provider: talos

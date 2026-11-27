@@ -14,3 +14,16 @@
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The Talos bootstrap ConfigMap's version, defined once so the ConfigMap name, its
+version label and the Talos provider's spec.version cannot drift apart. The
+version label is what keeps a renamed ConfigMap from matching twice:
+capi-operator lists every ConfigMap the selector matches and refuses a provider
+while more than one is returned, before it reads spec.version
+(processProviderConfigMaps). The kubeadm pair uses the chart appVersion instead
+because it tracks the upstream Cluster API release.
+*/}}
+{{- define "capi-providers-bootstrap.talosVersion" -}}
+v0.6.13-bootstrap-talos
+{{- end -}}
