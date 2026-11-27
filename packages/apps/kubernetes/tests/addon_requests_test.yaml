@@ -1,0 +1,100 @@
+suite: tenant add-on resource requests
+values:
+  - values-ci.yaml
+tests:
+  - it: requests less for Cilium's envoy and operator than the system chart, keeping their limits
+    template: templates/helmreleases/cilium.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.cilium.envoy.resources
+          value:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {memory: 1Gi}
+      - equal:
+          path: spec.values.cilium.operator.resources
+          value:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 1Gi}
+      - notExists:
+          path: spec.values.cilium.envoy.enabled
+
+  - it: still enables envoy for Gateway API next to its requests
+    template: templates/helmreleases/cilium.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      addons.gatewayAPI.enabled: true
+    asserts:
+      - equal:
+          path: spec.values.cilium.envoy.enabled
+          value: true
+      - equal:
+          path: spec.values.cilium.envoy.resources.requests.cpu
+          value: 25m
+
+  - it: lets addons.cilium.valuesOverride set envoy's requests back up
+    template: templates/helmreleases/cilium.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      addons.cilium.valuesOverride:
+        cilium:
+          envoy:
+            resources:
+              requests: {cpu: 100m, memory: 512Mi}
+    asserts:
+      - equal:
+          path: spec.values.cilium.envoy.resources
+          value:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 1Gi}
+
+  - it: sizes metrics-server for a tenant cluster, keeping its limits
+    template: templates/helmreleases/metrics-server.yaml
+    asserts:
+      - equal:
+          path: spec.values.metrics-server.resources
+          value:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 500Mi}
+
+  - it: requests what the VPA project's manifests request, keeping the recommender's limit
+    template: templates/helmreleases/vertical-pod-autoscaler.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      addons.monitoringAgents.enabled: true
+    asserts:
+      - equal:
+          path: spec.values.vertical-pod-autoscaler.recommender.resources
+          value:
+            requests: {cpu: 50m, memory: 500Mi}
+            limits: {memory: 1600Mi}
+      - equal:
+          path: spec.values.vertical-pod-autoscaler.updater.resources
+          value:
+            requests: {cpu: 50m, memory: 200Mi}
+            limits: {memory: 512Mi}
+
+  - it: lets addons.verticalPodAutoscaler.valuesOverride set the recommender's requests
+    template: templates/helmreleases/vertical-pod-autoscaler.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      addons.monitoringAgents.enabled: true
+      addons.verticalPodAutoscaler.valuesOverride:
+        vertical-pod-autoscaler:
+          recommender:
+            resources:
+              requests: {cpu: 100m, memory: 1600Mi}
+    asserts:
+      - equal:
+          path: spec.values.vertical-pod-autoscaler.recommender.resources.requests
+          value: {cpu: 100m, memory: 1600Mi}

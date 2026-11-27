@@ -27,6 +27,19 @@ spec:
   upgrade:
     remediation:
       retries: -1
+  {{- /* metrics-server needs about 1 millicore and 2 MB per node, so the
+         system chart's 100m / 200Mi, its upstream default, reserves enough
+         for a 100-node cluster. 20m / 64Mi covers a tenant cluster of a few
+         dozen nodes plus the process itself; the limits are unchanged. */}}
+  values:
+    metrics-server:
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 500Mi
   dependsOn:
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}

@@ -16,12 +16,23 @@ vertical-pod-autoscaler:
       pod-namespace-label: namespace
       prometheus-address: http://vmselect-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
       prometheus-cadvisor-job-name: cadvisor
+    {{- /* Requests match the VPA project's own deployment manifests (50m /
+           500Mi for the recommender, 50m for the updater). The recommender
+           keeps its 1600Mi limit, the ceiling for loading its history from
+           Prometheus; the updater keeps the system chart's memory. */}}
     resources:
       limits:
         memory: 1600Mi
       requests:
-        cpu: 100m
-        memory: 1600Mi
+        cpu: 50m
+        memory: 500Mi
+  updater:
+    resources:
+      limits:
+        memory: 512Mi
+      requests:
+        cpu: 50m
+        memory: 200Mi
 {{- end }}
 
 {{- if .Values.addons.monitoringAgents.enabled }}

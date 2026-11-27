@@ -24,9 +24,32 @@ cilium:
     # appProtocol kubernetes.io/h2c (GEP-1911). Per-cluster opt-out:
     # addons.cilium.valuesOverride.cilium.gatewayAPI.enableAlpn=false.
     enableAlpn: true
-  envoy:
-    enabled: true
   {{- end }}
+  {{- /* Requests below are taken from every worker, which in a tenant
+         cluster is often a 1-2 vCPU VM, and override the platform-wide
+         values of the system chart. Envoy carries only L7 traffic (Gateway
+         API, L7 policy) and idles at about 100 MB per node, so 512Mi
+         reserved four times what it uses; the limit stays as the backstop.
+         The operator is a single replica that reconciles identities and
+         IPAM, not the datapath. */}}
+  envoy:
+    {{- if $.Values.addons.gatewayAPI.enabled }}
+    enabled: true
+    {{- end }}
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        memory: 1Gi
+  operator:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
 {{- end }}
 
 apiVersion: helm.toolkit.fluxcd.io/v2
