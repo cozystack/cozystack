@@ -31,8 +31,8 @@ tests:
         issuer-name: letsencrypt-prod
         solver: http01
     documentSelector:
-      path: kind
-      value: Secret
+      path: metadata.name
+      value: harbor-credentials
     asserts:
       - equal:
           path: stringData.url
