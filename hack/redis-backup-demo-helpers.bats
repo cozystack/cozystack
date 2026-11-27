@@ -20,7 +20,7 @@ make_stubs() {
     cat > "$stub/kubectl" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$STUB_DIR/kubectl.argv"
-if [ "$*" = "-n tenant-root get secret redis-demo-auth --ignore-not-found -o jsonpath={.data.password}" ]; then
+if [ "$*" = "-n tenant-root get secret redis-demo.default.account --ignore-not-found -o jsonpath={.data.password}" ]; then
     printf '%s' "${STUB_PW_B64:-}"
     exit 0
 fi

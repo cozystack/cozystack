@@ -46,7 +46,7 @@ type ConfigSpec struct {
 	// TLS configuration. TLS is opt-in and is not inferred from `external`.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
-	// Enable password generation.
+	// Require a password. The password of the `default` user is issued through the credentials API, and issuing a new one takes effect without restarting anything. Replication, the Sentinels and the metrics exporter use an internal account of their own; backups use the `default` password.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
 	// Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.
