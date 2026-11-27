@@ -11,7 +11,7 @@ release:
 # class when one is found; under `helm template`/unittest the cluster lookup
 # returns empty, so these cases exercise the fresh-install fallback path.
 #
-# The rendered HelmRelease (documentIndex 1) carries the values that the
+# The rendered HelmRelease (selected by kind) carries the values that the
 # cozy-harbor chart forwards to the upstream harbor subchart.
 # helm-unittest renders every template in the chart, so the platform-injected
 # globals consumed by the ingress/httproute/bucket templates must be supplied
@@ -28,7 +28,9 @@ set:
 tests:
   - it: forwards storageClass to jobservice jobLog on a fresh install
     template: templates/harbor.yaml
-    documentIndex: 1
+    documentSelector:
+      path: kind
+      value: HelmRelease
     set:
       storageClass: local-3rep
     asserts:
@@ -38,7 +40,9 @@ tests:
 
   - it: still forwards storageClass to trivy alongside jobservice
     template: templates/harbor.yaml
-    documentIndex: 1
+    documentSelector:
+      path: kind
+      value: HelmRelease
     set:
       storageClass: local-3rep
     asserts:
@@ -48,14 +52,18 @@ tests:
 
   - it: omits the jobservice block when storageClass is unset
     template: templates/harbor.yaml
-    documentIndex: 1
+    documentSelector:
+      path: kind
+      value: HelmRelease
     asserts:
       - notExists:
           path: spec.values.harbor.persistence.persistentVolumeClaim.jobservice
 
   - it: emits no persistentVolumeClaim block when storageClass is unset and trivy is disabled
     template: templates/harbor.yaml
-    documentIndex: 1
+    documentSelector:
+      path: kind
+      value: HelmRelease
     set:
       trivy:
         enabled: false
