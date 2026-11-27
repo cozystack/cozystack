@@ -77,3 +77,18 @@ mediatedDevicesConfiguration: {}
 # Set through spec.components.platform.values.kubevirt.migrations
 # on the cozystack.cozystack-platform Package.
 migrations: {}
+
+# StorageClass for the PVCs KubeVirt creates to persist TPM and EFI state
+# (persistent-state-for-<vm>), passed to spec.configuration.vmStateStorageClass
+# on the KubeVirt CR. Empty leaves the field unset, so those PVCs land in the
+# cluster default StorageClass.
+#
+# The PVC is always volumeMode Filesystem. With this field set KubeVirt asks for
+# ReadWriteMany and falls back to what the CDI StorageProfile of the class
+# advertises, so a class that only offers ReadWriteOnce Filesystem works.
+# Changing it does not move existing state PVCs; they stay in the class they
+# were created in.
+#
+# Set through spec.components.platform.values.kubevirt.vmStateStorageClass on
+# the cozystack.cozystack-platform Package.
+vmStateStorageClass: ""

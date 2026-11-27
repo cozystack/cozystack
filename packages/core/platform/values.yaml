@@ -948,6 +948,10 @@ kubevirt:
   # Passed to spec.configuration.migrations on the KubeVirt CR.
   # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
   migrations: {}
+  # StorageClass for the persistent TPM/EFI state PVCs of VMs, passed to
+  # spec.configuration.vmStateStorageClass on the KubeVirt CR. Empty keeps the
+  # cluster default StorageClass. Existing state PVCs are not moved.
+  vmStateStorageClass: ""
 # GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
 # CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two

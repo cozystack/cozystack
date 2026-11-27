@@ -37,6 +37,8 @@ tests:
           path: spec.configuration.mediatedDevicesConfiguration
       - notExists:
           path: spec.configuration.migrations
+      - notExists:
+          path: spec.configuration.vmStateStorageClass
 
   - it: sets the cluster evictionStrategy to LiveMigrateIfPossible
     asserts:
@@ -91,6 +93,21 @@ tests:
           value:
             allowAutoConverge: false
             completionTimeoutPerGiB: 0
+
+  - it: omits vmStateStorageClass when explicitly empty or null
+    set:
+      vmStateStorageClass: ""
+    asserts:
+      - notExists:
+          path: spec.configuration.vmStateStorageClass
+
+  - it: renders vmStateStorageClass as a string
+    set:
+      vmStateStorageClass: replicated
+    asserts:
+      - equal:
+          path: spec.configuration.vmStateStorageClass
+          value: replicated
 
   - it: emits cpuAllocationRatio under developerConfiguration when set
     set:
