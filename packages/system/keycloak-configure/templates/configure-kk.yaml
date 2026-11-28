@@ -14,7 +14,8 @@ metadata:
   name: keycloak-cozy
   namespace: {{ .Release.Namespace }}
 spec:
-  secret: keycloak-credentials
+  adminType: serviceAccount
+  secret: keycloak-operator-client
   url: http://keycloak-http.cozy-keycloak.svc:8080
   insecureSkipVerify: true
 

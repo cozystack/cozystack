@@ -1,0 +1,41 @@
+suite: keycloak bootstrap admin variables
+templates:
+  - templates/sts.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD are deprecated since Keycloak 26.0.
+# Keycloak reads either pair only on the start that creates realm master, so
+# the rename leaves the user on a running cluster as it is.
+
+tests:
+  - it: passes the bootstrap admin under the KC_BOOTSTRAP_ADMIN names
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_BOOTSTRAP_ADMIN_USERNAME
+            value: admin
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_BOOTSTRAP_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-credentials
+                key: password
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_ADMIN
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEYCLOAK_ADMIN_PASSWORD
+          any: true

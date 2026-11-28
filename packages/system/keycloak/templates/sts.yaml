@@ -156,9 +156,11 @@ spec:
               value: "xforwarded"
             - name: KC_HTTP_ENABLED
               value: "true"
-            - name: KEYCLOAK_ADMIN
+            # Keycloak reads these only on the start that creates realm master,
+            # so on a running cluster they change nothing.
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
-            - name: KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Release.Name }}-credentials
