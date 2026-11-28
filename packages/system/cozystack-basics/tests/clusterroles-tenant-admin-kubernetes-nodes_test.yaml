@@ -1,0 +1,24 @@
+suite: cozystack-basics tenant admin writes worker pools
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# Worker pools are the KubernetesNodes application, apart from the Kubernetes
+# application they belong to. A tenant admin who may create a cluster needs the
+# same write verbs on its pools, or the cluster cannot be given any nodes.
+tests:
+  - it: cozy:tenant:admin:base writes kubernetesnodeses as it writes kuberneteses
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules[?(@.apiGroups[0] == "apps.cozystack.io")].resources
+          content: kubernetesnodeses
+      - contains:
+          path: rules[?(@.apiGroups[0] == "apps.cozystack.io")].resources
+          content: kuberneteses
