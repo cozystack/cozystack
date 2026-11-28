@@ -256,6 +256,9 @@
 {{- if .Values.telemetry.disabled -}}
 {{- $_ := set $controllerValues "disableTelemetry" true -}}
 {{- end -}}
+{{- if eq (include "cozystack.platform.gpu.vmEnabled" $) "true" -}}
+{{- $_ := set $controllerValues "gpu" (dict "enabled" true) -}}
+{{- end -}}
 {{- /* EndpointAttachment's method: WholeIP|PortList modes render the Service
        contract cozy-proxy implements. A proxy skips a Service delegated to a
        name it does not claim while the load balancer still attracts the
