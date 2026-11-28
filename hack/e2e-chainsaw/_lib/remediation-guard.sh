@@ -22,6 +22,13 @@
 # "uninstalled", 1 otherwise. Empty input is treated as "no history yet,
 # no cycle observed".
 
+# The jsonpath a caller hands to kubectl to read those statuses, one per
+# line. Defined here so the postgres e2e step reads it as it does on main.
+# On this branch nothing checks it against the Flux HelmRelease type: a
+# renamed field makes it return nothing and the guard report no cycle.
+# shellcheck disable=SC2034  # used by callers that source this file
+HELMRELEASE_HISTORY_JSONPATH='{range .status.history[*]}{.status}{"\n"}{end}'
+
 helmrelease_has_remediation_cycle() {
     statuses="$1"
     if [ -z "${statuses}" ]; then

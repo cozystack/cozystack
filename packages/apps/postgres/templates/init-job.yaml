@@ -20,6 +20,23 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  {{- /*
+    This Job is a post-install,post-upgrade Helm hook Helm blocks on. Bound it under
+    the 10m hook budget so its own DeadlineExceeded surfaces first, instead of Helm's
+    generic 10m timeout that says nothing about why. The script reads the value back
+    as JOB_DEADLINE and bounds its collation-rebuild waits by what is left of it.
+    On UPGRADE the Cluster is already up and the readiness loop answers in seconds,
+    so 540s leaves the grant and rebuild passes ~9m. On INSTALL the same release is
+    still provisioning the Cluster (PVC, image pull, initdb) and Helm's wait does not
+    cover a CR, so the cold start gets 570s. Do not retry the pod either way: the
+    collation pass bounds lock_timeout and the in-place statement_timeout by
+    JOB_DEADLINE minus $SECONDS, and $SECONDS counts from the pod's start while
+    activeDeadlineSeconds counts from the Job's. A retried pod would hand the server
+    a bound longer than the Job has left, so a rebuild or lock wait would outlive it.
+  */}}
+  {{- $deadline := ternary 570 540 .Release.IsInstall }}
+  activeDeadlineSeconds: {{ $deadline }}
+  backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:
     metadata:
@@ -30,7 +47,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: postgres
-        image: ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" $ | trimPrefix "v" }}
+        image: {{ include "postgres.imageName" $ }}
         command:
         - bash
         - /scripts/init.sh
@@ -51,6 +68,8 @@ spec:
           value: "5432"
         - name: PGDATABASE
           value: postgres
+        - name: JOB_DEADLINE
+          value: {{ $deadline | quote }}
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
