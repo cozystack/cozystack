@@ -169,6 +169,30 @@ load test_helper
   echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:buildcache-arm64,'
 }
 
+@test "CACHE_FROM_TAGS imports every cache it lists and the build still writes only CACHE_TAG" {
+  # A release line imports its own cache and main's, whose Dockerfiles drift
+  # away from the line's over time.
+  pkg=packages/system/cozystack-controller
+  out=$(make -n -C "$pkg" image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1 CACHE_TAG=buildcache-release-1.7 'CACHE_FROM_TAGS=buildcache-release-1.7 buildcache')
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache-release-1.7 '
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-release-1.7,'
+  # A failed cache write must not fail the build: OCIR refuses a blob upload now
+  # and then.
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-release-1.7,[^ ]*ignore-error=true'
+  [ "$(echo "$out" | grep -o -- '--cache-to' | wc -l)" -eq 1 ]
+  # Importing from several caches writes none of them unless WRITE_CACHE=1:
+  # PR builds and the amd64 rc build only read.
+  for write in '' WRITE_CACHE=0; do
+    out=$(make -n -C "$pkg" image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b $write 'CACHE_FROM_TAGS=buildcache-release-1.7 buildcache')
+    [ "$(echo "$out" | grep -o -- '--cache-from' | wc -l)" -eq 2 ]
+    [ "$(echo "$out" | grep -o -- '--cache-to' | wc -l)" -eq 0 ]
+  done
+  # Without it, a build imports exactly the one cache it would write.
+  out=$(make -n -C "$pkg" image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  [ "$(echo "$out" | grep -o -- '--cache-from' | wc -l)" -eq 1 ]
+}
+
 @test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {
   # An IMAGE_TAG assigned in a package Makefile beats the value CI puts in the
   # environment, so every PR, main and line build would push the same

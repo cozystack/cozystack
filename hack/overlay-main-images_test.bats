@@ -320,10 +320,11 @@ load test_helper
 
   # It must not write the shared mode=max cache: that ref has exactly one
   # serialized writer (build-main.yaml) so concurrent builds cannot race on the
-  # cache manifest. A line build can overlap a main build.
-  printf '%s\n' "$code" | grep -qF "WRITE_CACHE: '0'" || {
-    echo "build-release.yaml must set WRITE_CACHE: '0' — writing the shared" >&2
-    echo ":buildcache ref races build-main.yaml on the cache manifest." >&2
+  # cache manifest. A line build can overlap a main build, so it writes only
+  # the line's own ref.
+  printf '%s\n' "$code" | grep -qF 'CACHE_TAG: buildcache-${{ github.ref_name }}' || {
+    echo "build-release.yaml must write only its line's cache ref — writing the" >&2
+    echo "shared :buildcache ref races build-main.yaml on the cache manifest." >&2
     exit 1; }
 }
 
