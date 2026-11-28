@@ -147,8 +147,25 @@ kubelet:
   evictionSoftMemory: 8%
 EOF
 
+# --- Case: GPU pool with an explicit maxUnavailable override ---
+cat >"$WORK/case-maxunavailable.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "4"
+  memory: 8Gi
+gpus:
+  - name: nvidia.com/AD102GL_L40S
+kubelet: {}
+maxUnavailable: 0
+EOF
+
 RC=0
-for c in resources gpu kubelet; do
+for c in resources gpu kubelet maxunavailable; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done
