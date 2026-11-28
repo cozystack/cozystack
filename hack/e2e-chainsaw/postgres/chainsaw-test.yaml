@@ -253,8 +253,12 @@ spec:
   # The init Job rebuilds an index whose collation changed library version.
   # The pass is SQL run by a Helm hook, so only a real server can say whether
   # it works. A collation created with an explicit version reads as stale
-  # without swapping the operand image, which makes one more upgrade of the
-  # release enough to run the pass over it.
+  # without swapping the operand image, and so does a C.<codeset> collation
+  # once the database records another Debian release as the one it was
+  # repaired for, which makes one more upgrade of the release enough to run
+  # the pass over both. A database created after the last run records no
+  # release, the state every existing cluster starts from; there a stale libc
+  # collation is what tells the pass that glibc moved.
   - name: rebuild-index-after-collation-version-change
     try:
     - script:
@@ -273,9 +277,19 @@ spec:
           CREATE EXTENSION IF NOT EXISTS btree_gist;
           CREATE TABLE collation_probe_excl (s text COLLATE stale_icu, EXCLUDE USING gist (s WITH =));
           INSERT INTO collation_probe_excl SELECT 'k' || g FROM generate_series(1, 200) g;
+          CREATE TABLE collation_probe_c (s text COLLATE "C.utf8" UNIQUE);
+          INSERT INTO collation_probe_c SELECT 'c' || g FROM generate_series(1, 1000) g;
+          ALTER DATABASE testdb SET cozystack.collation_release = 'pgdg11';
           CREATE TABLE collation_probe_before AS
             SELECT 'collation_probe_s'::regclass::oid AS index,
-                   (SELECT relfilenode FROM pg_class WHERE oid = 'collation_probe_excl_s_excl'::regclass) AS in_place_file;
+                   (SELECT relfilenode FROM pg_class WHERE oid = 'collation_probe_excl_s_excl'::regclass) AS in_place_file,
+                   'collation_probe_c_s_key'::regclass::oid AS c_index;
+          CREATE DATABASE collation_probe_unrecorded;
+          \c collation_probe_unrecorded
+          CREATE COLLATION stale_libc (provider = libc, locale = 'en_US.utf8', version = '0');
+          CREATE TABLE collation_probe_c (s text COLLATE "C.utf8" UNIQUE);
+          INSERT INTO collation_probe_c SELECT 'c' || g FROM generate_series(1, 1000) g;
+          CREATE TABLE collation_probe_before AS SELECT 'collation_probe_c_s_key'::regclass::oid AS c_index;
           EOF
         check:
           ($error == null): true
@@ -333,6 +347,33 @@ spec:
           rebuilt_in_place=$(q "SELECT c.relfilenode <> b.in_place_file FROM pg_class c, collation_probe_before b WHERE c.oid = 'collation_probe_excl_s_excl'::regclass")
           if [ "$rebuilt_in_place" != t ]; then
             echo "the init Job did not rebuild the exclusion constraint's index" >&2
+            exit 1
+          fi
+          rebuilt_c=$(q "SELECT 'collation_probe_c_s_key'::regclass::oid <> c_index FROM collation_probe_before")
+          if [ "$rebuilt_c" != t ]; then
+            echo "the init Job did not rebuild the index on a C.<codeset> collation after the Debian release changed" >&2
+            exit 1
+          fi
+          q "SELECT bt_index_check('collation_probe_c_s_key', true)"
+          release=$(q "SELECT current_setting('cozystack.collation_release', true) = substring(current_setting('server_version') from 'pgdg[0-9]+')")
+          if [ "$release" != t ]; then
+            echo "the init Job did not record the Debian release it repaired the database for" >&2
+            exit 1
+          fi
+          qu() {
+            kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+              psql -U postgres -d collation_probe_unrecorded -v ON_ERROR_STOP=1 -tAc "$1"
+          }
+          rebuilt_unrecorded=$(qu "SELECT 'collation_probe_c_s_key'::regclass::oid <> c_index FROM collation_probe_before")
+          if [ "$rebuilt_unrecorded" != t ]; then
+            echo "the init Job did not rebuild the index on a C.<codeset> collation in a database that recorded no release and holds a stale libc collation" >&2
+            exit 1
+          fi
+          qu "CREATE EXTENSION IF NOT EXISTS amcheck"
+          qu "SELECT bt_index_check('collation_probe_c_s_key', true)"
+          release=$(qu "SELECT current_setting('cozystack.collation_release', true) = substring(current_setting('server_version') from 'pgdg[0-9]+')")
+          if [ "$release" != t ]; then
+            echo "the init Job did not record the Debian release it repaired the unrecorded database for" >&2
             exit 1
           fi
           # The pass keeps its progress in a setting of the database and

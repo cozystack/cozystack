@@ -683,6 +683,29 @@ stringData:
       the codeset or a hyphen in it. A locale with no such collation cannot
       be checked, which a run that saw the image change says in a warning.
 
+      PostgreSQL records no version for a libc locale named C.<codeset>
+      either, yet the one Debian patched into the glibc of bullseye and the
+      one glibc ships since 2.35 order some characters differently. Such a
+      collation, and a database whose default collation is such a locale,
+      therefore take the Debian release of the server's build as their
+      version. The release a database was last repaired for is another
+      setting of it, written once a run repairs the database without a
+      failure. A database without that setting gets the release of the
+      server the pass first finds it on: that is the previous image whenever
+      the pass sees the image change, since it looks before it waits for the
+      rollout, so a retry after the primary has restarted still rebuilds
+      those indexes. A database that already runs on a new glibc by then is
+      recognised by a libc collation, or a libc database default, whose
+      recorded version differs from the server's, and is taken as repaired
+      for no release. Anything else, a new cluster included, is taken as
+      repaired for the release it runs. That includes a database a pass
+      without this rule already repaired on the new glibc: it refreshed the
+      libc versions and left no sign of the move behind, so its indexes on a
+      C.<codeset> collation have to be rebuilt by hand with REINDEX.
+      With no version for PostgreSQL to complain about, a range partition key
+      of such a collation is reported only by the run that rebuilds its
+      indexes.
+
       Every session of the pass pins search_path to pg_catalog: the Job
       connects as the superuser, and a function or operator a tenant defined
       in public would otherwise be picked wherever its argument types match
@@ -696,16 +719,24 @@ stringData:
     SET search_path = pg_catalog, pg_temp;
     SELECT current_setting('server_version_num')::int >= 150000 AS tracks_database \gset
     \if :tracks_database
-    SELECT datcollversion IS NOT NULL AS db_versioned, coalesce(pg_database_collation_actual_version(oid), '') AS db_actual, datcollversion IS NOT NULL AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid) AS db_stale, false AS db_unmatched FROM pg_database WHERE datname = current_database() \gset
+    SELECT datcollversion IS NOT NULL AS db_versioned, coalesce(pg_database_collation_actual_version(oid), '') AS db_actual, datcollversion IS NOT NULL AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid) AS db_stale, false AS db_unmatched, datlocprovider = 'c' AND datcollate ~* '^C\.' AS db_c, datlocprovider = 'c' AND datcollversion IS NOT NULL AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid) AS db_libc_stale FROM pg_database WHERE datname = current_database() \gset
     \else
-    SELECT d.datcollate NOT IN ('C', 'POSIX') AS db_versioned,
+    SELECT d.datcollate NOT IN ('C', 'POSIX') AND d.datcollate !~* '^C\.' AS db_versioned,
            coalesce(max(pg_collation_actual_version(c.oid)), '') AS db_actual,
            coalesce(bool_or(c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)), false) AS db_stale,
-           d.datcollate NOT IN ('C', 'POSIX') AND count(c.oid) = 0 AS db_unmatched
+           d.datcollate NOT IN ('C', 'POSIX') AND d.datcollate !~* '^C\.' AND count(c.oid) = 0 AS db_unmatched,
+           d.datcollate ~* '^C\.' AS db_c,
+           false AS db_libc_stale
     FROM pg_database d
     LEFT JOIN pg_collation c ON c.collprovider = 'c' AND lower(replace(c.collcollate, '-', '')) = lower(replace(d.datcollate, '-', '')) AND c.collversion IS NOT NULL AND c.collencoding IN (-1, d.encoding)
     WHERE d.datname = current_database()
     GROUP BY d.datcollate \gset
+    \endif
+    SELECT coalesce(substring(current_setting('server_version') from 'pgdg[0-9]+'), '') AS release, coalesce(current_setting('cozystack.collation_release', true), '') AS repaired \gset
+    SELECT :'repaired' = '' AND :'release' <> '' AS unrecorded \gset
+    \if :unrecorded
+    SELECT CASE WHEN :'db_libc_stale'::boolean OR EXISTS (SELECT FROM pg_collation c WHERE c.collprovider = 'c' AND c.collversion IS NOT NULL AND c.collversion IS DISTINCT FROM pg_collation_actual_version(c.oid)) THEN 'unknown' ELSE :'release' END AS repaired \gset
+    SELECT format('ALTER DATABASE %I SET cozystack.collation_release = %L', current_database(), :'repaired') \gexec
     \endif
     CREATE TEMP TABLE cozystack_collation AS
     SELECT v.oid, v.actual, v.stale,
@@ -717,7 +748,14 @@ stringData:
           AND c.collencoding IN (-1, (SELECT encoding FROM pg_database WHERE datname = current_database()))
         UNION ALL
         SELECT 100, :'db_actual', :'db_stale'::boolean WHERE :'db_versioned'::boolean
-    ) v;
+    ) v
+    UNION ALL
+    SELECT c.oid, :'release', :'repaired' <> :'release', false
+    FROM pg_collation c
+    WHERE :'release' <> '' AND c.collprovider = 'c' AND c.collversion IS NULL AND c.collcollate ~* '^C\.'
+      AND c.collencoding IN (-1, (SELECT encoding FROM pg_database WHERE datname = current_database()))
+    UNION ALL
+    SELECT 100, :'release', :'repaired' <> :'release', false WHERE :'release' <> '' AND :'db_c'::boolean;
     CREATE TEMP TABLE cozystack_collation_index AS
     SELECT i.indexrelid AS index, bool_or(c.stale) AS stale
     FROM (
@@ -833,7 +871,7 @@ stringData:
     else
     collation_run "$db" <<\EOT
     SELECT format('WARNING: database %s uses the locale %s, for which this PostgreSQL major records no collation version and the catalog has no collation to stand in; the indexes on its default collation were not checked. If this upgrade moved the image to another Debian release, rebuild them with REINDEX DATABASE', datname, datcollate) FROM pg_database WHERE datname = current_database() AND :'db_unmatched'::boolean AND :'moved'::boolean;
-    SELECT format('WARNING: %s in database %s is range-partitioned on a key whose collation changed version; rows stored before the change may now belong to another partition, and the collation version is left as recorded until that is checked', p.partrelid::regclass, current_database()) FROM pg_partitioned_table p WHERE p.partstrat = 'r' AND EXISTS (SELECT FROM cozystack_collation c WHERE c.stale AND c.oid = ANY (p.partcollation::oid[]));
+    SELECT format('WARNING: %s in database %s is range-partitioned on a key whose collation changed version; rows stored before the change may now belong to another partition, %s', p.partrelid::regclass, current_database(), CASE WHEN bool_or(c.held) THEN 'and the collation version is left as recorded until that is checked' ELSE 'and no later run says so again: PostgreSQL records no version for that collation' END) FROM pg_partitioned_table p JOIN cozystack_collation c ON c.stale AND c.oid = ANY (p.partcollation::oid[]) WHERE p.partstrat = 'r' GROUP BY p.partrelid;
     DO $$
     DECLARE
         entry record;
@@ -846,6 +884,7 @@ stringData:
         END LOOP;
     END$$;
     SELECT format('ALTER DATABASE %I REFRESH COLLATION VERSION', current_database()) FROM cozystack_collation WHERE oid = 100 AND stale AND NOT held AND current_setting('server_version_num')::int >= 150000 \gexec
+    SELECT format('ALTER DATABASE %I SET cozystack.collation_release = %L', current_database(), :'release') WHERE :'release' NOT IN ('', :'repaired') \gexec
     SELECT coalesce(md5(string_agg(oid || '=' || actual, ',' ORDER BY oid)), '') AS remaining FROM cozystack_collation WHERE stale AND held \gset
     SELECT CASE WHEN :'remaining' = '' THEN '' ELSE :'remaining' || ':0' END AS settled \gset
     SELECT CASE WHEN :'settled' = '' THEN format('ALTER DATABASE %I RESET cozystack.collation_repair', current_database()) ELSE format('ALTER DATABASE %I SET cozystack.collation_repair = %L', current_database(), :'settled') END WHERE coalesce(current_setting('cozystack.collation_repair', true), '') <> :'settled' \gexec
