@@ -28,7 +28,7 @@ routes: ""
 # and this key pointed at the mounted path. Until then the flag exists so the
 # observation above can run, not so it can be switched on.
 clientCAFile: ""
-image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.7.3-rc.2@sha256:0ca79c34fe588c3226c4ac9a6b010dcf06f86272ac927f61545957b36fe4554a
+image: ghcr.io/cozystack/cozystack/kubeovn-webhook:v1.7.3@sha256:0ca79c34fe588c3226c4ac9a6b010dcf06f86272ac927f61545957b36fe4554a
 # Restrict who may reach the webhook's serving port.
 #
 # The handler returns namespace-derived annotations to any caller, and only the

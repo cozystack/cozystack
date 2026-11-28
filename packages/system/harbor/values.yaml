@@ -4,36 +4,36 @@ harbor:
   core:
     image:
       repository: ghcr.io/cozystack/cozystack/harbor-core
-      tag: v1.7.3-rc.2@sha256:f0d33a8487ef834aa6f50a1c083095f70311d9a053c2a643fbc4f810f9464991
+      tag: v1.7.3@sha256:f0d33a8487ef834aa6f50a1c083095f70311d9a053c2a643fbc4f810f9464991
   jobservice:
     image:
       repository: ghcr.io/cozystack/cozystack/harbor-jobservice
-      tag: v1.7.3-rc.2@sha256:1f7e7ccde27e9a6f3d1003ae2bd70e3eb03671c68e6ad7151a45e5204844eaf0
+      tag: v1.7.3@sha256:1f7e7ccde27e9a6f3d1003ae2bd70e3eb03671c68e6ad7151a45e5204844eaf0
   portal:
     image:
       repository: ghcr.io/cozystack/cozystack/harbor-portal
-      tag: v1.7.3-rc.2@sha256:7855f90adef5f704322100e3837370c4ee1ebc764a5fc79d91662ea05b169a55
+      tag: v1.7.3@sha256:7855f90adef5f704322100e3837370c4ee1ebc764a5fc79d91662ea05b169a55
   registry:
     registry:
       image:
         repository: ghcr.io/cozystack/cozystack/registry-photon
-        tag: v1.7.3-rc.2@sha256:49fce51afd954dadc0b261174fa9ee707be8422a71f1ba6514fb7cd97bdc672f
+        tag: v1.7.3@sha256:49fce51afd954dadc0b261174fa9ee707be8422a71f1ba6514fb7cd97bdc672f
     controller:
       image:
         repository: ghcr.io/cozystack/cozystack/harbor-registryctl
-        tag: v1.7.3-rc.2@sha256:1396b6986b7bdb9b34b260f8b818dca7fa46743168d1f3a1ee242ff42be3097e
+        tag: v1.7.3@sha256:1396b6986b7bdb9b34b260f8b818dca7fa46743168d1f3a1ee242ff42be3097e
   exporter:
     image:
       repository: ghcr.io/cozystack/cozystack/harbor-exporter
-      tag: v1.7.3-rc.2@sha256:8a4b794f2d6e20d501e362cab2e66b6f11d82d894bea1534d191cb276c3479ce
+      tag: v1.7.3@sha256:8a4b794f2d6e20d501e362cab2e66b6f11d82d894bea1534d191cb276c3479ce
   nginx:
     image:
       repository: ghcr.io/cozystack/cozystack/nginx-photon
-      tag: v1.7.3-rc.2@sha256:4dccc3843a11bb3147dac0a5bcc91bfab2ad333589cd7b3a7833fa31ee31d64d
+      tag: v1.7.3@sha256:4dccc3843a11bb3147dac0a5bcc91bfab2ad333589cd7b3a7833fa31ee31d64d
   trivy:
     image:
       repository: ghcr.io/cozystack/cozystack/trivy-adapter-photon
-      tag: v1.7.3-rc.2@sha256:b616b3e650ee51536e3842a74ebd81350b443734491edd8c22220b3513155a88
+      tag: v1.7.3@sha256:b616b3e650ee51536e3842a74ebd81350b443734491edd8c22220b3513155a88
 db:
   replicas: 2
   size: 5Gi

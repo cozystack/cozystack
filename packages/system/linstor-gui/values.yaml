@@ -6,7 +6,7 @@ _cluster: {}
 ## @param image.tag LINSTOR GUI container image tag (digest recommended)
 image:
   repository: ghcr.io/cozystack/cozystack/linstor-gui
-  tag: v1.7.3-rc.2@sha256:fa1a7743b6edf38ea5c26308952f3abcd8a4269ab84828be938f5795523f6e4c
+  tag: v1.7.3@sha256:fa1a7743b6edf38ea5c26308952f3abcd8a4269ab84828be938f5795523f6e4c
 ## @section Deployment
 ## @param replicas Number of linstor-gui replicas
 replicas: 1

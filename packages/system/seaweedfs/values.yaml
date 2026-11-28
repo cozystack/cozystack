@@ -31,7 +31,7 @@ seaweedfs:
   # `make image` rewrites both keys on every build.
   image:
     repository: "ghcr.io/cozystack/cozystack/seaweedfs"
-    tag: "v1.7.3-rc.2@sha256:83b35933f97c08be348297c04f1e7fe9e2aeb0ac5f895062311c2892697aaa4c"
+    tag: "v1.7.3@sha256:83b35933f97c08be348297c04f1e7fe9e2aeb0ac5f895062311c2892697aaa4c"
   master:
     # At the shipped replicationFactor of 2 the size limit and
     # extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
@@ -327,7 +327,7 @@ seaweedfs:
     orphanIdentities:
       mode: report
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.7.3-rc.2@sha256:262c0d6493620db5616ad443b3425822d3313d4838a99f7a18ae7d2835376e8d"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.7.3@sha256:262c0d6493620db5616ad443b3425822d3313d4838a99f7a18ae7d2835376e8d"
   # A bucket lifecycle rule is stored on PUT and acted on only by the
   # s3_lifecycle job of the plugin worker, scheduled by the admin server once a
   # day (weed/worker/tasks/s3_lifecycle/handler.go at 4.45). The parent chart

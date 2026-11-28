@@ -11,7 +11,7 @@ velero:
       volumeMounts:
         - mountPath: /target
           name: plugins
-    - image: ghcr.io/cozystack/cozystack/kubevirt-velero-plugin:v1.7.3-rc.2@sha256:575225c12ff56f5682bb563136ef1eae8932e3df640c5e94182dba5ae206bbff
+    - image: ghcr.io/cozystack/cozystack/kubevirt-velero-plugin:v1.7.3@sha256:575225c12ff56f5682bb563136ef1eae8932e3df640c5e94182dba5ae206bbff
       name: kubevirt-kubevirt-velero-plugin
       imagePullPolicy: IfNotPresent
       volumeMounts:
