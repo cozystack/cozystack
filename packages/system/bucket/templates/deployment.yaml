@@ -1,3 +1,4 @@
+{{- if .Values.ui }}
 {{- $endpoint := printf "s3.%s" .Values._namespace.host }}
 {{- range $name, $user := .Values.users }}
   {{- $secretName := printf "%s-%s" $.Values.bucketName $name }}
@@ -36,3 +37,4 @@ spec:
           requests:
             cpu: 100m
             memory: 128Mi
+{{- end }}
