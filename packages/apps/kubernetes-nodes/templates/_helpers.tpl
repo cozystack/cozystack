@@ -148,7 +148,17 @@ the open-kernel-modules extension, since the proprietary one loads, creates
 {{-   end -}}
 {{- else -}}
 {{-   range $group.gpus | default list -}}
-{{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
+{{-     $nvidia := hasPrefix "nvidia.com/" (.name | default "") -}}
+{{-     with .className -}}
+{{-       $class := lookup "cozystack.io/v1alpha1" "GPUClass" "" . -}}
+{{-       if not $class -}}
+{{-         fail (printf "GPUClass %s does not exist; its vendor is needed to select worker kernel modules" .) -}}
+{{-       end -}}
+{{- /* Vendor is immutable for the class's lifetime; a resource name is
+               a mutable plugin name and says nothing about the vendor. */ -}}
+{{-       $nvidia = eq (dig "spec" "vendor" "" $class) "nvidia" -}}
+{{-     end -}}
+{{-     if $nvidia -}}
 {{-       $modules = list (dict "name" "nvidia" "parameters" (list "NVreg_NvLinkDisable=1")) (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
 {{-     end -}}
 {{-   end -}}

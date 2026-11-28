@@ -1,0 +1,48 @@
+suite: apps.yaml gpu-vm-enabled → _cluster wiring
+templates:
+  - templates/apps.yaml
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# vm-instance and kubernetes-nodes refuse class entries at render where no
+# webhook would resolve them. The key is written only when on: _cluster is
+# copied into every tenant's cozystack-values, so a key that is always
+# present would upgrade every release in every tenant.
+tests:
+  - it: writes gpu-vm-enabled when gpu-operator serves GPUs to VMs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.gpu-operator
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^_cluster:\n(  .*\n)*  gpu-vm-enabled: "true"$'
+
+  - it: leaves it out for the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+          - cozystack.gpu-operator
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled
+
+  - it: leaves it out by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled

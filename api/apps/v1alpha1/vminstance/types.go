@@ -102,8 +102,12 @@ type Firmware struct {
 }
 
 type GPU struct {
-	// The name of the GPU resource to attach.
-	Name string `json:"name"`
+	// GPUClass to take GPUs of.
+	ClassName string `json:"className,omitempty"`
+	// For class entries, a whole number of at least 1; omit count to use 1. All class entries of one VM together may not exceed 1024 GPUs. Raw-name entries must omit count.
+	Count int `json:"count,omitempty"`
+	// Resource name of the GPU to request directly.
+	Name string `json:"name,omitempty"`
 }
 
 type Network struct {
