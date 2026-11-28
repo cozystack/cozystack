@@ -1,4 +1,4 @@
-image: "ghcr.io/cozystack/cozystack/flux-plunger:v1.7.2@sha256:9620add2f78536c45ca7b88569c3d32c677e9db6d5b19e70072a1221fe3322b6"
+image: "ghcr.io/cozystack/cozystack/flux-plunger:v1.7.3@sha256:b1f00a5f13727defe1ba7d364184c9d02e2a493906d081854b00f5598d7335c7"
 # How long flux-plunger is given to stop, between 40 and 140. On SIGTERM it stops
 # its manager (up to 10 seconds), then gives up the uninstall fences it holds,
 # waiting for helm-controller to uninstall a release being deleted, under a
