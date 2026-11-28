@@ -878,8 +878,11 @@ func marshalPatchData(v interface{}) (string, error) {
 
 // createResourceModifiersConfigMap creates a Velero resource modifiers ConfigMap
 // that patches VM resources during restore:
-//   - PVC adoption: always adds cdi.kubevirt.io/allowClaimAdoption=true to all
-//     restored PVCs so CDI can adopt them when a HelmRelease of VMDisk recreates a DV.
+//   - PVC adoption: adds cdi.kubevirt.io/allowClaimAdoption=true to all
+//     restored PVCs. CDI v1.66 does not read it there, only on the DataVolume,
+//     so adoption of a restored PVC rests on the vm-disk chart annotating the
+//     DataVolume it recreates. Without it, CDI refuses that DataVolume unless
+//     the DataVolumeClaimAdoption feature gate is on.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
 func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
@@ -888,7 +891,7 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 
 	var rules []resourceModifierRule
 
-	// PVC adoption: allow CDI to adopt restored PVCs when the HelmRelease recreates a DV.
+	// Inert for CDI, which reads allowClaimAdoption only on the DataVolume.
 	pvcPatch, err := marshalPatchData(map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"annotations": map[string]string{
