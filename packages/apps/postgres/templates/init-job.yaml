@@ -60,6 +60,7 @@ spec:
         image: {{ include "postgres.imageName" $ }}
         command:
         - bash
+        - /scripts/run.sh
         - /scripts/init.sh
         env:
         - name: PGUSER
