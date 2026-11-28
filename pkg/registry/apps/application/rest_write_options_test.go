@@ -55,6 +55,7 @@ func newOptionsTestREST(t *testing.T, funcs interceptor.Funcs, objects ...client
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithStatusSubresource(&helmv2.HelmRelease{}).
 		WithObjects(objects...).
 		WithInterceptorFuncs(funcs).
 		Build()

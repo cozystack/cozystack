@@ -37,6 +37,7 @@ func newCredentialsTestREST(t *testing.T, objs ...client.Object) (*REST, client.
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 	return &REST{
 		c:             c,
+		w:             c,
 		gvr:           schema.GroupVersionResource{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Resource: "postgreses"},
 		gvk:           schema.GroupVersionKind{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Kind: "Postgres"},
 		kindName:      "Postgres",

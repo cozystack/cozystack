@@ -57,6 +57,7 @@ func newSuspendTestREST(t *testing.T, existing *helmv2.HelmRelease, funcs *inter
 	c := builder.Build()
 	return &REST{
 		c: c,
+		w: c,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",

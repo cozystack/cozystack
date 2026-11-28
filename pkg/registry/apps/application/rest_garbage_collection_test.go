@@ -1,15 +1,19 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,18 +81,17 @@ func TestApplicationGarbageCollection(t *testing.T) {
 	}
 }
 
-func TestApplicationGarbageCollectionConflict(t *testing.T) {
+func TestApplicationGarbageCollectionExplicitVersionConflict(t *testing.T) {
 	for _, concurrent := range []struct {
 		name      string
 		initial   []string
 		requested []string
 		updated   []string
-		expected  []string
 	}{
-		{"helm-completes", []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io", "test.example/hold"}, nil, []string{metav1.FinalizerDeleteDependents, "test.example/hold"}, []string{"test.example/hold"}},
-		{"controller-adds-finalizer", []string{metav1.FinalizerDeleteDependents}, nil, []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io"}, []string{"finalizers.fluxcd.io"}},
-		{"gc-starts-during-update", []string{"finalizers.fluxcd.io"}, nil, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}},
-		{"gc-finishes-during-update", []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io"}, []string{"finalizers.fluxcd.io"}},
+		{"helm-completes", []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io", "test.example/hold"}, nil, []string{metav1.FinalizerDeleteDependents, "test.example/hold"}},
+		{"controller-adds-finalizer", []string{metav1.FinalizerDeleteDependents}, nil, []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io"}},
+		{"gc-starts-during-update", []string{"finalizers.fluxcd.io"}, nil, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}},
+		{"gc-finishes-during-update", []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io"}},
 	} {
 		t.Run(concurrent.name, func(t *testing.T) {
 			hr := optionsTestHelmRelease()
@@ -105,6 +108,7 @@ func TestApplicationGarbageCollectionConflict(t *testing.T) {
 						return err
 					}
 					live.Finalizers = slices.Clone(concurrent.updated)
+					live.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"concurrent":true}`)}
 					if err := c.Update(ctx, live); err != nil {
 						return err
 					}
@@ -118,18 +122,22 @@ func TestApplicationGarbageCollectionConflict(t *testing.T) {
 			}
 			app := obj.(*appsv1alpha1.Application)
 			app.Finalizers = concurrent.requested
-			if _, _, err := r.Update(ctx, app.Name, rest.DefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
-				t.Fatal(err)
+			app.Spec = &apiextv1.JSON{Raw: []byte(`{"requested":true}`)}
+			if _, _, err := r.Update(ctx, app.Name, rest.DefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{}); !apierrors.IsConflict(err) {
+				t.Fatalf("expected explicit resourceVersion conflict, got %v", err)
 			}
 			live := &helmv2.HelmRelease{}
 			if err := r.c.Get(ctx, client.ObjectKeyFromObject(hr), live); err != nil {
 				t.Fatal(err)
 			}
-			if updates != 2 {
-				t.Fatalf("update calls = %d, want 2", updates)
+			if updates != 1 {
+				t.Fatalf("update calls = %d, want 1", updates)
 			}
-			if !slices.Equal(live.Finalizers, concurrent.expected) {
-				t.Fatalf("finalizers = %v, want %v", live.Finalizers, concurrent.expected)
+			if !slices.Equal(live.Finalizers, concurrent.updated) {
+				t.Fatalf("finalizers = %v, want %v", live.Finalizers, concurrent.updated)
+			}
+			if live.Spec.Values == nil || !bytes.Equal(live.Spec.Values.Raw, []byte(`{"concurrent":true}`)) {
+				t.Fatalf("stale desired spec persisted: %v", live.Spec.Values)
 			}
 		})
 	}
@@ -192,5 +200,61 @@ func TestApplicationGarbageCollectionWithInPlaceUpdate(t *testing.T) {
 	}
 	if err := r.c.Get(ctx, client.ObjectKeyFromObject(hr), &helmv2.HelmRelease{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("release still exists after in-place finalizer removal: %v", err)
+	}
+}
+
+// A retry is rebuilt like a fresh unconditional PUT, so a finalizer the caller
+// still carries after the garbage collector removed it is a new finalizer on a
+// deleting object, which the API server forbids.
+func TestApplicationGarbageCollectionRetryCannotRestoreFinalizer(t *testing.T) {
+	hr := optionsTestHelmRelease()
+	now := metav1.Now()
+	hr.DeletionTimestamp = &now
+	hr.Finalizers = []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}
+	updates := 0
+	r := newOptionsTestREST(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			updates++
+			live := &helmv2.HelmRelease{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+				return err
+			}
+			if updates == 1 {
+				live.Finalizers = []string{"finalizers.fluxcd.io"}
+				if err := c.Update(ctx, live); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), errors.New("garbage collector finished"))
+			}
+			if errs := apivalidation.ValidateObjectMetaAccessorUpdate(obj, live, field.NewPath("metadata")); len(errs) > 0 {
+				return apierrors.NewInvalid(helmv2.GroupVersion.WithKind("HelmRelease").GroupKind(), obj.GetName(), errs)
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, hr)
+	ctx := request.WithNamespace(context.Background(), optionsTestNamespace)
+	obj, err := r.Get(ctx, "example", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := obj.(*appsv1alpha1.Application)
+	if !slices.Contains(app.Finalizers, metav1.FinalizerDeleteDependents) {
+		t.Fatalf("caller cannot see %q: %v", metav1.FinalizerDeleteDependents, app.Finalizers)
+	}
+	app.ResourceVersion = ""
+	_, _, err = r.Update(ctx, app.Name, rest.DefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{})
+	var status apierrors.APIStatus
+	if !apierrors.IsInvalid(err) || !errors.As(err, &status) || status.Status().Details == nil {
+		t.Fatalf("expected Invalid for a finalizer restored on a deleting release, got %v", err)
+	}
+	if causes := status.Status().Details.Causes; len(causes) != 1 || causes[0].Field != "metadata.finalizers" {
+		t.Fatalf("rejected for %v, want only metadata.finalizers", causes)
+	}
+	live := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKeyFromObject(hr), live); err != nil {
+		t.Fatal(err)
+	}
+	if updates != 2 || !slices.Equal(live.Finalizers, []string{"finalizers.fluxcd.io"}) {
+		t.Fatalf("updates=%d finalizers=%v", updates, live.Finalizers)
 	}
 }
