@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -52,6 +53,7 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	gpucontroller "github.com/cozystack/cozystack/internal/gpu/controller"
+	gpuwebhook "github.com/cozystack/cozystack/internal/gpu/webhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -98,6 +100,7 @@ func main() {
 	var cozyProxyContractImplemented bool
 	var endpointAttachmentNodePorts bool
 	var enableGPU bool
+	var gpuResourceNames string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -127,7 +130,9 @@ func main() {
 	flag.BoolVar(&endpointAttachmentNodePorts, "endpoint-attachment-allocate-node-ports", false,
 		"Allocate node ports on the LoadBalancer Services EndpointAttachments render. Off by default, matching the platform convention; needed only by load balancers that forward through node ports (Hetzner RobotLB).")
 	flag.BoolVar(&enableGPU, "enable-gpu", false,
-		"Compute GPUClass status and copy vGPU licenses into entitled namespaces. Without it, existing license copies are deleted.")
+		"Compute GPUClass status, copy vGPU licenses into entitled namespaces and serve the GPU admission webhooks. Without it, existing license copies are deleted.")
+	flag.StringVar(&gpuResourceNames, "gpu-resource-names", "",
+		"Comma-separated GPU resource names besides those of GPUClasses and the KubeVirt permittedHostDevices table, such as nvidia.com/gpu.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -390,6 +395,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if enableGPU {
+		gpuwebhook.Register(mgr, splitNames(gpuResourceNames))
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -399,6 +408,14 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+	// The GPU webhooks fail closed, so a replica takes traffic only once its
+	// webhook server serves.
+	if enableGPU {
+		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			setupLog.Error(err, "unable to set up webhook ready check")
+			os.Exit(1)
+		}
 	}
 
 	// Initialize telemetry collector
@@ -419,4 +436,14 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func splitNames(s string) []string {
+	var out []string
+	for _, n := range strings.Split(s, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }

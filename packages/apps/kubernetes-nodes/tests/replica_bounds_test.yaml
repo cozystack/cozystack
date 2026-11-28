@@ -1,0 +1,144 @@
+suite: worker pool replica bounds with GPU class entries
+# CAPI starts a new pool at its min-size annotation without comparing it with
+# the max, so minReplicas above maxReplicas on a pool with class entries would
+# run more GPUs than count times maxReplicas. Pools without class entries
+# render as they always did.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+    gpu-vm-enabled: "true"
+  version: "v1.35"
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: refuses minReplicas above maxReplicas on a pool with class entries
+    set:
+      minReplicas: 4
+      maxReplicas: 3
+      gpus:
+        - className: h100
+    asserts:
+      - failedTemplate:
+          errorPattern: minReplicas \(4\) must not exceed maxReplicas \(3\) on a pool with GPU class entries
+
+  - it: renders a pool without GPUs whose minReplicas is above maxReplicas as before
+    set:
+      minReplicas: 4
+      maxReplicas: 3
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "4"
+
+  - it: renders a raw-name GPU pool whose minReplicas is above maxReplicas as before
+    set:
+      minReplicas: 4
+      maxReplicas: 3
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "3"
+
+  - it: accepts minReplicas equal to maxReplicas without GPUs
+    set:
+      minReplicas: 3
+      maxReplicas: 3
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "3"
+
+  - it: accepts minReplicas equal to maxReplicas with class entries
+    kubernetesProvider: &gpuClassProvider
+      scheme:
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+        "cozystack.io/v1alpha1/GPUClass":
+          gvr:
+            group: "cozystack.io"
+            version: "v1alpha1"
+            resource: "gpuclasses"
+          namespaced: false
+      objects:
+        # The pool lists these kinds; the fake client needs one of each to
+        # know them.
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: h100
+          spec:
+            vendor: nvidia
+            model: H100
+            mode: passthrough
+            source:
+              devicePlugin:
+                resourceName: example.com/accelerator
+    set:
+      minReplicas: 3
+      maxReplicas: 3
+      gpus:
+        - className: h100
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "3"
+
+  - it: accepts a class pool that leaves minReplicas and maxReplicas at their defaults
+    kubernetesProvider: *gpuClassProvider
+    set:
+      gpus:
+        - className: h100
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "10"

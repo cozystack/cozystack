@@ -32,7 +32,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 )
@@ -420,5 +422,156 @@ func TestCreateAndUpdateCheckTheGPUBudget(t *testing.T) {
 	_, _, err := r.Update(ctx, "b", newDefaultUpdatedObjectInfo(over.DeepCopy()), nil, updateValidation, false, &metav1.UpdateOptions{})
 	if !strings.Contains(fmt.Sprint(err), "GPU budget") {
 		t.Fatalf("Update = %v, want a GPU budget refusal", err)
+	}
+}
+
+func TestGPURemainingBudget(t *testing.T) {
+	registerTestSchemas(t)
+	tests := []struct {
+		name        string
+		objects     []client.Object
+		namespace   string
+		class       string
+		want        int64
+		wantLimited bool
+	}{
+		{
+			name:        "class budget minus what the pool reserves",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4"}), vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"h100","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name: "the smaller of the class and the all-class budget",
+			objects: []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4", totalKey: "5"}),
+				vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"l40s-24c","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        2,
+			wantLimited: true,
+		},
+		{
+			name: "carve-outs of bounded child tenants count",
+			objects: []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4"}),
+				tenantHelmRelease(t, "acme", "tenant-root", map[string]string{h100Key: "3"})},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name:        "never below zero",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "1"}), vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"h100","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        0,
+			wantLimited: true,
+		},
+		{
+			name:        "a fractional budget offers whole units only",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "1500m"})},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name:      "a large budget does not overflow milliunits",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "9223372036854775807"})},
+			namespace: "tenant-root", class: "h100", want: 9223372036854775807, wantLimited: true,
+		},
+		{
+			name:      "no GPU budget in the pool",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{"cpu": "4"})},
+			namespace: "tenant-root",
+			class:     "h100",
+		},
+		{
+			name:      "no pool",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", nil)},
+			namespace: "tenant-root",
+			class:     "h100",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTenantREST(t, tc.objects...)
+			got, limited, err := GPURemainingBudget(r.c)(context.Background(), tc.namespace, tc.class)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want || limited != tc.wantLimited {
+				t.Errorf("GPURemainingBudget = (%d, %v), want (%d, %v)", got, limited, tc.want, tc.wantLimited)
+			}
+		})
+	}
+}
+
+func newNodesRESTWithClasses(t *testing.T, classes ...*cozyv1alpha1.GPUClass) *REST {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{helmv2.AddToScheme, cozyv1alpha1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objs := make([]client.Object, 0, len(classes))
+	for _, c := range classes {
+		objs = append(objs, c)
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+	return &REST{c: c, w: c, kindName: kubernetesNodesKind, releaseConfig: config.ReleaseConfig{Prefix: "kubernetes-nodes-"}}
+}
+
+func gpuClassOf(name string, mode cozyv1alpha1.GPUMode) *cozyv1alpha1.GPUClass {
+	return &cozyv1alpha1.GPUClass{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: cozyv1alpha1.GPUClassSpec{Mode: mode}}
+}
+
+// Talos workers carry no vGPU guest driver, so a worker pool takes
+// passthrough classes only, refused before any machine is created.
+func TestValidateGPUClassModes(t *testing.T) {
+	r := newNodesRESTWithClasses(t, gpuClassOf("h100", cozyv1alpha1.GPUModePassthrough), gpuClassOf("l40s-24c", cozyv1alpha1.GPUModeVGPU))
+	pool := func(values string) *appsv1alpha1.Application {
+		return &appsv1alpha1.Application{ObjectMeta: metav1.ObjectMeta{Name: "c-p", Namespace: "tenant-root"}, Spec: &apiextv1.JSON{Raw: []byte(values)}}
+	}
+	expectGPUErrs(t, r.validateGPUClassModes(context.Background(), pool(`{"gpus":[{"className":"h100","count":2}]}`)), "")
+	expectGPUErrs(t, r.validateGPUClassModes(context.Background(), pool(`{"gpus":[{"className":"l40s-24c"}]}`)), "GPUClass l40s-24c is vGPU")
+	expectGPUErrs(t, r.validateGPUClassModes(context.Background(), pool(`{"gpus":[{"className":"missing"}]}`)), "GPUClass missing does not exist")
+	expectGPUErrs(t, r.validateGPUClassModes(context.Background(), pool(`{"gpus":[{"name":"nvidia.com/GH200"}]}`)), "")
+
+	r.kindName = vmInstanceKind
+	expectGPUErrs(t, r.validateGPUClassModes(context.Background(), pool(`{"gpus":[{"className":"l40s-24c"}]}`)), "")
+}
+
+func TestCreateRefusesAVGPUClassOnAWorkerPool(t *testing.T) {
+	r := newNodesRESTWithClasses(t, gpuClassOf("l40s-24c", cozyv1alpha1.GPUModeVGPU))
+	r.gvk = schema.GroupVersionKind{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Kind: kubernetesNodesKind}
+	app := &appsv1alpha1.Application{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: kubernetesNodesKind},
+		ObjectMeta: metav1.ObjectMeta{Name: "c-p", Namespace: "tenant-root"},
+		Spec:       &apiextv1.JSON{Raw: []byte(`{"maxReplicas":1,"gpus":[{"className":"l40s-24c"}]}`)},
+	}
+	sentinel := errors.New("past the GPU class check")
+	_, err := r.Create(request.WithNamespace(context.Background(), "tenant-root"), app, func(context.Context, runtime.Object) error { return sentinel }, &metav1.CreateOptions{})
+	if errors.Is(err, sentinel) || !strings.Contains(fmt.Sprint(err), "is vGPU") {
+		t.Fatalf("Create = %v, want a vGPU refusal", err)
+	}
+}
+
+func TestApplicationGPUExpansionLimit(t *testing.T) {
+	registerTestSchemas(t)
+	for _, kind := range []string{vmInstanceKind, kubernetesNodesKind} {
+		t.Run(kind, func(t *testing.T) {
+			r := newAppREST(t, kind, "test-", "tests")
+			for _, raw := range []string{
+				`{"maxReplicas":1,"gpus":[{"className":"h100","count":1025}]}`,
+				`{"maxReplicas":1,"gpus":[{"className":"h100","count":600},{"className":"h100","count":600}]}`,
+			} {
+				expectGPUErrs(t, r.validateGPUBudget(context.Background(), vmApplication("x", "tenant-root", raw), nil), "at most 1024 GPU units")
+			}
+			expectGPUErrs(t, r.validateGPUBudget(context.Background(), vmApplication("x", "tenant-root", `{"maxReplicas":10,"gpus":[{"className":"h100","count":1024}]}`), nil), "")
+		})
 	}
 }
