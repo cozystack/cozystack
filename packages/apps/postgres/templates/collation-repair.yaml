@@ -1,0 +1,194 @@
+{{- /*
+  The collation repair (repair.sh in the init-script Secret) must not run as
+  a Helm hook: it waits for CNPG to move the primary to the new image and then
+  rebuilds indexes, and both take as long as the data and the clients make
+  them. Nor can it be an ordinary manifest: helm-controller waits for every
+  Job of a release to complete within the same upgrade timeout. So this hook
+  creates it through the API, outside the release, and returns.
+
+  The repair Job has one fixed name, so no two of them run against the
+  Cluster at once. One still running on the image this release renders is
+  left to finish; any other is deleted, and its pod is gone, before the new
+  one is created, which also retries a repair that failed. It is owned by
+  the Cluster, so it goes with it. The hook's Role reaches only those two
+  objects by name, except for create, which RBAC cannot narrow to a name,
+  and is removed again once the hooks succeed. Skipped with the init-job
+  while bootstrap is on: the repair runs from its Secret, and the init-job
+  must have converged the release first.
+*/}}
+{{- if and .Release.IsUpgrade (not .Values.bootstrap.enabled) }}
+{{- /* One base for both names, short enough for the longer suffix: cut
+       separately, a long release name would give both the same name, and
+       the starter would take its own Job for a previous repair. */}}
+{{- $base := .Release.Name }}
+{{- if gt (len $base) 40 }}
+{{- $base = printf "%s-%s" ($base | trunc 31 | trimSuffix "-") ($base | sha256sum | trunc 8) }}
+{{- end }}
+{{- $name := printf "%s-collation-repair" $base }}
+{{- $starter := printf "%s-collation-repair-start" $base }}
+{{- /*
+  The repair keeps what is left of an hour for rebuilding once the primary
+  runs the new image, and it bounds its lock waits by the same clock, so a
+  longer deadline is not free: an index rebuilt in place waits for its lock
+  in the queue that writes to its table join.
+*/}}
+{{- $deadline := 3600 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $starter }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $starter }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  resourceNames: [{{ $name | quote }}]
+  verbs: ["get", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create"]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  resourceNames: [{{ .Release.Name | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $starter }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $starter }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $starter }}
+  namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $starter }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  activeDeadlineSeconds: 180
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $starter }}
+      restartPolicy: Never
+      containers:
+      - name: kubectl
+        image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
+        command: [sh, -ec]
+        args:
+        - |
+          name={{ $name | quote }}
+          image={{ include "postgres.imageName" $ | quote }}
+
+          state=$(kubectl get job "$name" --ignore-not-found -o jsonpath='{.spec.template.spec.containers[0].image}|{.status.conditions[?(@.status=="True")].type}')
+          if [ "$state" = "$image|" ]; then
+            echo "the collation repair for $image is still running; leaving it to finish"
+            exit 0
+          fi
+          if [ -n "$state" ]; then
+            echo "replacing the previous collation repair ($state)"
+            kubectl delete job "$name" --cascade=foreground --wait=false
+            while [ -n "$(kubectl get job "$name" --ignore-not-found -o name)" ]; do
+              sleep 2
+            done
+          fi
+
+          uid=$(kubectl get clusters.postgresql.cnpg.io {{ .Release.Name | quote }} -o jsonpath='{.metadata.uid}')
+          kubectl create -f - <<MANIFEST
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${name}
+            labels:
+              app.kubernetes.io/name: postgres.apps.cozystack.io
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            ownerReferences:
+            - apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              name: {{ .Release.Name }}
+              uid: ${uid}
+          spec:
+            activeDeadlineSeconds: {{ $deadline }}
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 86400
+            template:
+              spec:
+                restartPolicy: Never
+                automountServiceAccountToken: false
+                containers:
+                - name: postgres
+                  image: ${image}
+                  command: [bash, /scripts/run.sh, /scripts/repair.sh]
+                  env:
+                  - name: PGUSER
+                    valueFrom:
+                      secretKeyRef:
+                        name: {{ .Release.Name }}-superuser
+                        key: username
+                  - name: PGPASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: {{ .Release.Name }}-superuser
+                        key: password
+                  - name: PGHOST
+                    value: {{ .Release.Name }}-rw
+                  - name: PGPORT
+                    value: "5432"
+                  - name: PGDATABASE
+                    value: postgres
+                  - name: JOB_DEADLINE
+                    value: "{{ $deadline }}"
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop:
+                      - ALL
+                    privileged: false
+                    readOnlyRootFilesystem: true
+                    runAsNonRoot: true
+                  volumeMounts:
+                  - mountPath: /scripts
+                    name: scripts
+                  {{- include "postgresjobs.resources" . | nindent 18 }}
+                securityContext:
+                  fsGroup: 26
+                  runAsGroup: 26
+                  runAsNonRoot: true
+                  runAsUser: 26
+                  seccompProfile:
+                    type: RuntimeDefault
+                volumes:
+                - name: scripts
+                  secret:
+                    secretName: {{ .Release.Name }}-init-script
+          MANIFEST
+{{- end }}

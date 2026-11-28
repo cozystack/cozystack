@@ -138,6 +138,28 @@ kind: Secret
 metadata:
   name: {{ .Release.Name }}-init-script
 stringData:
+  run.sh: |
+    #!/bin/bash
+    {{- /*
+      Both Jobs reach the server through the -rw Service while CNPG may be
+      restarting the instance behind it. psql exits with status 2 both when the
+      server refuses the connection ("the database system is shutting down")
+      and when it drops one mid-session, and each script is safe to run again
+      from the top, so that status reruns the script after a growing pause
+      instead of failing the Job; any other status is final. The child is
+      handed $SECONDS, which bash keeps counting from, so every bound a script
+      measures against it still counts from the first attempt.
+    */}}
+    delay=5
+    until SECONDS=$SECONDS bash "$1"; do
+      status=$?
+      if [ "$status" -ne 2 ] || [ $((SECONDS + delay)) -ge $((JOB_DEADLINE - 60)) ]; then
+        exit "$status"
+      fi
+      echo "lost the connection to the server; running $1 again in ${delay}s" >&2
+      sleep "$delay"
+      delay=$((delay * 2 > 60 ? 60 : delay * 2))
+    done
   init.sh: |
     #!/bin/bash
     set -e
@@ -591,6 +613,16 @@ stringData:
     EOT
     {{- end }}
     {{- end }}
+    {{- if .Values.bootstrap.newServerName }}
+
+    echo "== record the adopted restore"
+    psql -v ON_ERROR_STOP=1 --echo-all -v mark="$RESTORE_MARK" <<\EOT
+    ALTER DATABASE postgres SET cozystack.adopted_restore = :'mark';
+    EOT
+    {{- end }}
+  repair.sh: |
+    #!/bin/bash
+    set -e
     {{- /*
       An operand image built on another Debian release ships another glibc and
       ICU, and an index ordered by a collation of either library is then
@@ -609,15 +641,20 @@ stringData:
       not need it, and still misses a collation that an expression applies to
       a column of another one.
 
-      This pass comes after the ones that manage roles and databases, so
-      that a rebuild that fails, or does not finish before the Job deadline,
-      costs none of them. Only the PostGIS update and the record of an
-      adopted restore follow it: that record must not be written by a run
-      that failed.
+      This pass runs in a Job of its own, which a post-upgrade hook starts
+      once the init-job has managed roles and databases, and which Helm does
+      not wait for. The hook runs as soon as the Cluster is patched, while
+      CNPG is still rolling the instances, the primary last, and an instance
+      whose clients keep their sessions open waits out smartShutdownTimeout
+      before it restarts: the rollout alone can take longer than Helm gives a
+      hook, and the rebuild of a large index as long again, so inside the
+      hook either one failed the upgrade. Here a rebuild that fails costs
+      nothing else, and the next upgrade starts the Job again. The PostGIS
+      update, which waits for the same rollout, follows this pass in the
+      same Job.
 
-      Helm runs this hook as soon as the Cluster is patched, while CNPG is
-      still rolling the instances, so the primary may answer from the previous
-      image for minutes. The Job runs the image the Cluster is moving to, so
+      The primary may therefore answer from the previous image for minutes.
+      The Job runs the image the Cluster is moving to, so
       the server is on it once both report the same PostgreSQL version and
       the same Debian release. The rebuild counter that follows them is left
       out: a tag is rebuilt in place, so the Job and an instance can run
@@ -760,7 +797,7 @@ stringData:
     echo "indexes depend on a versioned collation; waiting for the server to run PostgreSQL $JOB_RELEASE"
     until [ "$(server_release)" = "$JOB_RELEASE" ]; do
       if [ "$SECONDS" -ge $((JOB_DEADLINE - 120)) ]; then
-        echo "the server did not move to PostgreSQL $JOB_RELEASE in time (check the rollout of the cnpg.io/Cluster); indexes that depend on a versioned collation are not rebuilt yet - failing the init-job, the next run of it rebuilds them" >&2
+        echo "the server did not move to PostgreSQL $JOB_RELEASE in time (check the rollout of the cnpg.io/Cluster); indexes that depend on a versioned collation are not rebuilt yet - failing the collation repair Job, the next upgrade of the release starts it again" >&2
         exit 1
       fi
       sleep 5
@@ -786,7 +823,7 @@ stringData:
     for index in $PLAN; do
     LEFT=$((JOB_DEADLINE - SECONDS - 60))
     if [ "$LEFT" -lt 10 ]; then
-    echo "index $index in database $db was not rebuilt: the init-job is out of time, the next run of it carries on" >&2
+    echo "index $index in database $db was not rebuilt: the collation repair Job is out of time, the next upgrade of the release starts it again" >&2
     DB_FAILED=yes
     continue
     fi
@@ -796,7 +833,7 @@ stringData:
     SET lock_timeout = :'lock_wait';
     SELECT EXISTS (SELECT FROM pg_index i JOIN pg_stat_progress_create_index p ON p.relid = i.indrelid JOIN pg_database d ON d.oid = p.datid WHERE i.indexrelid = :'index'::oid AND d.datname = current_database() AND p.pid <> pg_backend_pid()) AS building \gset
     \if :building
-    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was skipped: another session is building an index of its table, as a rebuild left by an earlier run of the init-job does; the next run of the init-job carries on', :'index'::oid::regclass, current_database()))) \gexec
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was skipped: another session is building an index of its table, as a rebuild left by an earlier repair does; the next upgrade of the release starts the repair again', :'index'::oid::regclass, current_database()))) \gexec
     \endif
     SELECT count(*) = 1 AS present FROM pg_index WHERE indexrelid = :'index'::oid \gset
     \if :present
@@ -806,11 +843,11 @@ stringData:
            (SELECT count(*) FROM unnest(string_to_array(split_part(:'recorded', ':', 3), ',')) AS e WHERE e = :'index' || '/' || r.relfilenode) >= 2 AS abandoned_in_place
     FROM pg_index i JOIN pg_class r ON r.oid = i.indexrelid WHERE i.indexrelid = :'index'::oid \gset
     \if :abandoned
-    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs failed to rebuild an index of its table, and each left an invalid _ccnew index there. Fix what made them fail, then drop those _ccnew indexes; the next run of the init-job rebuilds this one', :'name', current_database()))) \gexec
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs failed to rebuild an index of its table, and each left an invalid _ccnew index there. Fix what made them fail, then drop those _ccnew indexes; the repair started by the next upgrade of the release rebuilds this one', :'name', current_database()))) \gexec
     \endif
     \if :exclusion
     \if :abandoned_in_place
-    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs began rebuilding it in place and did not finish. Rebuild it by hand with REINDEX INDEX, which blocks its table meanwhile; the next run of the init-job sees that it was rebuilt', :'name', current_database()))) \gexec
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('index %s in database %s was left alone: two earlier runs began rebuilding it in place and did not finish. Rebuild it by hand with REINDEX INDEX, which blocks its table meanwhile; the repair started by the next upgrade of the release sees that it was rebuilt', :'name', current_database()))) \gexec
     \endif
     SELECT format('rebuilding index %s in database %s in place: its collation changed version', :'name', current_database());
     SELECT format('ALTER DATABASE %I SET cozystack.collation_repair = %L', current_database(), split_part(:'recorded', ':', 1) || ':' || split_part(:'recorded', ':', 2) || ':' || concat_ws(',', nullif(split_part(:'recorded', ':', 3), ''), :'attempt')) WHERE :'recorded' <> '' \gexec
@@ -825,6 +862,7 @@ stringData:
     \endif
     EOT
     then
+    [ "${PIPESTATUS[0]}" != 2 ] || COLLATION_LOST=yes
     DB_FAILED=yes
     fi
     done
@@ -852,8 +890,12 @@ stringData:
     EOT
     fi
     done
+    if [ -n "$COLLATION_LOST" ]; then
+      echo "lost the connection to the server during index rebuilds in:$COLLATION_FAILED" >&2
+      exit 2
+    fi
     if [ -n "$COLLATION_FAILED" ]; then
-      echo "index rebuilds failed in:$COLLATION_FAILED (the errors are above); the other indexes were rebuilt. A unique index cannot be rebuilt over rows that the previous ordering kept apart and the new one treats as equal, so remove such duplicates. The next run of the init-job tries again, except for an index an error above reports as left alone" >&2
+      echo "index rebuilds failed in:$COLLATION_FAILED (the errors are above); the other indexes were rebuilt. A unique index cannot be rebuilt over rows that the previous ordering kept apart and the new one treats as equal, so remove such duplicates. The next upgrade of the release starts the repair again, except for an index an error above reports as left alone" >&2
       exit 1
     fi
     {{- if eq .Values.flavor "postgis" }}
@@ -861,7 +903,7 @@ stringData:
       A new PostGIS library leaves the SQL objects of every database on the
       release they were installed with until ALTER EXTENSION ... UPDATE runs
       there, and postgis_full_version() reports them as needing an upgrade
-      meanwhile. The extensions were created in this Job's superuser session,
+      meanwhile. The extensions were created in the init-job's superuser session,
       so only the superuser owns them and can update them; a tenant gets
       "must be owner of extension". This pass updates them in every database
       where they are installed, including ones values no longer list.
@@ -872,9 +914,8 @@ stringData:
       instances the server offers the previous release and there is nothing
       to update yet, so the pass first waits for the server to offer the
       PostGIS release the Job's own image ships, until 120 seconds before
-      the Job's deadline. A rollout that takes longer fails the Job: this Job
-      is a hook, so a run that ended well would not come again before the
-      next change of the release, while a failed one makes the release retry.
+      the Job's deadline. A rollout that takes longer fails the Job, and the
+      next upgrade of the release starts it again.
 
       postgis_extensions_upgrade() is not used: it leaves out
       address_standardizer, and it updates every installed extension to ANY
@@ -890,9 +931,8 @@ stringData:
       update, its lock waits included, runs no longer than what is left of
       the Job, with the same minute in reserve as the collation pass, and a
       database reached with no time left counts as failed. The pass carries
-      on with the other databases and then fails the Job, so that the
-      release is retried and reported as failed instead of the error staying
-      in the log of a Job that is deleted an hour later.
+      on with the other databases and then fails the Job, whose log names
+      them; the next upgrade of the release starts it again.
 
       The update scripts run as the superuser and write to tables a tenant's
       admin role may attach triggers to (spatial_ref_sys among them), and a
@@ -914,7 +954,7 @@ stringData:
     POSTGIS_FAILED=""
     for db in $ALL_DBS; do
     if ! installed=$(psql -v ON_ERROR_STOP=1 -q -t -A --dbname "$db" -c "SET search_path = pg_catalog, pg_temp" -c "SELECT count(*) FROM pg_extension WHERE extname IN ('postgis', 'postgis_raster', 'postgis_topology', 'postgis_sfcgal', 'postgis_tiger_geocoder', 'address_standardizer', 'address_standardizer_data_us')"); then
-    echo "the PostGIS extensions in database $db were not checked (the error is above); the next run of the init-job carries on" >&2
+    echo "the PostGIS extensions in database $db were not checked (the error is above); the next upgrade of the release starts the repair again" >&2
     POSTGIS_FAILED="$POSTGIS_FAILED $db"
     continue
     fi
@@ -926,7 +966,7 @@ stringData:
     echo "waiting for the server to offer PostGIS $POSTGIS_SHIPPED"
     until [ "$(postgis_offered)" = "$POSTGIS_SHIPPED" ]; do
       if [ "$SECONDS" -ge $((JOB_DEADLINE - 120)) ]; then
-        echo "the server did not move to PostGIS $POSTGIS_SHIPPED in time (check the rollout of the cnpg.io/Cluster); the PostGIS extensions are not updated yet - failing the init-job, the next run of it updates them" >&2
+        echo "the server did not move to PostGIS $POSTGIS_SHIPPED in time (check the rollout of the cnpg.io/Cluster); the PostGIS extensions are not updated yet - failing the collation repair Job, the next upgrade of the release starts it again" >&2
         exit 1
       fi
       sleep 5
@@ -935,7 +975,7 @@ stringData:
     for db in $POSTGIS_DBS; do
     LEFT=$((JOB_DEADLINE - SECONDS - 60))
     if [ "$LEFT" -lt 10 ]; then
-    echo "the PostGIS extensions in database $db were not updated: the init-job is out of time, the next run of it carries on" >&2
+    echo "the PostGIS extensions in database $db were not updated: the collation repair Job is out of time, the next upgrade of the release starts it again" >&2
     POSTGIS_FAILED="$POSTGIS_FAILED $db"
     continue
     fi
@@ -946,7 +986,7 @@ stringData:
     SET session_replication_role = replica;
     SELECT EXISTS (SELECT FROM pg_trigger t JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = t.tgrelid AND d.deptype = 'e' JOIN pg_extension x ON x.oid = d.refobjid WHERE NOT t.tgisinternal AND t.tgenabled IN ('A', 'R') AND x.extname IN ('postgis', 'postgis_raster', 'postgis_topology', 'postgis_sfcgal', 'postgis_tiger_geocoder', 'address_standardizer', 'address_standardizer_data_us')) AS armed \gset
     \if :armed
-    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('the PostGIS extensions in database %s were not updated: a table of theirs carries a trigger enabled ALWAYS or REPLICA, which would run inside the superuser update; drop that trigger, and the next run of the init-job updates them', current_database()))) \gexec
+    SELECT format('DO %L', format('BEGIN RAISE EXCEPTION %L, %L; END', '%', format('the PostGIS extensions in database %s were not updated: a table of theirs carries a trigger enabled ALWAYS or REPLICA, which would run inside the superuser update; drop that trigger, and the next upgrade of the release starts the repair again', current_database()))) \gexec
     \endif
     SELECT clock_timestamp() + :'lock_wait'::interval AS deadline_at \gset
     CREATE TEMP TABLE cozystack_postgis AS
@@ -967,16 +1007,9 @@ stringData:
     fi
     done
     if [ -n "$POSTGIS_FAILED" ]; then
-      echo "PostGIS extension updates failed in:$POSTGIS_FAILED (the errors are above); the extensions there stay at their previous version. The next run of the init-job tries again" >&2
+      echo "PostGIS extension updates failed in:$POSTGIS_FAILED (the errors are above); the extensions there stay at their previous version. The next upgrade of the release starts the repair again" >&2
       exit 1
     fi
-    {{- end }}
-    {{- if .Values.bootstrap.newServerName }}
-
-    echo "== record the adopted restore"
-    psql -v ON_ERROR_STOP=1 --echo-all -v mark="$RESTORE_MARK" <<\EOT
-    ALTER DATABASE postgres SET cozystack.adopted_restore = :'mark';
-    EOT
     {{- end }}
 {{- end }}
 {{- if hasKey (.Values.users | default dict) "app" }}

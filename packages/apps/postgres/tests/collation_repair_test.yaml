@@ -1,0 +1,167 @@
+suite: the collation repair is started by a hook and runs outside the release
+
+# The repair waits for CNPG to roll the new image out and then rebuilds
+# indexes; inside the init-job hook that wait alone outlasted the upgrade
+# timeout. A post-upgrade hook now only starts a Job of its own through the
+# API, so the hook must render on upgrade only, never while bootstrap is on,
+# run after the init-job, and reach nothing but the repair Job and the Cluster.
+
+templates:
+  - templates/collation-repair.yaml
+  - templates/init-job.yaml
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+  users:
+    app: {}
+
+tests:
+  - it: renders nothing on install, where there is nothing to repair yet
+    template: templates/collation-repair.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing while bootstrap is on, like the init-job it follows
+    template: templates/collation-repair.yaml
+    release:
+      upgrade: true
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-old
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the starter and its RBAC on upgrade
+    template: templates/collation-repair.yaml
+    release:
+      upgrade: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: runs the starter after the init-job, as a post-upgrade hook
+    template: templates/collation-repair.yaml
+    release:
+      upgrade: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "1"
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 180
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: pg-test-collation-repair-start
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+
+  - it: the init-job runs before the starter
+    template: templates/init-job.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-5"
+
+  - it: limits the Role to the repair Job and the release's own Cluster
+    template: templates/collation-repair.yaml
+    release:
+      upgrade: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["batch"]
+              resources: ["jobs"]
+              resourceNames: ["pg-test-collation-repair"]
+              verbs: ["get", "delete"]
+            - apiGroups: ["batch"]
+              resources: ["jobs"]
+              verbs: ["create"]
+            - apiGroups: ["postgresql.cnpg.io"]
+              resources: ["clusters"]
+              resourceNames: ["pg-test"]
+              verbs: ["get"]
+
+  - it: removes the RBAC once the hooks succeed
+    template: templates/collation-repair.yaml
+    release:
+      upgrade: true
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: subjects[0].name
+          value: pg-test-collation-repair-start
+
+  - it: keeps the starter and the repair Job apart for a long release name
+    template: templates/collation-repair.yaml
+    release:
+      name: postgres-a-name-at-the-53-character-release-name-limi
+      upgrade: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: ^.{1,40}-collation-repair-start$
+
+  - it: names the repair Job within 63 characters for a long release name
+    template: templates/collation-repair.yaml
+    release:
+      name: postgres-a-name-at-the-53-character-release-name-limi
+      upgrade: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - matchRegex:
+          path: rules[0].resourceNames[0]
+          pattern: ^.{1,46}-collation-repair$
+
+  - it: the init-job runs its script through the reconnecting wrapper
+    template: templates/init-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [bash, /scripts/run.sh, /scripts/init.sh]
+
+  - it: the init-script Secret carries the repair apart from the init script
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - exists:
+          path: stringData["run.sh"]
+      - exists:
+          path: stringData["init.sh"]
+      - exists:
+          path: stringData["repair.sh"]
