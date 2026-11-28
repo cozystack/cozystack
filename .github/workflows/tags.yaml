@@ -398,6 +398,7 @@ jobs:
       packages: write
       pull-requests: write
       actions: write
+      id-token: write # keyless signing of the release checksums in hack/upload-assets.sh
 
     steps:
       - name: Generate GitHub App token
@@ -531,6 +532,34 @@ jobs:
             }
 
             core.setOutput('upload_url', rel.upload_url);
+
+      # hack/upload-assets.sh writes the release SBOM with syft and signs the
+      # checksums of every asset with cosign, keylessly, as this job. syft is
+      # the release tarball checked against a committed SHA-256, for the reason
+      # given at the same step in promote-rc.yaml: this job holds the app token,
+      # the GHCR login and an OIDC token for the signing identity, so it runs no
+      # install script fetched at run time. Bump with promote-rc.yaml.
+      - name: Set up syft
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        env:
+          SYFT_VERSION: "1.54.1"
+          SYFT_SHA256: "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
+        run: |
+          syft_dir="${RUNNER_TEMP}/syft"
+          mkdir -p "$syft_dir"
+          curl -fsSL -o "$syft_dir/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$SYFT_SHA256" "$syft_dir/syft.tar.gz" | sha256sum -c -
+          tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
+          rm -f "$syft_dir/syft.tar.gz"
+          echo "$syft_dir" >> "$GITHUB_PATH"
+      # cosign is the version docs/release.md asks users for, as in
+      # promote-rc.yaml. Bump with it.
+      - name: Set up cosign
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
 
       # The assets were built by build-amd64; the operator manifests are
       # rendered here, from the tree pinned on the index digests.
