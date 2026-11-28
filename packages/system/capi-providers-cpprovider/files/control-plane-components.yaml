@@ -16292,7 +16292,7 @@ spec:
         - --dynamic-infrastructure-clusters=${CACPPK_INFRASTRUCTURE_CLUSTERS:= }
         command:
         - /manager
-        image: ghcr.io/cozystack/cozystack/cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0@sha256:e996a072eee1c74d71421ad82a8f898b38e9fe73fbe3a1308e3170399d863bc4
+        image: ghcr.io/cozystack/cozystack/cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0@sha256:1d8eff00465897697ffc099a8bfeba4e8181adba7fdd0f53a8941a6e15f8ebf9
         livenessProbe:
           httpGet:
             path: /healthz

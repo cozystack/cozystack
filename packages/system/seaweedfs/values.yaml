@@ -268,7 +268,7 @@ seaweedfs:
     orphanIdentities:
       mode: report
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.5@sha256:6d832ba3537a5395d230cc2a0db86b874170f6cd05a231bb4b6fb78b0eadf429"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.6@sha256:cbdbe93ae72a6ad9aeb082d0f3480a5221012b151b435c97d1fbd788249d96b8"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
