@@ -10,11 +10,33 @@
 # linstor-csi build, so the StorageClasses (provisioner
 # linstor.csi.linbit.com) are the same under either.
 #
-# blockstor is for new clusters. This chart does not move a cluster that
-# already holds LINSTOR volumes: blockstor adopts them with its own
-# linstor-migrate runbook, which the chart does not run:
-# https://blockstor.org/docs/migration/
+# A new cluster selects blockstor here. A cluster that already holds
+# LINSTOR volumes moves only through blockstorMigration below, in the
+# order README.md gives; switching backend alone does not adopt them.
 backend: linstor
+
+# Set only while a cluster that holds LINSTOR volumes moves to blockstor,
+# with backend blockstor. The runbook freezes CSI and stops LINSTOR before
+# blockstor adopts the volumes, and repoints CSI only once adoption has
+# converged; one backend flip cannot express that order. Each step is a
+# value:
+#
+#   hold  — blockstor is deployed with its controller stopped. Every
+#           piraeus object renders as under backend linstor, so the
+#           operator keeps linstor-csi on LINSTOR. Apply the converted
+#           manifests in this step.
+#   adopt — the blockstor controller runs and adopts the volumes. piraeus
+#           is still untouched.
+#   ""    — migration done: LinstorCluster goes external and the operator
+#           repoints linstor-csi at blockstor-apiserver.
+#
+# piraeus stays untouched because piraeus-operator keeps running through
+# the migration, as blockstor's runbook has it: given LINSTOR's shape it
+# has nothing to change, leaves linstor-controller and linstor-csi-controller
+# at the zero replicas the freeze set, and keeps linstor-csi on LINSTOR.
+# Clearing this value is the one step that changes piraeus. README.md has
+# the order.
+blockstorMigration: ""
 
 piraeusServer:
   image:

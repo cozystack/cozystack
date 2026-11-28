@@ -53,18 +53,39 @@ tests:
       path: kind
       value: Job
     asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PATCH
+            value: '{"spec":{"passphraseSecretRef":{"key":"MASTER_PASSPHRASE","name":"my-passphrase"}}}'
       - matchRegex:
-          path: spec.template.spec.containers[0].env[1].value
+          path: spec.template.spec.containers[0].env[2].value
           pattern: '(?m)^    name: my-passphrase$'
 
-  - it: owns only the fields it applies, and wins over a ref set by hand
+  # A server-side apply of this one field removes the migrated DRBD options
+  # from a ControllerConfig a client-side kubectl apply wrote: kubectl first
+  # hands every field of the client-side manager to the applying one. The
+  # merge patch touches only what it carries. tests/test_controllerconfig_hook.py
+  # runs the script against such an object.
+  - it: sets the ref with a merge patch, never a server-side apply
     documentSelector:
       path: kind
       value: Job
     asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh, -ec, '$(SCRIPT)', blockstor-controllerconfig.sh]
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PATCH
+            value: '{"spec":{"passphraseSecretRef":{"key":"MASTER_PASSPHRASE","name":"linstor-passphrase"}}}'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl apply --server-side --field-manager=cozystack-linstor --force-conflicts -f -'
+          path: spec.template.spec.containers[0].env[3].value
+          pattern: 'kubectl patch "\$resource" default --type=merge --field-manager="\$manager" --patch "\$patch"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[3].value
+          pattern: '(?m)^[^#]*kubectl apply'
 
   - it: pins its image by digest
     documentSelector:

@@ -73,7 +73,7 @@ nothing: helm template, client-side dry-run, first install.
 {{- $ack = dig "acknowledgeBackendChange" "" .Values.storage | toString -}}
 {{- end -}}
 {{- if and (ne $liveBackend $backend) (ne $ack $backend) -}}
-{{- fail (printf "the live cozystack.linstor Package runs the %q storage backend and this render would switch it to %q. The volumes this cluster already has are known only to the current backend: after the switch the CSI driver cannot attach, resize, snapshot or delete them. Restore storage.backend: %q, or, if the cluster holds no volumes, set storage.acknowledgeBackendChange: %q to confirm this exact switch." $liveBackend $backend $liveBackend $backend) -}}
+{{- fail (printf "the live cozystack.linstor Package runs the %q storage backend and this render would switch it to %q. The volumes this cluster already has are known only to the current backend: after the switch the CSI driver cannot attach, resize, snapshot or delete them. Restore storage.backend: %q, or set storage.acknowledgeBackendChange: %q to confirm this exact switch. On a cluster that holds no volumes that is enough. A cluster with LINSTOR volumes moves to blockstor only together with storage.blockstorMigration: hold, in the order packages/system/linstor/README.md gives." $liveBackend $backend $liveBackend $backend) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -273,10 +273,12 @@ cozystack-scheduler (emitted with its own variant in both branches)
        LinstorCluster the linstor package renders, the object that points
        linstor-csi there too, so the names of blockstor's Service and Secret
        stay in that package alone. Under linstor they get nothing and keep
-       their own defaults, linstor-controller and linstor-client-tls. The
-       backend is passed rather than left to the lookup alone so that a
-       switch changes their values and Helm renders them again. */ -}}
-{{- if eq (include "cozystack.platform.storage.backend" $root) "blockstor" }}
+       their own defaults, linstor-controller and linstor-client-tls, and so
+       they do while a blockstorMigration is in progress (see
+       blockstorServesApi). The backend is passed rather than left to the
+       lookup alone so that a switch changes their values and Helm renders
+       them again. */ -}}
+{{- if include "cozystack.platform.storage.blockstorServesApi" $root }}
 {{- $schedulerComponents := dict "linstor-scheduler" (dict "values" (dict "linstor-scheduler" (dict "linstor" (dict "backend" "blockstor")))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor-scheduler" "default" $root $schedulerComponents) }}
 {{- else }}
@@ -295,6 +297,25 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
 {{- end }}
+
+{{- /*
+The migration step for the linstor package, empty when none is in progress.
+Checked here as well as in the linstor chart, so a typo fails the platform
+render instead of leaving the cozystack.linstor HelmRelease failing.
+*/ -}}
+{{- define "cozystack.platform.storage.blockstorMigration" -}}
+{{- $migration := "" -}}
+{{- if and (kindIs "map" .Values.storage) (hasKey .Values.storage "blockstorMigration") -}}
+{{- $migration = .Values.storage.blockstorMigration -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $migration) (has $migration (list "" "hold" "adopt"))) -}}
+{{- fail (printf "storage.blockstorMigration must be \"\", \"hold\" or \"adopt\", got %#v" $migration) -}}
+{{- end -}}
+{{- if and $migration (ne (include "cozystack.platform.storage.backend" .) "blockstor") -}}
+{{- fail (printf "storage.blockstorMigration %q is only valid with storage.backend: blockstor; remove it together with switching the backend back" $migration) -}}
+{{- end -}}
+{{- $migration -}}
+{{- end -}}
 
 {{- /*
 Resolve the storage backend for the linstor package.
@@ -321,6 +342,23 @@ before rendering, so it reads as absent.
 {{- fail (printf "storage.backend must be \"linstor\" or \"blockstor\", got %#v" $backend) -}}
 {{- end -}}
 {{- $backend -}}
+{{- end -}}
+
+{{- /*
+Whether the LINSTOR API consumers outside the linstor package are told the
+blockstor backend, and so follow the LinstorCluster to blockstor-apiserver:
+backend blockstor once blockstorMigration is cleared, the same step in which
+piraeus-operator repoints linstor-csi there. Until then LINSTOR's state is the
+one CSI acts on, while blockstor-apiserver serves nothing (hold, before the
+converted manifests are in) or Resources it has not adopted yet, with no
+volume state. linstor-scheduler reads a replica's disk state from the first
+volume of every Resource of a pod's volume, and on a Resource without volumes
+it panics rather than answering. Left on the stopped linstor-controller, it
+fails a scheduling attempt instead, the pod stays Pending and is retried, and
+nothing is placed on what blockstor half knows.
+*/ -}}
+{{- define "cozystack.platform.storage.blockstorServesApi" -}}
+{{- if and (eq (include "cozystack.platform.storage.backend" .) "blockstor") (not (include "cozystack.platform.storage.blockstorMigration" .)) }}true{{ end -}}
 {{- end -}}
 
 {{/*

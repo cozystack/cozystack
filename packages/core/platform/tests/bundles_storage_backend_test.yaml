@@ -146,6 +146,59 @@ tests:
           path: metadata.name
           value: cozystack.linstor-gui
 
+  # During a migration step LINSTOR's state is still the one CSI acts on, and
+  # blockstor-apiserver serves Resources it has not adopted, which the
+  # scheduler extender cannot read. The consumers move with linstor-csi, when
+  # the step is cleared.
+  - it: leaves the linstor-scheduler on LINSTOR during a migration step
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: hold
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: leaves the linstor-scheduler on LINSTOR while adopting on the generic variant
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: leaves linstor-gui on LINSTOR during a migration step
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages: [cozystack.linstor-gui]
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-gui
+
   - it: leaves linstor-gui on its defaults under linstor
     set:
       bundles:
@@ -208,3 +261,107 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'storage must be a map with a backend key, got blockstor'
+
+  # A migration step has to reach the linstor package, which renders piraeus
+  # unchanged while it is set; left behind in the platform it would deploy the
+  # finished switch at once.
+  - it: passes the blockstor migration step through
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: hold
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - equal:
+          path: spec.components.linstor.values
+          value:
+            backend: blockstor
+            blockstorMigration: hold
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  - it: passes the blockstor migration step through on the generic variant
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    asserts:
+      - equal:
+          path: spec.components.linstor.values
+          value:
+            backend: blockstor
+            blockstorMigration: adopt
+            talos:
+              enabled: false
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  # The empty default must not add a key: every blockstor cluster would roll a
+  # new revision of the linstor release for nothing.
+  - it: states no migration step once it is removed
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: ""
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - equal:
+          path: spec.components.linstor.values
+          value:
+            backend: blockstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  - it: fails the render on an unknown migration step
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopted
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - failedTemplate:
+          errorMessage: 'storage.blockstorMigration must be "", "hold" or "adopt", got "adopted"'
+
+  # The way back to linstor has to drop the step in the same change, or the
+  # next switch to blockstor would come up holding.
+  - it: fails the render on a migration step under the linstor backend
+    set:
+      storage:
+        backend: linstor
+        blockstorMigration: hold
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - failedTemplate:
+          errorMessage: 'storage.blockstorMigration "hold" is only valid with storage.backend: blockstor; remove it together with switching the backend back'
+
+  - it: fails the render on a migration step under linstor on the generic variant
+    set:
+      storage:
+        backend: linstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    asserts:
+      - failedTemplate:
+          errorMessage: 'storage.blockstorMigration "adopt" is only valid with storage.backend: blockstor; remove it together with switching the backend back'

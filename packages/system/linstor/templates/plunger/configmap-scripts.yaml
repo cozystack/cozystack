@@ -1,4 +1,4 @@
-{{- if eq .Values.backend "linstor" }}
+{{- if not (include "linstor.piraeusExternal" .) }}
 {{- $files := .Files.Glob "hack/plunger/*.sh" -}}
 {{/* TODO Add checksum of scripts to the pod selectors */}}
 ---

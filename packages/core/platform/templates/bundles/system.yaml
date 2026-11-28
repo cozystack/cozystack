@@ -138,9 +138,12 @@
 {{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- end }}
 {{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" }}
-{{- $linstorComponents := dict "linstor" (dict "values" (dict "backend" "blockstor")) -}}
+{{- $linstorValues := dict "backend" "blockstor" -}}
+{{- with include "cozystack.platform.storage.blockstorMigration" $ }}{{ $_ := set $linstorValues "blockstorMigration" . }}{{ end -}}
+{{- $linstorComponents := dict "linstor" (dict "values" $linstorValues) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{- else }}
+{{- $_ := include "cozystack.platform.storage.blockstorMigration" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
@@ -239,6 +242,7 @@
 {{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" -}}
 {{- $_ := set $linstorValues "backend" "blockstor" -}}
 {{- end -}}
+{{- with include "cozystack.platform.storage.blockstorMigration" $ }}{{ $_ := set $linstorValues "blockstorMigration" . }}{{ end -}}
 {{- $linstorComponents := dict "linstor" (dict "values" $linstorValues) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
@@ -507,7 +511,7 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{- /* Told only the backend, as linstor-scheduler is in the common-packages
        helper: the linstor package's LinstorCluster says where the API is. */ -}}
-{{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" }}
+{{- if include "cozystack.platform.storage.blockstorServesApi" $ }}
 {{- $guiComponents := dict "linstor-gui" (dict "values" (dict "linstor" (dict "backend" "blockstor"))) -}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $ $guiComponents) }}
 {{- else }}
