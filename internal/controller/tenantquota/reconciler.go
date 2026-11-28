@@ -340,7 +340,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // ownedNamespace maps a tenant HelmRelease (name "<prefix><app>" in namespace
 // hrNamespace) to the namespace that tenant owns. It mirrors
-// REST.computeTenantNamespace in the aggregated apiserver.
+// computeTenantNamespace in the aggregated apiserver.
 func ownedNamespace(hrNamespace, appName string) string {
 	switch {
 	case hrNamespace == rootTenantNamespace && appName == "root":

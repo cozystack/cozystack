@@ -949,3 +949,56 @@ tests:
       - contains:
           path: spec.components.kubevirt.values.mediatedDevicesConfiguration.mediatedDeviceTypes
           content: nvidia-473
+
+  # gpu.vgpu feeds the tenant entitlement, not KubeVirt or the GPU Operator.
+  - it: keeps gpu.vgpu out of the kubevirt component
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpu: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          value:
+          - HostDevices
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:2335"
+            resourceName: nvidia.com/GH100_H200_SXM_141GB
+            externalResourceProvider: true
+      - notExists:
+          path: spec.components.kubevirt.values.vgpu
+
+  - it: keeps gpu.vgpu out of the gpu-operator Package under vgpu
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpu: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: vgpu
+      - notExists:
+          path: spec.components

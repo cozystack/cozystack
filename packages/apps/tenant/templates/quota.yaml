@@ -1,4 +1,13 @@
-{{- if .Values.resourceQuotas }}
+{{- /* Keys in the gpuclass.cozystack.io domain are GPU budgets, not pod
+       resources; model.IsGPUQuotaKey in internal/gpu decides the same. */}}
+{{- $resourceQuotas := dict }}
+{{- range $key, $value := .Values.resourceQuotas }}
+{{-   $domain := index (splitList "/" $key) 0 }}
+{{-   if not (or (eq $domain "gpuclass.cozystack.io") (hasSuffix ".gpuclass.cozystack.io" $domain)) }}
+{{-     $_ := set $resourceQuotas $key $value }}
+{{-   end }}
+{{- end }}
+{{- if $resourceQuotas }}
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -6,14 +15,14 @@ metadata:
   namespace: {{ include "tenant.name" . }}
 spec:
   hard:
-    {{- include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | nindent 6 }}
+    {{- include "cozy-lib.resources.flatten" (list $resourceQuotas $) | nindent 6 }}
 {{- /* The LimitRange only exists so pods without requests or limits still pass
        a quota that tracks them, so it defaults only the resources the quota
        bounds. A default limit on any other resource does nothing for the quota
        and refuses every container that requests more without a limit of its
        own: a 128Mi memory default under a quota on load balancers, cpu or
        ephemeral-storage alone kept virt-launcher from starting. */}}
-{{- $hard := include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | fromYaml }}
+{{- $hard := include "cozy-lib.resources.flatten" (list $resourceQuotas $) | fromYaml }}
 {{- $cpu := or (hasKey $hard "requests.cpu") (hasKey $hard "limits.cpu") }}
 {{- $memory := or (hasKey $hard "requests.memory") (hasKey $hard "limits.memory") }}
 {{- $ephemeral := or (hasKey $hard "requests.ephemeral-storage") (hasKey $hard "limits.ephemeral-storage") }}
