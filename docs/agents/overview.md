@@ -69,6 +69,7 @@ Root targets (run from the repo root):
 
 ```bash
 make build          # Build all Docker images (needs: docker, skopeo, jq, gh, helm, yq, GNU tar/sed/awk)
+make build-parallel # The same images, BUILD_JOBS units at a time (hack/build-units.sh); what CI runs for release lines
 make unit-tests     # Run all unit tests (Helm, BATS, Go, etc.)
 make generate       # Code generation (hack/update-codegen.sh) — CRDs, DeepCopy, clients, RBAC
 make manifests      # Generate CRD manifests and operator YAML variants
@@ -93,6 +94,8 @@ Build environment variables:
 - `REGISTRY` — Docker registry (default `ghcr.io/cozystack/cozystack`).
 - `PUSH=1` / `LOAD=0` — control buildx push/load behaviour.
 - `LOAD=1 PUSH=0` — load images locally instead of pushing.
+- `CACHE_FROM_TAGS` — every cache a build imports; defaults to `CACHE_TAG` (`buildcache`), the one it writes under `WRITE_CACHE=1`. A release line imports its own `buildcache-release-X.Y`, which `build-release.yaml` writes on every push to the line, and main's `buildcache`, since main's Dockerfiles drift away from the line's.
+- `BUILD_JOBS` — how many units `make build-parallel` builds at a time. Defaults to 4. `packages/core/platform` waits for the others, because it writes `packages/system/backupstrategy-controller/values.yaml`, which the backupstrategy-controller build rewrites too.
 
 ### Values schema generation
 

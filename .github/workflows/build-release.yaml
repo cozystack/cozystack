@@ -3,7 +3,7 @@ name: Build release line
 # Publishes the per-line equivalent of what build-main.yaml publishes for main:
 # every image tagged with the line's branch name, and the whole packages tree as
 # the `cozystack-packages:<branch>` OCI artifact with each image reference
-# digest-pinned to the images this run just pushed (`make build` ->
+# digest-pinned to the images this run just pushed (`make build-parallel` ->
 # packages/core/installer image-packages does the `flux push artifact`).
 #
 # Why it exists: pull-requests.yaml overlays image refs for every package a PR
@@ -16,9 +16,9 @@ name: Build release line
 # artifact published per line, the overlay reads the PR's own base branch and the
 # generations match.
 #
-# Cost: one full `make build` per push to a maintained line, i.e. per merged
-# backport. That is the price of release-line PRs testing their line's tip rather
-# than its last release.
+# Cost: one full `make build-parallel` per push to a maintained line, i.e. per
+# merged backport. That is the price of release-line PRs testing their line's
+# tip rather than its last release.
 
 env:
   # Same per-CI registry as pull-requests.yaml and build-main.yaml.
@@ -97,17 +97,19 @@ jobs:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       - name: Build line images and publish the packages artifact
-        run: make build
+        run: make build-parallel
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
-          # READ the shared mode=max cache, never write it. CACHE_REGISTRY/<img>:
-          # buildcache is a single ref per image and build-main.yaml is
-          # deliberately its only writer, serialized, precisely so concurrent
-          # builds cannot race on the cache manifest (the 409 collision class
-          # #2711 fixed for image tags). A line build can overlap a main build, so
-          # writing here would reintroduce exactly that race.
-          WRITE_CACHE: '0'
+          # The line keeps a mode=max cache of its own, which its rc builds in
+          # tags.yaml import too: main's cache (:buildcache, written only by
+          # build-main.yaml) misses more with every Dockerfile main changes after
+          # the line branched. The concurrency group above runs one build per
+          # line, so this is the only writer of the line's ref, and main's ref is
+          # only read.
+          CACHE_TAG: buildcache-${{ github.ref_name }}
+          CACHE_FROM_TAGS: buildcache-${{ github.ref_name }} buildcache
+          WRITE_CACHE: '1'
           # Floating per-line handle: images and the packages artifact both land
           # under the branch name (e.g. :release-1.6). Versioned and :latest tags
           # belong to releases (tags.yaml / finalize), never to this workflow.

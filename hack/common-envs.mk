@@ -28,7 +28,7 @@ IMAGE_TAG ?= dev
 PUBLISH_VERSIONED ?= 0
 PUBLISH_FLOATING  ?= 0
 
-# WRITE_CACHE=1 enables `--cache-to` (mode=max) to CACHE_REGISTRY/<img>:buildcache.
+# WRITE_CACHE=1 enables `--cache-to` (mode=max) to CACHE_REGISTRY/<img>:$(CACHE_TAG).
 # Default off: only the serialized main/release cache-warming build writes the
 # shared cache ref. PR builds keep it 0 and read-only, so concurrent PR builds
 # never race on the cache manifest (the 409 collisions PR #2711 fixed for tags).
@@ -69,19 +69,23 @@ define image-tags
 --tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)
 endef
 
-# cache-args <image-name> [<cache-tag>]
+# cache-args <image-name>
 # Expands to buildx cache flags for one image:
 #   --cache-from is always emitted (a missing cache 404s harmlessly -> cold build)
 #   --cache-to is emitted only when WRITE_CACHE=1 (main/release), writing mode=max
 #     so ALL stages are cached -- including the multistage `builder` layers that
 #     `--cache-to type=inline` could never export. oci-mediatypes + image-manifest
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
-# <cache-tag> defaults to `buildcache`; pass an explicit tag for images that build
-# a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
+#     ignore-error: OCIR refuses a blob upload now and then, and a lost cache
+#     write should cost the next build time, not fail this one.
+# CACHE_FROM_TAGS lists every cache a build imports; a release line imports its
+# own as well as main's, since main's Dockerfiles drift away from the line's.
 # $(comma) escapes the literal commas in the --cache-to value so make does not
 # mis-parse them as $(if ...) argument separators.
 comma := ,
-cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
+CACHE_TAG ?= buildcache
+CACHE_FROM_TAGS ?= $(CACHE_TAG)
+cache-args = $(foreach t,$(CACHE_FROM_TAGS),--cache-from type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(t))$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(CACHE_TAG)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true$(comma)ignore-error=true)
 
 ifeq ($(COZYSTACK_VERSION),)
     $(shell git remote add upstream https://github.com/cozystack/cozystack.git || true)
